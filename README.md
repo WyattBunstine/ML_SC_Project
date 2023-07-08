@@ -5,17 +5,7 @@ Several attempts have been made to represent materials<sup>[3][4]</sup>, but mos
 
 There are several things that are obvioulsy of importance, such as the compositon and geometry of the material, but represneting this data in the most effective way for an algorithm to use is not clear. The material can be broken into essentially two parts listed above, combined in a tensor as input data. The tensor will be of a fixed size, with up to 20 crystal sites being accomadated.
 <h4>Representing Composition</h4>
-Compostion can be represented as tensors of crystallographic sites. Each site with be a vector with element, location, and coordination enviorment. Element will simply be represented using atomic number, location using the x, y, z coordinates in lattice coordinates and the coordination environment will be an integer coorsponding to the environment. These elements will then be added to a fixed width tensor. Zero padding will be used for materials that have less than 20 crystal sites. For example, CoO would be represented as
-
-<centre>[[27,1/3,2/3,0.417688,8],[8,1/3,2/3,0.665645,0],[0,0,0,0,0],...,[0,0,0,0,0]]</centre>
-
-Possible additional tags:
-
-oxidation state - PyMatGen can guess oxidation state 
-
-d orbital - from oxidation state and atomic information
-
-
+Compostion can be represented as tensors of crystallographic sites. Each site with be a vector with element, location, oxidation state, d orbital filling and coordination enviorment. Element will simply be represented using atomic number, location using the x, y, z coordinates in lattice coordinates and the coordination environment will be an integer coorsponding to the environment. These elements will then be added to a fixed width tensor. Zero padding will be used for materials that have less than 20 crystal sites. 
 
 <h6>List of coordination environment tags</h6>
 
