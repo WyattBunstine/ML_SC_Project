@@ -9,6 +9,12 @@ Compostion can be represented as tensors of crystallographic sites. Each site wi
 
 <centre>[[27,1/3,2/3,0.417688,8],[8,1/3,2/3,0.665645,0],[0,0,0,0,0],...,[0,0,0,0,0]]</centre>
 
+Possible additional tags:
+oxidation state - PyMatGen can guess oxidation state 
+d orbital - from oxidation state and atomic information
+
+
+
 <h6>List of coordination environment tags</h6>
 
 <h4>Representing Geometry</h4>
