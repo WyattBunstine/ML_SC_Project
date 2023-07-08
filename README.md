@@ -7,7 +7,7 @@ There are several things that are obvioulsy of importance, such as the composito
 <h4>Representing Composition</h4>
 Compostion can be represented as tensors of crystallographic sites. Each site with be a vector with element, location, and coordination enviorment. Element will simply be represented using atomic number, location using the x, y, z coordinates in lattice coordinates and the coordination environment will be an integer coorsponding to the environment. These elements will then be added to a fixed width tensor. Zero padding will be used for materials that have less than 20 crystal sites. For example, CoO would be represented as
 
-<centre>[[27,1/3,2/3,0.417688,8],[8,1/3,2/3,0.665645],[0,0,0,0,0],...,[0,0,0,0,0]]</centre>
+<centre>[[27,1/3,2/3,0.417688,8],[8,1/3,2/3,0.665645,0],[0,0,0,0,0],...,[0,0,0,0,0]]</centre>
 
 <h6>List of coordination environment tags</h6>
 
