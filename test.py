@@ -1,18 +1,18 @@
-import json
-#from mp_api.client import MPRester
-from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-import pymatgen
-from pymatgen import core
-from pymatgen.symmetry.kpath import KPathSeek
 import numpy as np
-import pymatgen
-import pymatgen.analysis.diffraction.xrd
+from pymatgen.symmetry import groups
 
-struct = []
-struct.append(pymatgen.core.structure.Structure.from_file("YbMgGaO4_VP.cif"))
-struct.append(pymatgen.core.structure.Structure.from_file("YbMgGaO4_VPMg.cif"))
-struct.append(pymatgen.core.structure.Structure.from_file("YbMgGaO4_VPGa.cif"))
+symops = []
+duplicates = []
+for sgn in np.arange(1,231):
+    sg = groups.SpaceGroup(groups.sg_symbol_from_int_number(sgn))
+    for sym in sg.symmetry_ops:
+        if sym not in symops:
+            symops.append(sym)
+        elif sym not in duplicates:
+            duplicates.append(sym)
+#there are 4425 symmetries among all space groups
+#there are 941 unique symmetry operations
+#368 of those only appear in one spacegroup
+print(len(symops))
+print(len(duplicates))
 
-xrd = pymatgen.analysis.diffraction.xrd.XRDCalculator()
-fig = xrd.plot_structures(struct,annotate_peaks = None,ax_annotate=False)
-fig.show()
