@@ -1,18 +1,20 @@
+import json
+from mp_api.client import MPRester
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+import pymatgen
+from pymatgen import core
+from pymatgen.symmetry.kpath import KPathSeek
 import numpy as np
-from pymatgen.symmetry import groups
+import pyxtal
+import pymatgen
 
-symops = []
-duplicates = []
-for sgn in np.arange(1,231):
-    sg = groups.SpaceGroup(groups.sg_symbol_from_int_number(sgn))
-    for sym in sg.symmetry_ops:
-        if sym not in symops:
-            symops.append(sym)
-        elif sym not in duplicates:
-            duplicates.append(sym)
-#there are 4425 symmetries among all space groups
-#there are 941 unique symmetry operations
-#368 of those only appear in one spacegroup
-print(len(symops))
-print(len(duplicates))
+# specify the path of an experimental structure
+struc_file = "OrbitalOverlap/Cu4BiSe4I.cif"
+
+xtal1 = pyxtal.pyxtal()
+xtal1.from_seed(seed=struc_file, style='pyxtal')
+#print(xtal1)
+
+# visualize the structure
+xtal1.show(supercell=(2,2,1))
 
