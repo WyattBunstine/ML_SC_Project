@@ -1,18 +1,32 @@
+import json
+from mp_api.client import MPRester
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+import pymatgen
+from pymatgen import core
+from pymatgen.symmetry.kpath import KPathSeek
 import numpy as np
-from pymatgen.symmetry import groups
+import pyxtal
+import pymatgen
+import pandas as pd
 
-symops = []
-duplicates = []
-for sgn in np.arange(1,231):
-    sg = groups.SpaceGroup(groups.sg_symbol_from_int_number(sgn))
-    for sym in sg.symmetry_ops:
-        if sym not in symops:
-            symops.append(sym)
-        elif sym not in duplicates:
-            duplicates.append(sym)
-#there are 4425 symmetries among all space groups
-#there are 941 unique symmetry operations
-#368 of those only appear in one spacegroup
-print(len(symops))
-print(len(duplicates))
+# specify the path of an experimental structure
+df = pd.read_csv("database/all_data.csv")
+API_KEY = "<MP_API_KEY>"
+# inputs
+with MPRester(API_KEY) as mpr:
+    MPIDS = []
+    for index, row in df.iterrows():
+        if row['materials_project_id'] not in MPIDS:
+            MPIDS.append(row['materials_project_id'])
+        # save the relevent data to a dict
+        if len(MPIDS) == 10:
+            data = mpr.summary.search(material_ids=MPIDS)
+            for mat in data:
+                mat.structure.to("database/data/"+str(mat.material_id)+".cif")
+            MPIDS = []
+    data = mpr.summary.search(material_ids=MPIDS)
+    for mat in data:
+        mat.structure.to("database/data/" + str(mat.material_id) + ".cif")
+    MPIDS = []
+
 
