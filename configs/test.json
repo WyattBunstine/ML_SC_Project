@@ -1,0 +1,7 @@
+{
+  "model": "CGCNN",
+  "tasks": ["train","test"],
+  "reload": false,
+  "database": "database/all_data.csv",
+  "cif_loc": "database/data/"
+}
