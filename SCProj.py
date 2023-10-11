@@ -1,5 +1,5 @@
 import sys
-import CNN.CNN
+import CNN.CGCNNOrig
 import database.DBMain
 import pickle
 import numpy as np
