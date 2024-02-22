@@ -23,7 +23,7 @@ from CGCNNOrig import CrystalGraphConvNet
 parser = argparse.ArgumentParser(description='Crystal Graph Convolutional Neural Networks')
 parser.add_argument('--out_filename', default='test_result')
 parser.add_argument('--json_name', default='atom_init.json')
-parser.add_argument('--csv_name', default='id_prop.pickle')
+parser.add_argument('--csv_name', default='id_prop_basic.pickle')
 # parser.add_argument('--results_name', default = 'results.csv')
 # parser.add_argument('--loss_name', default = 'loss')
 parser.add_argument('data_options', metavar='OPTIONS', nargs='+',
@@ -36,7 +36,7 @@ parser.add_argument('--disable-cuda', action='store_true',
                     help='Disable CUDA')
 parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 0)')
-parser.add_argument('--epochs', default=2000, type=int, metavar='N',
+parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run (default: 60)')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')

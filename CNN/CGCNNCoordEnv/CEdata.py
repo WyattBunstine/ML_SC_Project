@@ -16,6 +16,8 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data.sampler import SubsetRandomSampler
 from pymatgen.core.periodic_table import Element
+from pymatgen.analysis.chemenv.coordination_environments.coordination_geometry_finder import *
+import pymatgen
 # import ast
 import pandas as pd
 
@@ -310,16 +312,16 @@ class CIFData(Dataset):
                  random_seed=123):
         self.root_dir = root_dir
         self.max_num_nbr, self.radius = max_num_nbr, radius
-        assert os.path.exists(root_dir), 'root_dir does not exist!'
+        assert os.path.exists(root_dir), root_dir + ' does not exist!'
         self.csv_name = csv_name
         id_prop_file = os.path.join(self.root_dir, self.csv_name)
-        assert os.path.exists(id_prop_file), 'id_prop.csv does not exist!'
+        assert os.path.exists(id_prop_file), id_prop_file + ' does not exist!'
         # with open(id_prop_file) as f:
         #     reader = csv.reader(f)
         #     self.id_prop_data = [row for row in reader]
         with open(id_prop_file) as f:
             pickle_data = pd.read_pickle(id_prop_file)
-            self.id_prop_data = [[row['id'], row['value'], row['struc_dict']] for index, row in pickle_data.iterrows()]
+            self.id_prop_data = [[row['id'], row['value'], row['struc_dict'], row["ce"]] for index, row in pickle_data.iterrows()]
 
         random.seed(random_seed)
         random.shuffle(self.id_prop_data)
@@ -328,6 +330,8 @@ class CIFData(Dataset):
         assert os.path.exists(atom_init_file), 'atom_init.json does not exist!'
         self.ari = AtomCustomJSONInitializer(atom_init_file)
         self.gdf = GaussianDistance(dmin=dmin, dmax=self.radius, step=step)
+        self.num_ce = 0
+        self.ce = {}
 
     def __len__(self):
         return len(self.id_prop_data)
@@ -342,7 +346,7 @@ class CIFData(Dataset):
         # Structure.from_file reads a structure from a file
         # changed to read structure form dict in csv file
 
-        cif_id, target, structure_dict = self.id_prop_data[idx]
+        cif_id, target, structure_dict, coord_env = self.id_prop_data[idx]
         crystal = Structure.from_dict(structure_dict)  # ast.literal_eval(
 
         # atom_fea = np.vstack([self.ari.get_atom_fea(crystal[i].specie.number)
@@ -351,9 +355,10 @@ class CIFData(Dataset):
         def get_occu(crystal_structure):
 
             periodic_sites = crystal_structure.as_dict()
-            # print(periodic_sites['sites'][0])
+
             crystal_fractions = []
             crystal_species = []
+            coordination_environment = []
             for i in range(len(periodic_sites['sites'])):
                 site_fraction = []
                 site_species = []
@@ -387,7 +392,7 @@ class CIFData(Dataset):
                 elementWise_sum = np.add(elementWise_sum, atom_fea_site)
                 # p#rint('elementWise_sum', elementWise_sum)
                 dopants = dopants + 1
-
+            elementWise_sum = np.append(elementWise_sum, coord_env[site_number])
             atom_fea_crystal.append(elementWise_sum)
 
             site_number = site_number + 1

@@ -1,7 +1,6 @@
 import sys
-import CNN.CGCNNOrig
+import CNN.OriginalCGCNN.CGCNNOrig
 import database.DBMain
-import pickle
 import numpy as np
 
 # Press the green button in the gutter to run the script.
