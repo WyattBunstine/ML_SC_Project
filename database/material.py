@@ -1,8 +1,5 @@
 import numpy as np
 
-'''This class is the basic representation of a material. This will be a tensor that will encode all of the data that
-will be input to the model.'''
-
 class Material:
 
 

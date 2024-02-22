@@ -1,0 +1,22 @@
+{
+  "models":["ORIG"],
+  "dataset": "id_prop_basic.pickle",
+  "dataset_rd": "~/PycharmProjects/ML_SC_Project/database/MP",
+  "atom_init": "atom_init.json",
+  "out_file": "~/PycharmProjects/ML_SC_Project/CNN/data/results_basic",
+  "epochs": 1000,
+  "batch_size": 128,
+  "learning_rate":0.01,
+  "lr_milestones": [100,200,300,400,500,600,700,800,900],
+  "momentum": 0.9,
+  "atom_feat_len": 64,
+  "h_feat_len":128,
+  "n_conv":3,
+  "n_hidden": 1,
+  "test_ratio": 0.1,
+  "train_ratio": null,
+  "val_ratio": 0.1,
+  "weight_decay": 0.0,
+  "print_split": 10,
+  "optim": "SGD"
+}
