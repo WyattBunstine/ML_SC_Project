@@ -2,20 +2,27 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-data = pd.read_csv("CNN/data/results_ce.csv", header=None)
-data2 = pd.read_csv("CNN/data/results_no_ce.csv", header=None)
+DEFAULT_RESULTS = "CNN/test_result.csv"
 
-for  index, row in data.iterrows():
-    if row[2] > 15 and row[1] < 5:
-        print(row[0]+" pred: "+str(row[2]) + "   Target: "+str(row[1]))
 
-MSE1 = np.sum(np.abs(data[1]-data[2])**2)/len(data[1])
-MSE2 = np.sum(np.abs(data2[1]-data2[2])**2)/len(data2[1])
+def plot_results(results_file=DEFAULT_RESULTS):
+    """Scatter-plot CNN test predictions vs. targets.
 
-plt.scatter(data[1], data[2], label="CE MAE:"+str(MSE1))
-plt.scatter(data2[1], data2[2], label="No_CE MAE:"+str(MSE2))
-plt.xlim([5,100])
-plt.xlabel("target")
-plt.ylabel("prediction")
-plt.legend()
-plt.show()
+    ``results_file`` is the headerless (cif_id, target, prediction) CSV written by
+    CGCNNMain.py's test pass.
+    """
+    data = pd.read_csv(results_file, header=None)
+
+    mse = np.sum(np.abs(data[1] - data[2]) ** 2) / len(data[1])
+
+    plt.scatter(data[1], data[2], label="MSE: " + str(mse))
+    plt.plot([0, 100], [0, 100], color='black', linestyle='--')
+    plt.xlim([0, 100])
+    plt.xlabel("target")
+    plt.ylabel("prediction")
+    plt.legend()
+    plt.show()
+
+
+if __name__ == "__main__":
+    plot_results()
