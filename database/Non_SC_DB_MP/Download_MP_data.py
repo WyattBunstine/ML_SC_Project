@@ -2,7 +2,6 @@ import itertools
 
 from pymatgen.ext.matproj import MPRester
 from pymatgen.io.cif import CifWriter
-import main
 import csv
 import pandas as pd
 import pymatgen
