@@ -1,6 +1,7 @@
 # most of this code is taken from https://github.com/txie-93/cgcnn with some modification for the project
 
 import argparse
+import csv
 import os
 import shutil
 import sys
@@ -16,15 +17,13 @@ import torch.optim as optim
 from sklearn import metrics
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import MultiStepLR
-from OriginalCGCNN.data import CIFData as OrigCifData
-from CGCNNCoordEnv.CEdata import CIFData
-from CGCNNCoordEnv.CEdata import collate_pool, get_train_val_test_loader
-from CGCNNCoordEnv.CGCNNCE import CrystalGraphConvNet
+from OriginalCGCNN.data import CIFData
+from OriginalCGCNN.data import collate_pool, get_train_val_test_loader, get_classification_loaders
+from OriginalCGCNN.CGCNNOrig import CrystalGraphConvNet
 
 best_mae_error = 1e10
 
 def main():
-    global best_mae_error
     args = {}
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
         with open(sys.argv[1]) as f:
@@ -32,34 +31,50 @@ def main():
     else:
         warnings.warn("config file not specified")
         return -1
-    # load data
-    dataset = None
-    if "ORIG" in args["models"]:
-        dataset = OrigCifData(args["dataset_rd"], args["atom_init"], args["dataset"])
-    else:
-        dataset = CIFData(args["dataset_rd"], args["atom_init"], args["dataset"])
-    # print(dataset[0])
-    collate_fn = collate_pool
-    train_loader, val_loader, test_loader = get_train_val_test_loader(
-        dataset=dataset,
-        collate_fn=collate_fn,
-        batch_size=args["batch_size"],
-        train_ratio=None,
-        val_ratio=args["val_ratio"],
-        test_ratio=args["test_ratio"],
-        num_workers=0,
-        train_size=None,
-        test_size=None,
-        val_size=None,
-        pin_memory=torch.cuda.is_available(),
-        return_test=True)
 
-    sample_target = [target for i, (input, target, _) in enumerate(train_loader)]
-    sample_target = torch.cat(sample_target)
-    normalizer = Normalizer(torch.Tensor(sample_target))
+    classification = args.get("task", "regression") == "classification"
+
+    # load data (OriginalCGCNN baseline; the CE variant has been retired)
+    dataset = CIFData(args["dataset_rd"], args["atom_init"], args["dataset"])
+
+    normalizer = None
+    loaders = None
+    if classification:
+        # Stage-1 SC/non-SC classifier: stratified split + per-epoch balanced sampler.
+        loaders = get_classification_loaders(
+            dataset,
+            batch_size=args["batch_size"],
+            val_ratio=args["val_ratio"],
+            test_ratio=args["test_ratio"],
+            n_nonsc=args.get("n_nonsc", 5000),
+            num_workers=args.get("num_workers", 0),
+            pin_memory=torch.cuda.is_available(),
+            seed=args.get("split_seed", 123),
+        )
+        print("Classification split sizes:", loaders["split_sizes"])
+        train_loader = loaders["train"]
+        val_loader = test_loader = None
+    else:
+        train_loader, val_loader, test_loader = get_train_val_test_loader(
+            dataset=dataset,
+            collate_fn=collate_pool,
+            batch_size=args["batch_size"],
+            train_ratio=None,
+            val_ratio=args["val_ratio"],
+            test_ratio=args["test_ratio"],
+            num_workers=args.get("num_workers", 0),
+            train_size=None,
+            test_size=None,
+            val_size=None,
+            pin_memory=torch.cuda.is_available(),
+            return_test=True)
+
+        sample_target = [target for i, (input, target, _label, _) in enumerate(train_loader)]
+        sample_target = torch.cat(sample_target)
+        normalizer = Normalizer(torch.Tensor(sample_target))
 
     # build model
-    structures, _, _ = dataset[0]
+    structures, _, _, _ = dataset[0]
     orig_atom_fea_len = structures[0].shape[-1]
     nbr_fea_len = structures[1].shape[-1]
     model = CrystalGraphConvNet(orig_atom_fea_len, nbr_fea_len,
@@ -67,14 +82,14 @@ def main():
                                 n_conv=args["n_conv"],
                                 h_fea_len=args["h_feat_len"],
                                 n_h=args["n_hidden"],
-                                classification=False)
+                                classification=classification)
     if torch.cuda.is_available():
         model.cuda()
         args["cuda"] = True
     else:
         args["cuda"] = False
 
-    criterion = nn.L1Loss()
+    criterion = nn.NLLLoss() if classification else nn.L1Loss()
     if args["optim"] == 'SGD':
         optimizer = optim.SGD(model.parameters(), args["learning_rate"],
                               momentum=args["momentum"],
@@ -88,11 +103,33 @@ def main():
     scheduler = MultiStepLR(optimizer, milestones=args["lr_milestones"],
                             gamma=0.1)
 
+    if classification:
+        run_classification(args, model, criterion, optimizer, scheduler, loaders)
+    else:
+        run_regression(args, model, criterion, optimizer, scheduler,
+                       train_loader, val_loader, test_loader, normalizer)
+
+
+def run_regression(args, model, criterion, optimizer, scheduler,
+                   train_loader, val_loader, test_loader, normalizer):
+    global best_mae_error
+
     train_losses = [];
     val_losses = [];
+
+    # per-epoch telemetry log
+    epoch_log_path = args["out_file"] + '_epoch_log.csv'
+    epoch_log_file = open(epoch_log_path, 'w', newline='')
+    epoch_logger = csv.writer(epoch_log_file)
+    epoch_logger.writerow(['epoch', 'train_loss', 'train_mae', 'val_loss',
+                           'val_mae', 'lr', 'epoch_time_sec', 'is_best'])
+
     for epoch in range(args["epochs"]):
+        epoch_start = time.time()
+        lr = optimizer.param_groups[0]['lr']
+
         # train for one epoch
-        train_loss = train(train_loader, model, criterion, optimizer, epoch, normalizer, args)
+        train_loss, train_mae = train(train_loader, model, criterion, optimizer, epoch, normalizer, args)
 
         # evaluate on validation set
         mae_error, val_loss = validate(val_loader, model, criterion, normalizer, args)
@@ -116,6 +153,14 @@ def main():
             'normalizer': normalizer.state_dict(),
         }, is_best, args["out_file"])
 
+        epoch_time = time.time() - epoch_start
+        epoch_logger.writerow([epoch, float(train_loss), float(train_mae),
+                               float(val_loss), float(mae_error), lr,
+                               epoch_time, int(is_best)])
+        epoch_log_file.flush()
+
+    epoch_log_file.close()
+
     train_losses = np.array(train_losses);
     val_losses = np.array(val_losses)
     loss_filename = args["out_file"] + '_loss'
@@ -129,6 +174,73 @@ def main():
     validate(test_loader, model, criterion, normalizer, args, test=True)
 
 
+def run_classification(args, model, criterion, optimizer, scheduler, loaders):
+    """Train + evaluate the Stage-1 SC/non-SC classifier.
+
+    Model selection (is_best) uses validation AUC on the *realistic* (imbalanced)
+    split. Metrics are logged on both the realistic and balanced val splits, and
+    the test set is evaluated on both at the end.
+    """
+    best_auc = -1.0
+    train_loader = loaders["train"]
+    val_real = loaders["val_realistic"]
+    val_bal = loaders["val_balanced"]
+
+    epoch_log_path = args["out_file"] + '_epoch_log.csv'
+    epoch_log_file = open(epoch_log_path, 'w', newline='')
+    epoch_logger = csv.writer(epoch_log_file)
+    epoch_logger.writerow(['epoch', 'train_loss', 'train_acc', 'val_loss',
+                           'val_acc', 'val_precision', 'val_recall', 'val_f1',
+                           'val_auc', 'val_bal_acc', 'lr', 'epoch_time_sec', 'is_best'])
+
+    for epoch in range(args["epochs"]):
+        epoch_start = time.time()
+        lr = optimizer.param_groups[0]['lr']
+
+        train_loss, train_acc = train_classification(
+            train_loader, model, criterion, optimizer, epoch, args)
+        val_metrics, val_loss = validate_classification(val_real, model, criterion, args)
+        bal_metrics, _ = validate_classification(val_bal, model, criterion, args)
+
+        if val_loss != val_loss:
+            print('Exit due to NaN')
+            sys.exit(1)
+
+        scheduler.step()
+
+        val_auc = val_metrics["auc"]
+        # AUC can be nan if a split happens to be single-class; fall back to F1.
+        select_metric = val_auc if val_auc == val_auc else val_metrics["f1"]
+        is_best = select_metric > best_auc
+        best_auc = max(select_metric, best_auc)
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'state_dict': model.state_dict(),
+            'best_auc': best_auc,
+            'optimizer': optimizer.state_dict(),
+        }, is_best, args["out_file"])
+
+        epoch_time = time.time() - epoch_start
+        epoch_logger.writerow([epoch, float(train_loss), float(train_acc),
+                               float(val_loss), float(val_metrics["accuracy"]),
+                               float(val_metrics["precision"]), float(val_metrics["recall"]),
+                               float(val_metrics["f1"]), float(val_auc),
+                               float(bal_metrics["accuracy"]), lr, epoch_time, int(is_best)])
+        epoch_log_file.flush()
+
+    epoch_log_file.close()
+
+    print('--------- Evaluate Classifier on Test Set ---------')
+    best_checkpoint = torch.load(args["out_file"] + '_model_best.pth.tar')
+    model.load_state_dict(best_checkpoint['state_dict'])
+    test_real, _ = validate_classification(loaders["test_realistic"], model,
+                                           criterion, args, test=True, tag="realistic")
+    test_bal, _ = validate_classification(loaders["test_balanced"], model,
+                                          criterion, args, test=True, tag="balanced")
+    print(" ** Test (realistic):", {k: round(v, 4) for k, v in test_real.items()})
+    print(" ** Test (balanced): ", {k: round(v, 4) for k, v in test_bal.items()})
+
+
 def train(train_loader, model, criterion, optimizer, epoch, normalizer, args):
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -140,7 +252,7 @@ def train(train_loader, model, criterion, optimizer, epoch, normalizer, args):
 
     end = time.time()
 
-    for i, (input, target, _) in enumerate(train_loader):
+    for i, (input, target, _label, _) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -190,7 +302,7 @@ def train(train_loader, model, criterion, optimizer, epoch, normalizer, args):
                 data_time=data_time, loss=losses, mae_errors=mae_errors)
             )
 
-    return loss.item()
+    return losses.avg, mae_errors.avg
 
 
 def validate(val_loader, model, criterion, normalizer, args, test=False):
@@ -207,7 +319,7 @@ def validate(val_loader, model, criterion, normalizer, args, test=False):
     model.eval()
 
     end = time.time()
-    for i, (input, target, batch_cif_ids) in enumerate(val_loader):
+    for i, (input, target, _label, batch_cif_ids) in enumerate(val_loader):
         if args["cuda"]:
             with torch.no_grad():
                 input_var = (Variable(input[0].cuda(non_blocking=True)),
@@ -268,7 +380,115 @@ def validate(val_loader, model, criterion, normalizer, args, test=False):
         star_label = '*'
 
     print(' {star} MAE {mae_errors.avg:.3f}'.format(star=star_label, mae_errors=mae_errors))
-    return mae_errors.avg, loss.item()
+    return mae_errors.avg, losses.avg
+
+
+def _to_input_var(input, cuda):
+    """Move a collated input tuple onto the right device."""
+    if cuda:
+        return (Variable(input[0].cuda(non_blocking=True)),
+                Variable(input[1].cuda(non_blocking=True)),
+                input[2].cuda(non_blocking=True),
+                [crys_idx.cuda(non_blocking=True) for crys_idx in input[3]])
+    return (Variable(input[0]), Variable(input[1]), input[2], input[3])
+
+
+def classification_metrics(log_probs, targets):
+    """Compute classification metrics for the SC/non-SC head.
+
+    log_probs: (N, 2) log-softmax tensor on CPU
+    targets:   (N,) long tensor of true labels (1 = SC, 0 = non-SC)
+    Returns dict with accuracy, precision, recall, f1, auc (auc is nan if the
+    set is single-class).
+    """
+    probs = np.exp(log_probs.numpy())
+    pred_label = np.argmax(probs, axis=1)
+    target_label = targets.numpy().reshape(-1)
+    pos_prob = probs[:, 1]
+    accuracy = metrics.accuracy_score(target_label, pred_label)
+    precision, recall, fscore, _ = metrics.precision_recall_fscore_support(
+        target_label, pred_label, average='binary', zero_division=0)
+    try:
+        auc = metrics.roc_auc_score(target_label, pos_prob)
+    except ValueError:
+        auc = float('nan')  # only one class present
+    return {"accuracy": accuracy, "precision": precision, "recall": recall,
+            "f1": fscore, "auc": auc}
+
+
+def train_classification(train_loader, model, criterion, optimizer, epoch, args):
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    accuracies = AverageMeter()
+
+    model.train()
+    end = time.time()
+    for i, (input, target, label, _) in enumerate(train_loader):
+        data_time.update(time.time() - end)
+
+        input_var = _to_input_var(input, args["cuda"])
+        target_var = Variable(label.cuda(non_blocking=True)) if args["cuda"] else Variable(label)
+
+        output = model(*input_var)
+        loss = criterion(output, target_var)
+
+        pred = output.data.cpu().numpy().argmax(axis=1)
+        acc = float((pred == label.numpy()).mean())
+        losses.update(loss.data.cpu().item(), label.size(0))
+        accuracies.update(acc, label.size(0))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % args["print_split"] == 0:
+            print('Epoch: [{0}][{1}/{2}]\t'
+                  'Time {bt.val:.3f} ({bt.avg:.3f})\t'
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'Acc {acc.val:.3f} ({acc.avg:.3f})'.format(
+                      epoch, i, len(train_loader), bt=batch_time,
+                      loss=losses, acc=accuracies))
+
+    return losses.avg, accuracies.avg
+
+
+def validate_classification(loader, model, criterion, args, test=False, tag=""):
+    """Evaluate the classifier over an entire loader; metrics computed once on the
+    full set (so AUC is well-defined). When test=True, writes per-sample
+    predictions (cif_id, true_label, p_sc) to <out_file>_test_<tag>.csv."""
+    losses = AverageMeter()
+    model.eval()
+    all_log_probs, all_labels, all_cif_ids = [], [], []
+
+    for i, (input, target, label, batch_cif_ids) in enumerate(loader):
+        with torch.no_grad():
+            input_var = _to_input_var(input, args["cuda"])
+            target_var = Variable(label.cuda(non_blocking=True)) if args["cuda"] else Variable(label)
+            output = model(*input_var)
+            loss = criterion(output, target_var)
+        losses.update(loss.data.cpu().item(), label.size(0))
+        all_log_probs.append(output.data.cpu())
+        all_labels.append(label)
+        all_cif_ids += batch_cif_ids
+
+    log_probs = torch.cat(all_log_probs, dim=0)
+    labels = torch.cat(all_labels, dim=0)
+    m = classification_metrics(log_probs, labels)
+
+    if test:
+        pos_prob = np.exp(log_probs.numpy())[:, 1]
+        results_path = args["out_file"] + ('_test_%s.csv' % tag if tag else '.csv')
+        with open(results_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['cif_id', 'true_label', 'p_sc'])
+            for cid, tl, p in zip(all_cif_ids, labels.numpy().tolist(), pos_prob.tolist()):
+                writer.writerow((cid, int(tl), p))
+
+    return m, losses.avg
 
 
 class Normalizer(object):

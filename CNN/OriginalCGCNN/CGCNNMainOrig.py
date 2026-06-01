@@ -184,9 +184,21 @@ def main():
 
     train_losses = [];
     val_losses = [];
+
+    # per-epoch telemetry log
+    import csv
+    epoch_log_path = args.out_filename + '_epoch_log.csv'
+    epoch_log_file = open(epoch_log_path, 'w', newline='')
+    epoch_logger = csv.writer(epoch_log_file)
+    epoch_logger.writerow(['epoch', 'train_loss', 'train_mae', 'val_loss',
+                           'val_mae', 'lr', 'epoch_time_sec', 'is_best'])
+
     for epoch in range(args.start_epoch, args.epochs):
+        epoch_start = time.time()
+        lr = optimizer.param_groups[0]['lr']
+
         # train for one epoch
-        train_loss = train(train_loader, model, criterion, optimizer, epoch, normalizer)
+        train_loss, train_mae = train(train_loader, model, criterion, optimizer, epoch, normalizer)
 
         # evaluate on validation set
         mae_error, val_loss = validate(val_loader, model, criterion, normalizer)
@@ -215,6 +227,14 @@ def main():
             'normalizer': normalizer.state_dict(),
             'args': vars(args)
         }, is_best)
+
+        epoch_time = time.time() - epoch_start
+        epoch_logger.writerow([epoch, float(train_loss), float(train_mae),
+                               float(val_loss), float(mae_error), lr,
+                               epoch_time, int(is_best)])
+        epoch_log_file.flush()
+
+    epoch_log_file.close()
 
     train_losses = np.array(train_losses);
     val_losses = np.array(val_losses)
@@ -327,7 +347,10 @@ def train(train_loader, model, criterion, optimizer, epoch, normalizer):
                     # auc=auc_scores)
                 )
 
-    return loss.item()
+    if args.task == 'regression':
+        return losses.avg, mae_errors.avg
+    else:
+        return losses.avg, accuracies.avg
 
 
 def validate(val_loader, model, criterion, normalizer, test=False):
@@ -448,12 +471,12 @@ def validate(val_loader, model, criterion, normalizer, test=False):
     if args.task == 'regression':
         print(' {star} MAE {mae_errors.avg:.3f}'.format(star=star_label,
                                                         mae_errors=mae_errors))
-        return mae_errors.avg, loss.item()
+        return mae_errors.avg, losses.avg
     else:
         # print(' {star} AUC {auc.avg:.3f}'.format(star=star_label,
         #                                         auc=auc_scores))
         # return auc_scores.avg, loss.item()
-        return 0.05, loss.item()
+        return 0.05, losses.avg
 
 
 class Normalizer(object):
