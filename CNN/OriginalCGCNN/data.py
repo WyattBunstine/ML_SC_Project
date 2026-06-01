@@ -14,7 +14,7 @@ import torch
 from pymatgen.core.structure import Structure
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
-from torch.utils.data.sampler import SubsetRandomSampler
+from torch.utils.data.sampler import SubsetRandomSampler, Sampler
 from pymatgen.core.periodic_table import Element
 # import ast
 import pandas as pd
@@ -100,6 +100,93 @@ def get_train_val_test_loader(dataset, collate_fn=default_collate,
         return train_loader, val_loader
 
 
+class BalancedEpochSampler(Sampler):
+    """Class-balancing sampler for the SC/non-SC classifier.
+
+    Each epoch yields *all* minority (superconductor) training indices plus a
+    fresh random sample of ``n_majority`` majority (non-superconductor) indices,
+    shuffled together. DataLoader calls ``iter(sampler)`` once per epoch, so the
+    majority subset is re-drawn every epoch -- over training the model sees most
+    of the large non-SC pool while each epoch stays ~balanced.
+    """
+
+    def __init__(self, minority_indices, majority_indices, n_majority, seed=123):
+        self.minority = list(minority_indices)
+        self.majority = list(majority_indices)
+        self.n_majority = min(n_majority, len(self.majority))
+        self._rng = random.Random(seed)
+
+    def __iter__(self):
+        sampled_major = self._rng.sample(self.majority, self.n_majority)
+        epoch_indices = self.minority + sampled_major
+        self._rng.shuffle(epoch_indices)
+        return iter(epoch_indices)
+
+    def __len__(self):
+        return len(self.minority) + self.n_majority
+
+
+def get_classification_loaders(dataset, batch_size=128, val_ratio=0.1,
+                               test_ratio=0.1, n_nonsc=5000, num_workers=0,
+                               pin_memory=False, seed=123):
+    """Build loaders for the SC/non-SC classifier from a labeled dataset.
+
+    * Stratified split by ``label`` (each class split into train/val/test by the
+      ratios) so no structure leaks across splits.
+    * Training uses :class:`BalancedEpochSampler` (all train-SC + a fresh random
+      ``n_nonsc`` train-non-SC each epoch).
+    * Val/test are returned both 'realistic' (natural class imbalance) and
+      'balanced' (non-SC subsampled to the SC count) so metrics can be reported
+      both ways.
+
+    Returns a dict of DataLoaders: train, val_realistic, val_balanced,
+    test_realistic, test_balanced, plus a 'split_sizes' summary.
+    """
+    labels = np.asarray(dataset.labels)
+    rng = random.Random(seed)
+
+    def split_class(idx_list):
+        idx = list(idx_list)
+        rng.shuffle(idx)
+        n = len(idx)
+        n_test = int(test_ratio * n)
+        n_val = int(val_ratio * n)
+        return idx[n_test + n_val:], idx[n_test:n_test + n_val], idx[:n_test]
+
+    sc_train, sc_val, sc_test = split_class(np.where(labels == 1)[0].tolist())
+    ns_train, ns_val, ns_test = split_class(np.where(labels == 0)[0].tolist())
+
+    def make_loader(sampler):
+        return DataLoader(dataset, batch_size=batch_size, sampler=sampler,
+                          num_workers=num_workers, collate_fn=collate_pool,
+                          pin_memory=pin_memory,
+                          # keep workers (and their per-process graph cache) alive
+                          # across epochs; without this, Windows re-spawns them and
+                          # reloads the dataset every epoch.
+                          persistent_workers=(num_workers > 0))
+
+    def balanced_subset(min_idx, maj_idx):
+        # keep all minority, subsample majority down to the minority count
+        k = min(len(min_idx), len(maj_idx))
+        return list(min_idx) + rng.sample(maj_idx, k)
+
+    train_loader = make_loader(
+        BalancedEpochSampler(sc_train, ns_train, n_nonsc, seed=seed))
+
+    return {
+        "train": train_loader,
+        "val_realistic": make_loader(SubsetRandomSampler(sc_val + ns_val)),
+        "val_balanced": make_loader(SubsetRandomSampler(balanced_subset(sc_val, ns_val))),
+        "test_realistic": make_loader(SubsetRandomSampler(sc_test + ns_test)),
+        "test_balanced": make_loader(SubsetRandomSampler(balanced_subset(sc_test, ns_test))),
+        "split_sizes": {
+            "train_sc": len(sc_train), "train_nonsc": len(ns_train),
+            "val_sc": len(sc_val), "val_nonsc": len(ns_val),
+            "test_sc": len(sc_test), "test_nonsc": len(ns_test),
+        },
+    }
+
+
 def collate_pool(dataset_list):
     """
     Collate a list of data and return a batch for predicting crystal
@@ -134,10 +221,10 @@ def collate_pool(dataset_list):
     batch_cif_ids: list
     """
     batch_atom_fea, batch_nbr_fea, batch_nbr_fea_idx = [], [], []
-    crystal_atom_idx, batch_target = [], []
+    crystal_atom_idx, batch_target, batch_label = [], [], []
     batch_cif_ids = []
     base_idx = 0
-    for i, ((atom_fea, nbr_fea, nbr_fea_idx), target, cif_id) \
+    for i, ((atom_fea, nbr_fea, nbr_fea_idx), target, label, cif_id) \
             in enumerate(dataset_list):
         n_i = atom_fea.shape[0]  # number of atoms for this crystal
         batch_atom_fea.append(atom_fea)
@@ -146,6 +233,7 @@ def collate_pool(dataset_list):
         new_idx = torch.LongTensor(np.arange(n_i) + base_idx)
         crystal_atom_idx.append(new_idx)
         batch_target.append(target)
+        batch_label.append(label)
         batch_cif_ids.append(cif_id)
         base_idx += n_i
     return (torch.cat(batch_atom_fea, dim=0),
@@ -153,6 +241,7 @@ def collate_pool(dataset_list):
             torch.cat(batch_nbr_fea_idx, dim=0),
             crystal_atom_idx), \
         torch.stack(batch_target, dim=0), \
+        torch.cat(batch_label, dim=0), \
         batch_cif_ids
 
 
@@ -254,7 +343,12 @@ class AtomCustomJSONInitializer(AtomInitializer):
         atom_types = set(elem_embedding.keys())
         super(AtomCustomJSONInitializer, self).__init__(atom_types)
         for key, value in elem_embedding.items():
-            self._embedding[key] = np.array(value, dtype=float)
+            # Some elements (e.g. noble gases, several actinides) have null/NaN
+            # entries in atom_init.json (pymatgen returns no electronegativity /
+            # atomic_radius). Coerce to 0.0 so they don't poison the features and
+            # NaN the loss when such elements appear (they show up in the non-SC set).
+            self._embedding[key] = np.nan_to_num(np.array(value, dtype=float),
+                                                 nan=0.0, posinf=0.0, neginf=0.0)
 
 
 class CIFData(Dataset):
@@ -319,10 +413,17 @@ class CIFData(Dataset):
         #     self.id_prop_data = [row for row in reader]
         with open(id_prop_file) as f:
             pickle_data = pd.read_pickle(id_prop_file)
-            self.id_prop_data = [[row['id'], row['value'], row['struc_dict']] for index, row in pickle_data.iterrows()]
+            # `label` (1 = superconductor, 0 = non-superconductor) is the SC/non-SC
+            # class for classification. Defaults to 1 for older pickles without the
+            # column, so the regression path is unaffected.
+            self.id_prop_data = [[row['id'], row['value'], row['struc_dict'],
+                                  int(row['label']) if 'label' in row else 1]
+                                 for index, row in pickle_data.iterrows()]
 
         random.seed(random_seed)
         random.shuffle(self.id_prop_data)
+        # labels aligned with __getitem__ index order (after the shuffle above)
+        self.labels = [rec[3] for rec in self.id_prop_data]
         self.json_name = json_name
         atom_init_file = os.path.join(self.root_dir, self.json_name)
         assert os.path.exists(atom_init_file), 'atom_init.json does not exist!'
@@ -342,7 +443,7 @@ class CIFData(Dataset):
         # Structure.from_file reads a structure from a file
         # changed to read structure form dict in csv file
 
-        cif_id, target, structure_dict = self.id_prop_data[idx]
+        cif_id, target, structure_dict, label = self.id_prop_data[idx]
         crystal = Structure.from_dict(structure_dict)  # ast.literal_eval(
 
         # atom_fea = np.vstack([self.ari.get_atom_fea(crystal[i].specie.number)
@@ -350,7 +451,9 @@ class CIFData(Dataset):
         ##########
         def get_occu(crystal_structure):
 
-            periodic_sites = crystal_structure.as_dict()
+            # Reuse the stored structure_dict instead of re-serializing the
+            # Structure we just built from it (crystal.as_dict() is redundant work).
+            periodic_sites = structure_dict
             # print(periodic_sites['sites'][0])
             crystal_fractions = []
             crystal_species = []
@@ -420,9 +523,10 @@ class CIFData(Dataset):
         nbr_fea = torch.Tensor(nbr_fea)
         nbr_fea_idx = torch.LongTensor(nbr_fea_idx)
         target = torch.Tensor([float(target)])
+        label = torch.LongTensor([int(label)])
 
         # print("atom_fea shape: ", atom_fea.shape)
         # print("nbr_fea shape: ", nbr_fea.shape)
         # print("nbr_fea_index shape: ", nbr_fea_idx.shape)
 
-        return (atom_fea, nbr_fea, nbr_fea_idx), target, cif_id
+        return (atom_fea, nbr_fea, nbr_fea_idx), target, label, cif_id

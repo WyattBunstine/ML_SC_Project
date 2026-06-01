@@ -1,11 +1,17 @@
-# ML_SC_Project — Chemically and Geometrically Motivated Crystal Graph Neural Network
+# ML_SC_Project — Chemically and Geometrically Motivated Crystal Graph Neural Networks
 
-This project predicts superconducting critical temperature (T_c) from crystal
-structure using a Crystal Graph Convolutional Neural Network (CGCNN). It extends
-the baseline CGCNN ([txie-93/cgcnn](https://github.com/txie-93/cgcnn)) with a more
-chemically and geometrically motivated graph construction — most notably encoding
-each site's **coordination environment** as an additional atom feature. The
-original CGCNN is kept alongside as a baseline for comparison.
+This project predicts and screens superconductors from crystal structure. It frames the
+problem as a **two-stage hurdle**: first classify whether a material is a superconductor
+candidate (SC vs. non-SC), then regress the critical temperature T_c for superconductors.
+
+Two graph-neural-network families are trained and compared:
+
+- a **baseline CGCNN** ([txie-93/cgcnn](https://github.com/txie-93/cgcnn)), and
+- an **MPNN** with learned edge features that consumes richer `crystal_graph_v4` graphs
+  (this project's contribution).
+
+The earlier coordination-environment variant (`CGCNNCoordEnv`) has been retired and
+superseded by the MPNN.
 
 ## Background
 
@@ -15,154 +21,162 @@ analytical or first-principles methods. Because the materials properties that gi
 rise to superconductivity interact in subtle ways, and because there are only on the
 order of 30,000 known superconductors (limited training data), the **representation**
 of a material is critical. This project represents composition as per-site feature
-vectors (element, occupancy, oxidation/valence, coordination environment) and
-geometry via the crystal graph, then learns T_c from them.
+vectors (element, occupancy, oxidation/valence, local geometry) and structure via the
+crystal graph, then learns superconductivity (SC/non-SC) and T_c from them.
 
 ## Project Structure
 
 ```
 ML_SC_Project/
-├── main.py                 # << entry point: build-db / train / plot
+├── main.py                 # entry point: build-db / download-nonsc / train / train-mpnn / plot
 ├── plot.py                 # plots CNN predictions vs. targets
+│
+├── configs/
+│   ├── basic.json          # baseline CGCNN, regression (T_c)
+│   ├── classify_basic.json # baseline CGCNN, classification (SC/non-SC)
+│   └── mpnn_basic.json     # MPNN (crystal_graph_v4), regression
 │
 ├── database/               # dataset construction
 │   ├── database_main.py    # core data-prep library (generators + helpers)
-│   ├── atom_init.json      # per-element feature vectors used by the CNN
-│   ├── MP/                 # Materials Project / 3DSC data
+│   ├── crystal_graph_v4_import.py  # rich graph builder used by the cgv4 kind
+│   ├── atom_init.json      # per-element feature vectors used by the CGCNN
+│   ├── MP/                 # superconductor (3DSC_MP) data
 │   │   ├── 3DSC_MP.csv     # raw 3DSC dataset (headered: cif paths + tc)
 │   │   ├── id_prop.csv     # headerless "<cif_filename>,<tc>" rows
-│   │   ├── id_prop.pickle  # parsed basic dataset (id, value, struc_dict)
-│   │   └── cifs/           # ~10.9k CIF structure files
+│   │   ├── id_prop_basic_combined.pickle  # SC + non-SC, labeled (classifier input)
+│   │   └── cifs/           # CIF structure files
 │   └── Non_SC_DB_MP/
-│       └── Download_MP_data.py  # downloads non-superconductors from Materials Project
+│       ├── Download_MP_data.py  # downloads non-superconductors from the MP API
+│       ├── Non_SC.csv      # headerless "<material_id>.cif,0.0"
+│       └── cifs/           # downloaded non-SC CIFs
 │
 └── CNN/                    # the models (adapted from txie-93/cgcnn)
-    ├── CGCNNMain.py        # << CNN training/eval entry point (JSON-config driven)
-    ├── CGCNNCoordEnv/      # this project's modified CGCNN
-    │   ├── CGCNNCE.py      # ConvLayer + CrystalGraphConvNet
-    │   └── CEdata.py       # CIFData dataset; appends coordination env to atom features
-    └── OriginalCGCNN/      # unmodified baseline for comparison
-        ├── CGCNNMainOrig.py
-        ├── CGCNNOrig.py
-        └── data.py
+    ├── CGCNNMain.py        # baseline CGCNN trainer (JSON-config; regression + classification)
+    ├── OriginalCGCNN/      # baseline CGCNN
+    │   ├── CGCNNMainOrig.py  # standalone argparse trainer (not wired into main.py)
+    │   ├── CGCNNOrig.py    # model
+    │   └── data.py         # dataset, collate, loaders, BalancedEpochSampler
+    └── MPNN/               # message-passing network
+        ├── MPNNMain.py     # MPNN trainer (regression + classification)
+        ├── MPNNModel.py    # CrystalMPNN model
+        └── MPNNData.py     # graph loader, collate, loaders, BalancedEpochSampler
 ```
 
 ### Script reference
 
 | Script | Role | Entry point |
 | --- | --- | --- |
-| `main.py` | Project CLI / entry point for the whole workflow: build datasets, train + evaluate, plot. | `python main.py {build-db,train,plot} ...` |
-| `plot.py` | `plot_results()` — reads a results CSV, computes MSE, and scatter-plots predicted vs. target T_c. | `python main.py plot` |
-| `database/database_main.py` | Core data-prep library: `generate_atom_init`, `generate_Basic_DB`, `generate_CE_DB`. | imported (called by `main.py`) |
-| `database/Non_SC_DB_MP/Download_MP_data.py` | `gen_dataset` — pulls non-superconductors (by band gap) from the Materials Project API into CIFs + a prop CSV. | imported |
-| `CNN/CGCNNMain.py` | Main training/validation/test loop with checkpointing; selects the CE or original model from the config. | `python main.py train <config.json>` (wraps it) |
-| `CNN/CGCNNCoordEnv/CGCNNCE.py` | The modified crystal graph conv-net model. | imported |
-| `CNN/CGCNNCoordEnv/CEdata.py` | `CIFData` dataset reading the parsed pickle; builds atom features and appends the coordination-environment value. | imported |
-| `CNN/OriginalCGCNN/*` | Unmodified baseline CGCNN (model, data loader, standalone `argparse` trainer). | `python CNN/OriginalCGCNN/CGCNNMainOrig.py <args>` |
+| `main.py` | Project CLI for the whole workflow: build datasets, download negatives, train + evaluate, plot. | `python main.py {build-db,download-nonsc,train,train-mpnn,plot} ...` |
+| `plot.py` | `plot_results()` — reads a results CSV, computes MSE, scatter-plots predicted vs. target T_c. | `python main.py plot` |
+| `database/database_main.py` | Core data-prep library: `generate_atom_init`, `generate_Basic_DB`, `generate_CGv4_DB`. | imported (called by `main.py`) |
+| `database/Non_SC_DB_MP/Download_MP_data.py` | `gen_dataset` — pulls non-superconductors (by band gap) from the MP API into CIFs + a prop CSV. Needs `MP_API_KEY`. | `python main.py download-nonsc` |
+| `CNN/CGCNNMain.py` | Baseline CGCNN training/validation/test loop with checkpointing; regression or classification per config. | `python main.py train <config.json>` |
+| `CNN/MPNN/MPNNMain.py` | MPNN trainer over `crystal_graph_v4` graphs; regression or classification per config. | `python main.py train-mpnn <config.json>` |
+| `CNN/OriginalCGCNN/*` | Baseline CGCNN (model, data loader + sampler, standalone `argparse` trainer). | imported (+ optional standalone) |
+| `CNN/MPNN/MPNNModel.py`, `MPNNData.py` | MPNN model and graph dataset/loaders. | imported |
 
-### Files read and generated per script
+### Files read and generated per command
 
 Paths are relative to the project root (the working directory you run from).
 
-| Script / function | Reads | Generates |
+| Command / function | Reads | Generates |
 | --- | --- | --- |
-| `main.py build-db --kind atom-init` | pymatgen's built-in element data (no project files) | `database/atom_init.json` |
-| `main.py build-db --kind basic` | an id→property CSV (default `database/MP/id_prop.csv`) + its CIF files (default `database/MP/cifs/`) | `<output>.pickle` + `<output>.csv` (default `database/MP/id_prop_basic.{pickle,csv}`) |
-| `main.py build-db --kind ce` | same as `basic` | `<output>.pickle` + `<output>.csv` (default `database/MP/id_prop_ce.{pickle,csv}`) |
-| `plot.py` | `CNN/test_result.csv` | none — opens a matplotlib plot window |
-| `database_main.generate_atom_init()` | pymatgen element data | `atom_init.json` (default `database/atom_init.json`) |
-| `database_main.generate_Basic_DB()` | id→property CSV + CIF files | `<output>.pickle` + `<output>.csv` |
-| `database_main.generate_CE_DB()` | id→property CSV + CIF files | `<output>.pickle` + `<output>.csv` (adds a `ce` column) |
-| `Non_SC_DB_MP/Download_MP_data.gen_dataset()` | Materials Project API (network + API key) | a prop CSV (e.g. `Non_SC.csv`) + one CIF per material in the cif dir |
-| `CNN/CGCNNMain.py` | config JSON (arg 1); `<dataset_rd>/<dataset>` pickle (`id, value, struc_dict[, ce]`) + `<dataset_rd>/<atom_init>` | `<out_file>_checkpoint.pth.tar`, `<out_file>_model_best.pth.tar`, `<out_file>.csv` (test predictions), `<out_file>_losstrain.csv.npy`, `<out_file>_lossval.csv.npy` |
-| `CNN/OriginalCGCNN/CGCNNMainOrig.py` | argparse args; pickle + `atom_init.json` in the dataset root dir | same outputs as `CGCNNMain.py` |
-| `CEdata.py` / `OriginalCGCNN/data.py` | the dataset pickle + `atom_init.json` | none — provide tensors to the data loader |
-| `CGCNNCE.py` / `CGCNNOrig.py` | — | none — model definitions only |
+| `main.py build-db --kind atom-init` | pymatgen element data | `database/atom_init.json` |
+| `main.py build-db --kind basic` | id→property CSV(s) + CIF dir(s) | `<output>.{pickle,csv}` with columns `id, value, struc_dict, label` |
+| `main.py build-db --kind cgv4` | id→property CSV(s) + CIF dir(s) | per-material JSONs in `graphs_v4/` + index `<output>.{pickle,csv}` (`id, value, graph_path, label`) |
+| `main.py download-nonsc` | MP API (needs `MP_API_KEY`) | `Non_SC.csv` + one CIF per material |
+| `main.py train <config>` | config JSON; `<dataset_rd>/<dataset>` pickle + `<dataset_rd>/<atom_init>` | checkpoints, predictions, `<out_file>_epoch_log.csv` (see below) |
+| `main.py train-mpnn <config>` | config JSON; `index_path` (cgv4 index) + the referenced graph JSONs | same output families as `train` |
+| `plot.py` | a results CSV (default `CNN/test_result.csv`) | a matplotlib plot |
 
-> The dataset pickle embeds each structure as `struc_dict` (`Structure.as_dict()`), so
-> the CNN does **not** read CIF files at train time — CIFs are only consumed when the
-> pickle is built. The pickle and `atom_init.json` must live in the same `dataset_rd`.
+Outputs by task: **regression** → `<out_file>.csv` (`cif_id, target_tc, predicted_tc`),
+`<out_file>_model_best.pth.tar`, loss `.npy` dumps; **classification** →
+`<out_file>_test_realistic.csv` and `<out_file>_test_balanced.csv` (`cif_id, true_label, p_sc`)
+plus the best checkpoint. All trainers also write `<out_file>_epoch_log.csv` (per-epoch metrics).
+
+> The dataset pickle embeds each structure as `struc_dict` (`Structure.as_dict()`), so the
+> baseline CGCNN does **not** read CIFs at train time — CIFs are only consumed when the
+> pickle (or cgv4 graphs) are built. The pickle and `atom_init.json` must share `dataset_rd`.
 
 ## Usage
 
-> Run all commands from the project root. The database code resolves relative paths
-> such as `database/MP/cifs/`.
+> Run all commands from the project root. Paths like `database/MP/cifs/` are resolved
+> relative to it.
 
-### Generating the database files (`main.py`)
-
-`main.py` exposes a `build-db` subcommand that generates or regenerates the three
-database files the CNN consumes. (If a target already exists it prints
-`Regenerating`, otherwise `Generating`.)
+### 1. Build the feature file and datasets
 
 ```bash
 # Per-element feature vectors -> database/atom_init.json
 python main.py build-db --kind atom-init
 
-# Parsed basic dataset (id, value, struc_dict) -> database/MP/id_prop_basic.{pickle,csv}
-python main.py build-db --kind basic --parallel
+# SC-only basic dataset (id, value, struc_dict, label) -> database/MP/id_prop_basic.{pickle,csv}
+python main.py build-db --kind basic
 
-# Basic dataset + per-site coordination environments (adds a 'ce' column)
-python main.py build-db --kind ce
-
-# Quick smoke test on just the first 50 rows
-python main.py build-db --kind ce --limit 50
-
-# Custom source(s): an id->property CSV and its cif directory (repeat --source for more)
-python main.py build-db --kind basic --source database/MP/id_prop.csv database/MP/cifs/
+# Quick smoke test on the first 50 rows
+python main.py build-db --kind basic --limit 50
 ```
 
 **Database file kinds**
 
 | `--kind` | Output (default) | Columns | Used by |
 | --- | --- | --- | --- |
-| `atom-init` | `database/atom_init.json` | `{Z: [Z, block, valence, atomic_radius, electron_affinity, ionization_energy, electronegativity, electron_affinity]}` | both models |
-| `basic` | `database/MP/id_prop_basic.{pickle,csv}` | `id, value, struc_dict` | `OriginalCGCNN` |
-| `ce` | `database/MP/id_prop_ce.{pickle,csv}` | `id, value, struc_dict, ce` | `CGCNNCoordEnv` |
+| `atom-init` | `database/atom_init.json` | `{Z: [Z, block, valence, atomic_radius, electron_affinity, ionization_energy, electronegativity, electron_affinity]}` | CGCNN |
+| `basic` | `database/MP/id_prop_basic.{pickle,csv}` | `id, value, struc_dict, label` | CGCNN |
+| `cgv4` | `database/MP/id_prop_v4.{pickle,csv}` (+ `graphs_v4/`) | `id, value, graph_path, label` | MPNN |
 
-**Useful flags** (see `python main.py -h` for the full list):
+**Useful flags** (`python main.py build-db -h` for the full list):
 
-- `--source CSV CIF_DIR` — an id→property CSV and its cif directory; repeatable.
-  Default: `database/MP/id_prop.csv database/MP/cifs/`.
-- `--output PATH` — output path/prefix (kind-specific default; `basic`/`ce` append `.pickle`/`.csv`).
-- `--has-header` — the source CSV has a header row with `cif`/`tc` columns (e.g. `3DSC_MP.csv`).
-  Default assumes a headerless `<cif_filename>,<tc>` file like `id_prop.csv`.
-- `--limit N` — process only the first `N` rows of each source (quick testing).
-- `--parallel` / `--batch-size N` — `basic` only: parse CIFs across threads.
-- `--timing` — `basic` only: print construction timing.
-- `--max-z N` — `atom-init` only: generate features for `Z = 1 .. N-1` (default 85).
+- `--source CSV CIF_DIR` — a superconductor id→property CSV and its cif dir (label 1); repeatable.
+- `--nonsc-source CSV CIF_DIR` — a non-superconductor source (label 0); repeatable.
+- `--output PATH` — output path/prefix.
+- `--has-header` — source CSV has a `cif`/`tc` header (e.g. `3DSC_MP.csv`); default is headerless.
+- `--limit N` — first `N` rows per source (quick testing).
+- `--parallel` / `--batch-size N` — `basic` only: thread the CIF parsing.
 
-> **Note:** regenerating `atom-init` reproduces the original *logic* but will not
-> byte-match the committed `atom_init.json` — pymatgen's electron-affinity reference
-> data has changed since that file was created (only the electron-affinity columns differ).
-
-### Training a model (`main.py train`)
-
-The CNN is driven by a JSON config that points at the parsed pickle, the
-`atom_init.json` feature file, and model/training hyperparameters. A ready-to-run
-config for the basic (baseline) model is provided at `configs/basic.json`:
+### 2. Download non-SC negatives and build the combined classifier dataset
 
 ```bash
-python main.py train configs/basic.json
+# Requires the MP_API_KEY environment variable; --limit caps the count for class balance
+python main.py download-nonsc --limit 5000
+
+# Combine SC (label 1) and non-SC (label 0) into one labeled dataset
+python main.py build-db --kind basic \
+  --source database/MP/id_prop.csv database/MP/cifs/ \
+  --nonsc-source database/Non_SC_DB_MP/Non_SC.csv database/Non_SC_DB_MP/cifs/ \
+  --output database/MP/id_prop_basic_combined
 ```
 
-This wraps `CNN/CGCNNMain.py` (running it as a subprocess so its package imports
-resolve). The config selects the model (`"models"` containing `"ORIG"` uses the
-baseline `OriginalCGCNN`, otherwise the `CGCNNCoordEnv` variant) and provides
-`dataset_rd` (root dir holding both the pickle and `atom_init.json`), `atom_init`,
-`dataset` (pickle name), `batch_size`, `epochs`, `learning_rate`, `optim`, etc.
-Training also evaluates on the held-out test split and writes predictions to
-`<out_file>.csv` (e.g. `CNN/test_result.csv`).
+The `label` column (1 = SC, 0 = non-SC) is set by which flag the source came from — it is
+**not** derived from T_c, because ~31% of the SC dataset has T_c = 0.0.
 
-### Plotting predictions (`main.py plot`)
+### 3. Train a model (`main.py train` / `main.py train-mpnn`)
 
-Scatter-plot the test predictions against their targets:
+Training is driven by a JSON config. The `"task"` key selects the objective:
+
+```bash
+# Baseline CGCNN, T_c regression (superconductors only)
+python main.py train configs/basic.json
+
+# Baseline CGCNN, SC/non-SC classification (combined dataset)
+python main.py train configs/classify_basic.json
+
+# MPNN over crystal_graph_v4 graphs
+python main.py train-mpnn configs/mpnn_basic.json
+```
+
+For **classification**, the trainer does a stratified split, trains with a
+`BalancedEpochSampler` (all SC + a fresh random `n_nonsc` non-SC each epoch), and reports
+accuracy / precision / recall / F1 / AUC on both a *realistic* (true-imbalance) and a
+*balanced* validation/test split. Model selection uses realistic-split AUC.
+
+### 4. Plot predictions (`main.py plot`)
 
 ```bash
 python main.py plot                              # reads CNN/test_result.csv
 python main.py plot --results path/to/other.csv  # or a custom results file
 ```
 
-### End-to-end
+### End-to-end (regression baseline)
 
 ```bash
 python main.py build-db --kind atom-init   # element feature file (if not present)
