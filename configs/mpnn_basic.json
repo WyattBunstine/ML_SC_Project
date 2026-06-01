@@ -1,0 +1,26 @@
+{
+    "index_path":      "database/MP/id_prop_v4.pickle",
+    "max_num_nbr":     14,
+
+    "atom_feat_len":   64,
+    "edge_hidden_dim": 128,
+    "n_conv":          3,
+    "h_feat_len":      128,
+    "n_hidden":        1,
+
+    "aggregation":     "ecn_weighted",
+
+    "batch_size":      64,
+    "val_ratio":       0.1,
+    "test_ratio":      0.1,
+
+    "optim":           "SGD",
+    "learning_rate":   0.01,
+    "momentum":        0.9,
+    "weight_decay":    0,
+    "lr_milestones":   [100],
+    "epochs":          1000,
+
+    "print_split":     10,
+    "out_file":        "CNN/MPNN/mpnn_result"
+}
