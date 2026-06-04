@@ -1,0 +1,23 @@
+# Python dependencies for ML_SC_Project.
+# Versions pinned to the local dev environment (Python 3.11) as of 2026-06-04.
+# Generated from the third-party imports across the repo; stdlib and local
+# modules (CNN/*, database/*, plot, etc.) are intentionally excluded.
+
+# --- Core: model training + featurization (needed on the cluster) ---
+# torch is intentionally NOT pinned to a +cuXXX wheel: the CUDA build is
+# machine-specific. The default PyPI wheel is the CUDA 13 build (fine on the
+# local box's driver, but Rockfish's driver is ~CUDA 12.9 — the CUDA-13 wheel
+# falls back to CPU there). On the cluster, scripts/deploy.sh setup-env installs
+# the matching CUDA build first (TORCH_CUDA_CHANNEL), so this unpinned line is
+# already satisfied and won't drag in the wrong wheel. Local dev: 2.12.0+cu130.
+torch
+numpy==2.4.6
+pandas==3.0.3
+scikit-learn==1.8.0
+pymatgen==2026.5.4
+
+# --- Dataset building (Materials Project pulls; run locally, not on the cluster) ---
+mp-api==0.46.1
+
+# --- Plotting / analysis (run locally, not on the cluster) ---
+matplotlib==3.10.9

@@ -26,7 +26,7 @@ When working on this project, iterate with the user on ideas before making imple
 
 ```
 ML_SC_Project/
-├── main.py                           # CLI: build-db / download-nonsc / train / train-mpnn / plot
+├── main.py                           # CLI: build-db / download-nonsc / download-energy / train / train-mpnn / plot
 ├── plot.py                           # Scatter-plot predictions vs targets
 ├── configs/
 │   ├── basic.json                    # Baseline CGCNN, regression (T_c)
@@ -45,10 +45,14 @@ ML_SC_Project/
 │   │   ├── id_prop_v4.pickle/.csv    # cgv4 index: [id, value, graph_path, label]
 │   │   ├── graphs_v4/                # cgv4 per-material JSON graphs (+ failed.txt log)
 │   │   └── cifs/                     # CIF structure files
-│   └── Non_SC_DB_MP/                 # non-superconductor (large-band-gap) negatives
-│       ├── Download_MP_data.py       # gen_dataset(): MP API download (needs MP_API_KEY)
-│       ├── Non_SC.csv                # headerless filename.cif,0.0 (T_c placeholder)
-│       └── cifs/                     # downloaded non-SC CIFs
+│   ├── Non_SC_DB_MP/                 # non-superconductor (large-band-gap) negatives
+│   │   ├── Download_MP_data.py       # gen_dataset(): MP API download (needs MP_API_KEY)
+│   │   ├── Non_SC.csv                # headerless filename.cif,0.0 (T_c placeholder)
+│   │   └── cifs/                     # downloaded non-SC CIFs
+│   └── MP_Energy/                    # MP energy-target benchmark dataset
+│       ├── Download_MP_energy.py     # gen_dataset(): experimental MP materials + energy targets
+│       ├── mp_energy.csv             # cif,material_id,e_above_hull,formation_energy_per_atom
+│       └── cifs/                     # downloaded CIFs
 └── CNN/
     ├── CGCNNMain.py                  # Baseline CGCNN trainer (main.py train) — regression + classification
     ├── classify_result*, test_result*  # outputs (predictions, checkpoints, epoch logs)
@@ -68,10 +72,27 @@ ML_SC_Project/
 
 ### Step 0: Download non-SC negatives (`main.py download-nonsc`)
 `Non_SC_DB_MP/Download_MP_data.py::gen_dataset()` queries the Materials Project for
-large-band-gap (default ≥ 1.0 eV) materials and writes one CIF each plus a headerless
+large-band-gap (default ≥ 4.0 eV) materials and writes one CIF each plus a headerless
 `Non_SC.csv` (`<material_id>.cif,0.0` — the T_c is a placeholder; these rows are marked
 non-SC by the database `label`, **not** by this value). Requires the **`MP_API_KEY`**
-environment variable. `--limit N` caps the count for class balance.
+environment variable. `--limit N` caps the count for class balance. The cutoff is high on
+purpose: superconductors are metallic, and MP's DFT (PBE) band gaps underestimate the true
+gap, so a low cutoff (e.g. 1 eV) can admit metallic/SC materials — even known SCs from the
+positive set — into the negatives. 4 eV keeps only unambiguous insulators; tune with
+`--min-band-gap`.
+
+### Step 0b (optional): MP energy-target benchmark (`main.py download-energy`)
+`main.py download-energy` → `MP_Energy/Download_MP_energy.py::gen_dataset()` pulls
+experimentally-observed MP materials (`theoretical=False`, with a usable structure) and
+writes one CIF each plus `mp_energy.csv`
+(`cif, material_id, e_above_hull, formation_energy_per_atom`). This is a general
+property-prediction benchmark — a sanity check on how the models learn, independent of the
+superconductor task. Two thermodynamic targets are recorded per material as **separate
+columns**: `e_above_hull` (eV/atom, ≥ 0; 0 = on-hull/stable) and `formation_energy_per_atom`
+(eV/atom, usually negative). No target is baked in here — the cgv4 index keeps both columns
+and the MPNN selects one at train time via the config `target_column` (see Step 1 / Key
+Configuration). Rows missing both energies (or a structure) are skipped. Flags:
+`--include-theoretical`, `--limit N`, `--chunk-size N`. Needs **`MP_API_KEY`**.
 
 ### Step 1: Build Database (`main.py build-db --kind <kind>`)
 Sources are `(CSV, CIF_DIR)` pairs. `--source` rows are labeled **SC (label 1)**;
@@ -87,8 +108,12 @@ Three kinds:
   emitting `[id, value, struc_dict, label]`. Rows accumulate in a list and the DataFrame
   is built once (O(n)); progress prints every 500 structures. `--parallel` threads it.
 - **`cgv4`** → `generate_CGv4_DB()`: builds a rich `crystal_graph_v4` graph per material
-  (one JSON each in `graphs_v4/`) plus an index `[id, value, graph_path, label]`. Fully
-  resumable (skips existing JSONs; failures → `graphs_v4/failed.txt`). Consumed by the MPNN.
+  (one JSON each in `graphs_v4/`) plus an index `[id, value, graph_path, label]` **+ every
+  recognized target column** present in the source (`tc`, `e_above_hull`,
+  `formation_energy_per_atom`; missing → NaN per row). `value` mirrors `tc` (or the first
+  target) for legacy single-target consumers. The MPNN picks which column to regress on via
+  the config `target_column`. Fully resumable (skips existing JSONs; failures →
+  `graphs_v4/failed.txt`). Consumed by the MPNN.
 
 Common flags: `--has-header`, `--limit N` (first N rows/source), `--output` (path/prefix),
 `--nonsc-source CSV CIF_DIR` (repeatable).
@@ -134,6 +159,7 @@ learned edge features for the MPNN).
 | `dataset_rd` | `"database/MP"` | Directory holding the pickle + `atom_init.json` (CGCNN) |
 | `dataset` | `"id_prop_basic_combined.pickle"` | Pickle name (CGCNN) |
 | `index_path` | `"database/MP/id_prop_v4.pickle"` | cgv4 index (MPNN) |
+| `target_column` | `"formation_energy_per_atom"` | [MPNN] which index target column to regress on; unset → legacy `value`/`tc` |
 | `atom_init` | `"atom_init.json"` | Per-element feature file (CGCNN) |
 | `n_nonsc` | 5000 | [classification] non-SC sampled per epoch |
 | `split_seed` | 123 | [classification] stratified-split seed |
@@ -152,7 +178,15 @@ Provided configs: `configs/basic.json` (baseline regression), `configs/classify_
 Each element (Z = 1–84) has 8 features: `[Z, block (0=s,1=p,2=d,3=f), valence,
 atomic_radius, electron_affinity, ionization_energy, electronegativity, electron_affinity]`.
 The baseline CGCNN sums these per site weighted by occupancy → (N, 8), embedded to 64-d.
-The MPNN instead uses the 12 node + 8 edge features defined in `MPNN/MPNNData.py`.
+
+The MPNN instead uses the **14 node + 8 edge + 7 poly-edge** features defined in
+`MPNN/MPNNData.py` (`NODE_FEA_LEN`, `NBR_FEA_LEN`, `POLY_FEA_LEN`). The 14 node features are:
+`Z, oxidation_state, ion_role, chi_pauling, chi_allen, ecn_value, shannon_radius, cn_core,
+hist_{corner,edge,face,other}, ionization_energy, electron_affinity`. The last two are pure
+per-element lookups (carried over from the original CGCNN `atom_init` vector); they are read
+from the stored graph when present and otherwise computed from `Z` via pymatgen, so graphs
+built before they were added need **no** rebuild. Feature dims are inferred at runtime from
+the first sample and recorded in each run's `metadata.json` (`feature_dims`).
 
 ---
 
@@ -184,6 +218,14 @@ python main.py build-db --kind basic
 
 # Download non-SC negatives (needs MP_API_KEY); --limit caps the count
 python main.py download-nonsc --limit 5000
+
+# (Optional) MP energy-target benchmark dataset (needs MP_API_KEY)
+python main.py download-energy                             # both energy columns
+# Build its graphs, then pick the target in the config via target_column
+python main.py build-db --kind cgv4 --has-header \
+  --source database/MP_Energy/mp_energy.csv database/MP_Energy/cifs/ \
+  --output database/MP_Energy/id_prop_v4_energy
+python main.py train-mpnn configs/mpnn_eform.json         # regress formation energy
 
 # Combined SC + non-SC dataset (labels 1 / 0) for the classifier
 python main.py build-db --kind basic \

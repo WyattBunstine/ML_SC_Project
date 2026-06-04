@@ -1,26 +1,26 @@
 {
-    "index_path":      "database/MP/SC_Full_v4.pickle",
+    "index_path":      "database/MP/id_prop_v4.pickle",
+    "target_column":   "formation_energy_per_atom",
     "max_num_nbr":     14,
-    "max_num_poly_nbr": 64,
+    "max_num_poly_nbr": 16,
 
-    "atom_feat_len":   128,
+    "atom_feat_len":   64,
     "edge_hidden_dim": 128,
-    "n_conv":          4,
-    "h_feat_len":      128,
+    "n_conv":          3,
+    "h_feat_len":      64,
     "n_hidden":        1,
     "task": "regression",
-    "target_transform": "log1p",
+    "target_transform": "none",
     "edge_aggregation": "attention",
     "atom_pooling":    "set2set",
     "use_poly_edges":  true,
     "normalize_features": true,
-    "target_column": "tc",
 
-    "SC_to_non_SC_ratio": "1.0",
+    "SC_to_non_SC_ratio": "inf",
 
     "batch_size":      64,
-    "num_workers":     2,
-    "graph_cache_size": 4096,
+    "num_workers":     0,
+    "graph_cache_size": 65536,
     "val_ratio":       0.1,
     "test_ratio":      0.1,
 
@@ -32,5 +32,5 @@
     "epochs":          100,
 
     "print_split":     10,
-    "out_file":        "CNN/MPNN/mpnn_result"
+    "out_file":        "CNN/MPNN/mpnn_eform"
 }

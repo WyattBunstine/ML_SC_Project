@@ -19,8 +19,8 @@
     "SC_to_non_SC_ratio": "1.0",
 
     "batch_size":      64,
-    "num_workers":     2,
-    "graph_cache_size": 4096,
+    "num_workers":     12,
+    "graph_cache_size": 16384,
     "val_ratio":       0.1,
     "test_ratio":      0.1,
 
@@ -32,5 +32,9 @@
     "epochs":          100,
 
     "print_split":     10,
-    "out_file":        "CNN/MPNN/mpnn_result"
+    "out_file":        "CNN/MPNN/mpnn_result",
+
+    "slurm": {
+        "cpus": 24
+    }
 }

@@ -13,11 +13,11 @@ def plot_results(results_file=DEFAULT_RESULTS):
     """
     data = pd.read_csv(results_file, header=None)
 
-    mse = np.sum(np.abs(data[1] - data[2]) ** 2) / len(data[1])
+    mse = np.sum(np.abs(data[1] - data[2])) / len(data[1])
 
     plt.scatter(data[1], data[2], label="MSE: " + str(mse))
-    plt.plot([0, 100], [0, 100], color='black', linestyle='--')
-    plt.xlim([0, 100])
+    plt.plot([np.min(data[1]), np.max(data[1])], [np.min(data[1]), np.max(data[1])], color='black', linestyle='--')
+    #plt.xlim([0, 100])
     plt.xlabel("target")
     plt.ylabel("prediction")
     plt.legend()
