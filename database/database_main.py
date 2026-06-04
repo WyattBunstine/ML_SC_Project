@@ -15,17 +15,28 @@ def customwarn(message, category, filename, lineno, file=None, line=None):
     1+1 # sys.stdout.write(warnings.formatwarning(message, category, filename, lineno))
 
 
-def _load_id_prop(csv_path, has_header=True):
-    """Read an id->property CSV into a DataFrame with 'cif' and 'tc' columns.
+# Recognized regression-target columns a source CSV may carry. The cgv4 index
+# preserves every one that is present so the MPNN can pick which to train on via
+# the config's `target_column` key (see CNN/MPNN/MPNNData.py). `tc` stays the
+# default/legacy target; extend this tuple to add new targets.
+KNOWN_TARGET_COLUMNS = ("tc", "e_above_hull", "formation_energy_per_atom")
 
-    has_header=True  : the CSV has a header row containing (at least) 'cif' and
-                       'tc' columns, e.g. 3DSC_MP.csv. All other columns are dropped.
+
+def _load_id_prop(csv_path, has_header=True):
+    """Read an id->property CSV into a DataFrame with a 'cif' column plus every
+    recognized target column present (see ``KNOWN_TARGET_COLUMNS``).
+
+    has_header=True  : the CSV has a header row containing (at least) a 'cif'
+                       column and one or more target columns, e.g. 3DSC_MP.csv
+                       ('tc') or mp_energy.csv ('e_above_hull',
+                       'formation_energy_per_atom'). Unrecognized columns dropped.
     has_header=False : the CSV has no header and two columns ordered
                        (cif_filename, tc), e.g. id_prop.csv.
     """
     if has_header:
         df = pd.read_csv(csv_path)
-        return df.drop(df.columns.difference(["tc", "cif"]), axis=1)
+        keep = ["cif"] + [c for c in KNOWN_TARGET_COLUMNS if c in df.columns]
+        return df.drop(df.columns.difference(keep), axis=1)
     return pd.read_csv(csv_path, header=None, names=["cif", "tc"])
 
 
@@ -89,6 +100,12 @@ def Proc_Basic_Batch(df, out_rows, cif_loc, thread_num, label=1):
     once by the caller. (The previous ``DataFrame.loc[...] = row`` enlargement was
     O(n^2) and became pathologically slow on the ~61k-row combined dataset.)"""
     warnings.showwarning = customwarn
+    if 'tc' not in df.columns:
+        raise ValueError(
+            "Basic DB build requires a 'tc' target column, but the source CSV has "
+            f"none (columns: {list(df.columns)}). The basic/CGCNN path is single-"
+            "target; for multi-target datasets (e.g. the MP energy dataset) use "
+            "--kind cgv4 and select the target via the config's 'target_column'.")
     t1 = time.time()
     total = len(df)
     for j, (index, row) in enumerate(df.iterrows(), 1):
@@ -101,13 +118,138 @@ def Proc_Basic_Batch(df, out_rows, cif_loc, thread_num, label=1):
     print("Thread " + str(thread_num) + " time: " + str(round(time.time()-t1, 4)) + " seconds.")
 
 
+def _compact_v4_graph(graph: dict) -> dict:
+    """Reduce a full crystal_graph_v4 dict to the compact feature-only form the
+    MPNN consumes (nodes, bonding edges + adjacency, polyhedral edges +
+    adjacency). Pure function — safe to call from worker processes."""
+    from pymatgen.core.periodic_table import Element as PmgElement
+
+    ion_role_map = {"cation": 1, "anion": -1, "neutral": 0}
+    compact_nodes = []
+    for node in graph["nodes"]:
+        el = PmgElement(node["element"])
+        z = el.Z
+        # Free-atom electronic props (eV), pure per-element lookups carried over
+        # from the original CGCNN atom_init vector. None for elements without
+        # tabulated data -> 0.0 so they don't poison the feature vector.
+        ie = el.ionization_energy
+        ea = el.electron_affinity
+        hist = node.get("sharing_mode_hist") or {"corner": 0, "edge": 0, "face": 0, "other": 0}
+        compact_nodes.append({
+            "Z": z,
+            "oxidation_state": float(node.get("oxidation_state") or 0.0),
+            "ion_role": ion_role_map.get(node.get("ion_role", "neutral"), 0),
+            "chi_pauling": float(node["chi_pauling"]) if node.get("chi_pauling") is not None else 0.0,
+            "chi_allen": float(node["chi_allen"]) if node.get("chi_allen") is not None else 0.0,
+            "ecn_value": float(node.get("ecn_value") or 0.0),
+            "shannon_radius": float(node.get("shannon_radius_angstrom") or 0.0),
+            "cn_core": int(node.get("cn_core") or 0),
+            "hist_corner": int(hist.get("corner", 0)),
+            "hist_edge": int(hist.get("edge", 0)),
+            "hist_face": int(hist.get("face", 0)),
+            "hist_other": int(hist.get("other", 0)),
+            "ionization_energy": float(ie) if ie is not None else 0.0,
+            "electron_affinity": float(ea) if ea is not None else 0.0,
+        })
+
+    compact_edges = []
+    for edge in graph["edges"]:
+        compact_edges.append({
+            "id": edge["id"],
+            "bond_length": float(edge["bond_length"]),
+            "bond_length_over_sum_radii": float(edge["bond_length_over_sum_radii"])
+                if edge.get("bond_length_over_sum_radii") is not None else 0.0,
+            "voronoi_weight_src": float(edge["voronoi_weight_source"]),
+            "voronoi_weight_tgt": float(edge["voronoi_weight_target"]),
+            "ecn_weight_src": float(edge["ecn_weight_source"]),
+            "ecn_weight_tgt": float(edge["ecn_weight_target"]),
+            "delta_chi_pauling": float(edge["delta_chi_pauling"])
+                if edge.get("delta_chi_pauling") is not None else 0.0,
+            "coord_sphere": 1 if edge.get("coordination_sphere") == "core" else 0,
+        })
+
+    # Adjacency: node_id -> [(edge_id, neighbor_id), ...].
+    # v4 graphs don't expose a top-level "adjacency"; rebuild it from the
+    # (undirected) edge list. Isolated nodes keep an empty list so every node
+    # id is present for the model.
+    compact_adj = {str(nid): [] for nid in range(len(graph["nodes"]))}
+    for edge in graph["edges"]:
+        s, t, eid = edge["source"], edge["target"], edge["id"]
+        compact_adj[str(s)].append((eid, t))
+        compact_adj[str(t)].append((eid, s))
+
+    # Polyhedral edges — second-neighbour connections through a shared bridging
+    # atom (corner/edge/face sharing). A distinct edge type from bonding edges;
+    # stored as their own compact list + adjacency so the model can message-pass
+    # over them separately. path_type is encoded numerically the same way
+    # ion_role is on nodes.
+    poly_type_map = {"cation-anion-cation": 1, "anion-cation-anion": -1, "other": 0}
+    compact_poly_edges = []
+    for pe in graph.get("polyhedral_edges", []):
+        compact_poly_edges.append({
+            "id": pe["id"],
+            "shared_count": int(pe.get("shared_count") or 0),
+            "mean_angle_deg": float(pe.get("mean_angle_deg") or 0.0),
+            "std_angle_deg": float(pe.get("std_angle_deg") or 0.0),
+            "mean_path_length": float(pe.get("mean_path_length") or 0.0),
+            "std_path_length": float(pe.get("std_path_length") or 0.0),
+            "direct_distance": float(pe.get("direct_distance") or 0.0),
+            "path_type": poly_type_map.get(pe.get("path_type", "other"), 0),
+        })
+
+    # Poly adjacency: node_id -> [(poly_edge_id, neighbor_id), ...].
+    # Built from polyhedral_edges' (node_a, node_b) endpoints, same undirected
+    # convention as the bonding adjacency above.
+    compact_poly_adj = {str(nid): [] for nid in range(len(graph["nodes"]))}
+    for pe in graph.get("polyhedral_edges", []):
+        a, b, pid = pe["node_a"], pe["node_b"], pe["id"]
+        compact_poly_adj[str(a)].append((pid, b))
+        compact_poly_adj[str(b)].append((pid, a))
+
+    return {
+        "nodes": compact_nodes,
+        "edges": compact_edges,
+        "adjacency": compact_adj,
+        "poly_edges": compact_poly_edges,
+        "poly_adjacency": compact_poly_adj,
+    }
+
+
+def _process_cgv4_row(task):
+    """Worker: build + compact + write one graph JSON.
+
+    task = (cif_id, cif_path, graph_path). Returns a status tuple
+    (graph_path, kind, cif_id, msg) where kind is "ok" | "build_fail" |
+    "post_fail". Defined at module level so it is picklable by multiprocessing.
+    """
+    cif_id, cif_path, graph_path = task
+    from database.crystal_graph_v4_import import build_crystal_graph_from_cif
+    try:
+        graph = build_crystal_graph_from_cif(cif_path)
+    except Exception as exc:
+        return (graph_path, "build_fail", cif_id, f"{type(exc).__name__}: {exc}")
+    try:
+        compact = _compact_v4_graph(graph)
+        with open(graph_path, "w") as f:
+            json.dump(compact, f)
+    except Exception as exc:
+        if os.path.exists(graph_path):
+            os.remove(graph_path)
+        return (graph_path, "post_fail", cif_id, f"post-processing: {type(exc).__name__}: {exc}")
+    return (graph_path, "ok", cif_id, None)
+
+
 def generate_CGv4_DB(data_files: list, output_dir='database/MP/graphs_v4',
-                     output_index='database/MP/id_prop_v4', has_header=False, limit=None):
+                     output_index='database/MP/id_prop_v4', has_header=False,
+                     limit=None, n_workers=None):
     """Pre-compute crystal_graph_v4 graphs for each material and store as compact JSON files.
 
     Creates one JSON per material in output_dir, plus an index pickle/csv at output_index.
     Resumable: skips any material whose JSON already exists.
     Failed structures are logged to output_dir/failed.txt and excluded from the index.
+
+    Builds run in parallel across CIFs (each is independent); the main process
+    writes the index. Output is identical to the serial version.
 
     Parameters
     ----------
@@ -116,107 +258,105 @@ def generate_CGv4_DB(data_files: list, output_dir='database/MP/graphs_v4',
     output_index : path prefix for the index pickle/csv (appends .pickle / .csv)
     has_header : whether the source CSVs have a 'cif'/'tc' header row
     limit : if set, only process the first N rows per source (for testing)
+    n_workers : number of worker processes (default: os.cpu_count()).
     """
-    from database.crystal_graph_v4_import import build_crystal_graph_from_cif
-    from pymatgen.core.periodic_table import Element as PmgElement
+    import multiprocessing as mp
+    from collections import defaultdict
 
     os.makedirs(output_dir, exist_ok=True)
     failed_log = os.path.join(output_dir, "failed.txt")
 
-    index_rows = []
+    # Scan all source rows first, separating: already-built (index directly),
+    # missing-CIF (failure), and to-build (dispatch to workers). Builds are
+    # deduplicated by graph_path so the same material isn't rebuilt twice when
+    # it appears in multiple sources.
+    rows_for_path = defaultdict(list)   # graph_path -> [index_row, ...]
+    build_tasks = {}                    # graph_path -> (cif_id, cif_path), first wins
+    missing_cif = {}                    # graph_path -> cif_id
+    existing_paths = set()
 
     for data_file in data_files:
         csv_path, cif_dir, label = _unpack_source(data_file)
         df = _load_id_prop(csv_path, has_header)
         if limit:
             df = df.head(limit)
-
-        total = len(df)
-        for j, (_, row) in enumerate(df.iterrows()):
+        # Every recognized target column this source carries (e.g. just 'tc', or
+        # 'e_above_hull' + 'formation_energy_per_atom'). All are written to the
+        # index; the MPNN picks one at train time via `target_column`.
+        target_cols = [c for c in KNOWN_TARGET_COLUMNS if c in df.columns]
+        for _, row in df.iterrows():
             cif_id = row['cif']
-            tc = row['tc']
-
-            if j % 50 == 0:
-                print(f"  {j}/{total} ({100*j/total:.1f}%)")
-
             graph_path = os.path.join(output_dir, cif_id + ".json")
+            rec = {"id": cif_id, "graph_path": graph_path, "label": label}
+            for c in target_cols:
+                rec[c] = row[c]
+            # Legacy `value` column: mirrors 'tc' only (the historical single
+            # target). It is deliberately left empty for tc-less sources (e.g. the
+            # energy dataset) so a consumer that forgets to set `target_column`
+            # fails loudly instead of silently regressing on an arbitrary target.
+            rec["value"] = row["tc"] if "tc" in target_cols else None
+            rows_for_path[graph_path].append(rec)
 
-            # Resumable: skip if already processed
             if os.path.exists(graph_path):
-                index_rows.append({"id": cif_id, "value": tc, "graph_path": graph_path, "label": label})
+                existing_paths.add(graph_path)
                 continue
-
+            if graph_path in build_tasks or graph_path in missing_cif:
+                continue
             cif_path = os.path.join(cif_dir, cif_id)
-            if not os.path.exists(cif_path):
-                with open(failed_log, "a") as f:
-                    f.write(f"{cif_id}\tCIF not found\n")
-                continue
+            if os.path.exists(cif_path):
+                build_tasks[graph_path] = (cif_id, cif_path)
+            else:
+                missing_cif[graph_path] = cif_id
 
-            try:
-                graph = build_crystal_graph_from_cif(cif_path)
-            except Exception as exc:
-                with open(failed_log, "a") as f:
-                    f.write(f"{cif_id}\t{type(exc).__name__}: {exc}\n")
-                continue
+    tasks = [(cif_id, cif_path, gp) for gp, (cif_id, cif_path) in build_tasks.items()]
+    total = len(tasks)
+    n_workers = (os.cpu_count() or 1) if n_workers is None else max(1, int(n_workers))
+    n_workers = min(n_workers, total) if total else 1
+    print(f"  {len(existing_paths)} already cached; {total} to build "
+          f"on {n_workers} worker(s)")
 
-            # Build compact representation — only fields used as features
-            try:
-                compact_nodes = []
-                for node in graph["nodes"]:
-                    z = PmgElement(node["element"]).Z
-                    ion_role_map = {"cation": 1, "anion": -1, "neutral": 0}
-                    hist = node.get("sharing_mode_hist_core") or {"corner": 0, "edge": 0, "face": 0, "other": 0}
-                    compact_nodes.append({
-                        "Z": z,
-                        "oxidation_state": float(node.get("oxidation_state") or 0.0),
-                        "ion_role": ion_role_map.get(node.get("ion_role", "neutral"), 0),
-                        "chi_pauling": float(node["chi_pauling"]) if node.get("chi_pauling") is not None else 0.0,
-                        "chi_allen": float(node["chi_allen"]) if node.get("chi_allen") is not None else 0.0,
-                        "ecn_value": float(node.get("ecn_value") or 0.0),
-                        "shannon_radius": float(node.get("shannon_radius_angstrom") or 0.0),
-                        "cn_core": int(node.get("cn_core") or 0),
-                        "hist_corner": int(hist.get("corner", 0)),
-                        "hist_edge": int(hist.get("edge", 0)),
-                        "hist_face": int(hist.get("face", 0)),
-                        "hist_other": int(hist.get("other", 0)),
-                    })
+    failed_lines = [f"{cif_id}\tCIF not found\n" for cif_id in missing_cif.values()]
+    built_ok = set()
 
-                compact_edges = []
-                for edge in graph["edges"]:
-                    compact_edges.append({
-                        "id": edge["id"],
-                        "bond_length": float(edge["bond_length"]),
-                        "bond_length_over_sum_radii": float(edge["bond_length_over_sum_radii"])
-                            if edge.get("bond_length_over_sum_radii") is not None else 0.0,
-                        "voronoi_weight_src": float(edge["voronoi_weight_source"]),
-                        "voronoi_weight_tgt": float(edge["voronoi_weight_target"]),
-                        "ecn_weight_src": float(edge["ecn_weight_source"]),
-                        "ecn_weight_tgt": float(edge["ecn_weight_target"]),
-                        "delta_chi_pauling": float(edge["delta_chi_pauling"])
-                            if edge.get("delta_chi_pauling") is not None else 0.0,
-                        "coord_sphere": 1 if edge.get("coordination_sphere") == "core" else 0,
-                    })
+    if total:
+        progress = {"done": 0}
 
-                # Adjacency: node_id -> [(edge_id, neighbor_id), ...]
-                compact_adj = {
-                    str(nid): [(eid, nbr) for (eid, nbr, _) in neighbors]
-                    for nid, neighbors in graph["adjacency"].items()
-                }
+        def _consume(results_iter):
+            for graph_path, kind, cif_id, msg in results_iter:
+                progress["done"] += 1
+                if progress["done"] % 50 == 0 or progress["done"] == total:
+                    print(f"  {progress['done']}/{total} "
+                          f"({100 * progress['done'] / total:.1f}%)")
+                if kind == "ok":
+                    built_ok.add(graph_path)
+                else:
+                    failed_lines.append(f"{cif_id}\t{msg}\n")
 
-                compact = {"nodes": compact_nodes, "edges": compact_edges, "adjacency": compact_adj}
+        if n_workers == 1:
+            _consume(map(_process_cgv4_row, tasks))
+        else:
+            # Context-managed pool so workers are always cleaned up, including
+            # on KeyboardInterrupt / exception mid-build. The full iterator is
+            # consumed inside the block, so all tasks finish before exit.
+            with mp.Pool(processes=n_workers) as pool:
+                _consume(pool.imap_unordered(_process_cgv4_row, tasks))
 
-                with open(graph_path, "w") as f:
-                    json.dump(compact, f)
+    # Emit one index row per source row whose graph file now exists.
+    index_rows = []
+    for gp, rows in rows_for_path.items():
+        if gp in existing_paths or gp in built_ok:
+            index_rows.extend(rows)
 
-                index_rows.append({"id": cif_id, "value": tc, "graph_path": graph_path, "label": label})
+    if failed_lines:
+        with open(failed_log, "a") as f:
+            f.writelines(failed_lines)
 
-            except Exception as exc:
-                with open(failed_log, "a") as f:
-                    f.write(f"{cif_id}\tpost-processing: {type(exc).__name__}: {exc}\n")
-                if os.path.exists(graph_path):
-                    os.remove(graph_path)
-
-    index_df = pd.DataFrame(index_rows, columns=["id", "value", "graph_path", "label"])
+    # Stable column order: legacy core columns first, then every target column
+    # that appeared in any source (missing -> NaN for rows whose source lacked it).
+    present_targets = [c for c in KNOWN_TARGET_COLUMNS
+                       if any(c in r for r in index_rows)]
+    columns = ["id", "value", "graph_path", "label"] + present_targets
+    index_df = pd.DataFrame(index_rows, columns=columns)
     index_df.to_pickle(output_index + ".pickle")
     index_df.to_csv(output_index + ".csv", index=False)
     print(f"Done. {len(index_rows)} structures indexed, see {failed_log} for any failures.")

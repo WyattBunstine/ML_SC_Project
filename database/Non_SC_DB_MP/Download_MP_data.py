@@ -27,9 +27,16 @@ def _get_api_key():
     return key
 
 
-def gen_dataset(min_band_gap=1.0, prop_file=None, cif_loc=None, limit=None, chunk_size=1000):
+def gen_dataset(min_band_gap=4.0, prop_file=None, cif_loc=None, limit=None, chunk_size=1000):
     """Download large-band-gap (non-superconducting) materials from the Materials
     Project to use as negative examples for the SC/non-SC classifier.
+
+    The default cutoff (4.0 eV) is deliberately high: superconductors are metallic,
+    so a clean negative should be a clear insulator. MP band gaps are DFT (PBE)
+    values that *underestimate* the true gap, so a smaller cutoff (e.g. 1 eV) can
+    admit materials that are actually metallic/superconducting -- including known
+    superconductors from the positive set whose DFT gap reads non-zero -- which
+    contaminates the negative class. 4 eV keeps only unambiguous insulators.
 
     Writes one CIF per material into ``cif_loc`` and a headerless
     ``<material_id>.cif,0.0`` row per material into ``prop_file``. The 0.0 here is
@@ -39,7 +46,7 @@ def gen_dataset(min_band_gap=1.0, prop_file=None, cif_loc=None, limit=None, chun
 
     Parameters
     ----------
-    min_band_gap : float    minimum band gap in eV (default 1.0)
+    min_band_gap : float    minimum band gap in eV (default 4.0; see note above)
     prop_file : str or None output id->property CSV
                             (default: database/Non_SC_DB_MP/Non_SC.csv)
     cif_loc : str or None   output CIF directory
@@ -87,8 +94,9 @@ if __name__ == "__main__":
         description="Download non-superconductor (large band gap) materials from "
                     "the Materials Project as negative examples."
     )
-    parser.add_argument("--min-band-gap", type=float, default=1.0,
-                        help="minimum band gap in eV (default: 1.0)")
+    parser.add_argument("--min-band-gap", type=float, default=4.0,
+                        help="minimum band gap in eV (default: 4.0; high cutoff keeps "
+                             "only clear insulators, avoiding metallic/SC contamination)")
     parser.add_argument("--prop-file", default=None,
                         help="output id->property CSV (default: Non_SC.csv beside this script)")
     parser.add_argument("--cif-loc", default=None,

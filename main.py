@@ -104,6 +104,22 @@ def cmd_download_nonsc(args):
     )
 
 
+def cmd_download_energy(args):
+    # Lazy import: only needs pymatgen/mp_api when actually downloading, and keeps
+    # the (heavy) import off the path of other commands.
+    from database.MP_Energy.Download_MP_energy import gen_dataset
+    if not os.environ.get("MP_API_KEY"):
+        sys.exit("error: set the MP_API_KEY environment variable before downloading "
+                 "(e.g. $env:MP_API_KEY = '...').")
+    gen_dataset(
+        prop_file=args.prop_file,
+        cif_loc=args.cif_loc,
+        limit=args.limit,
+        chunk_size=args.chunk_size,
+        theoretical=None if args.include_theoretical else False,
+    )
+
+
 def cmd_train(args):
     if not os.path.exists(args.config):
         sys.exit(f"error: config not found: {args.config}")
@@ -164,6 +180,7 @@ TOP_EPILOG = """\
 commands:
   build-db        generate / regenerate the database files used by the models
   download-nonsc  download non-superconductor negatives from the Materials Project
+  download-energy download experimental MP structures with energy targets
   train           train + evaluate the baseline CGCNN from a JSON config
   train-mpnn      train + evaluate the crystal_graph_v4 MPNN from a JSON config
   plot            scatter-plot test predictions vs. targets
@@ -182,6 +199,13 @@ typical workflow (from the project root):
   python main.py train configs/classify_basic.json  # classification: train + evaluate
 
   python main.py plot                               # visualize CNN/test_result.csv
+
+  # MP energy-target benchmark (needs MP_API_KEY for the download):
+  python main.py download-energy                    # experimental MP structures + energies
+  python main.py build-db --kind cgv4 --has-header \\
+      --source database/MP_Energy/mp_energy.csv database/MP_Energy/cifs/ \\
+      --output database/MP_Energy/id_prop_v4_energy # multi-target cgv4 index
+  python main.py train-mpnn configs/mpnn_eform.json # regress formation energy
 
 See 'python main.py <command> -h' for command-specific options.
 """
@@ -338,8 +362,9 @@ def build_parser():
                     "Requires the MP_API_KEY environment variable. Writes CIFs + a prop CSV "
                     "that you then pass to 'build-db --nonsc-source CSV CIF_DIR'.",
     )
-    dn.add_argument("--min-band-gap", type=float, default=1.0,
-                    help="minimum band gap in eV (default: 1.0)")
+    dn.add_argument("--min-band-gap", type=float, default=4.0,
+                    help="minimum band gap in eV (default: 4.0; high cutoff keeps only "
+                         "clear insulators, avoiding metallic/SC contamination of negatives)")
     dn.add_argument("--prop-file", default=None,
                     help="output id->property CSV (default: database/Non_SC_DB_MP/Non_SC.csv)")
     dn.add_argument("--cif-loc", default=None,
@@ -349,6 +374,30 @@ def build_parser():
     dn.add_argument("--chunk-size", type=int, default=1000,
                     help="MP API page size (default: 1000)")
     dn.set_defaults(func=cmd_download_nonsc)
+
+    de = sub.add_parser(
+        "download-energy",
+        help="download experimental Materials Project structures with energy targets",
+        description="Download experimentally-observed materials from the Materials "
+                    "Project (theoretical=False by default) with their energy-above-hull "
+                    "and formation-energy targets. Requires the MP_API_KEY environment "
+                    "variable. Writes CIFs + mp_energy.csv (columns: cif, material_id, "
+                    "e_above_hull, formation_energy_per_atom); both targets are kept as "
+                    "columns and the training target is chosen via the config's "
+                    "target_column. Feed it to 'build-db --kind cgv4 --has-header "
+                    "--source mp_energy.csv CIF_DIR'.",
+    )
+    de.add_argument("--prop-file", default=None,
+                    help="output id->property CSV (default: database/MP_Energy/mp_energy.csv)")
+    de.add_argument("--cif-loc", default=None,
+                    help="output CIF directory (default: database/MP_Energy/cifs/)")
+    de.add_argument("--limit", type=int, default=None,
+                    help="cap the number of materials downloaded (for testing)")
+    de.add_argument("--chunk-size", type=int, default=1000,
+                    help="MP API page size (default: 1000)")
+    de.add_argument("--include-theoretical", action="store_true",
+                    help="include theoretical (non-experimental) materials too")
+    de.set_defaults(func=cmd_download_energy)
 
     pl = sub.add_parser(
         "plot",

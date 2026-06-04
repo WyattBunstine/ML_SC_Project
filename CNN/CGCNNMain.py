@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import datetime
 import os
 import shutil
 import sys
@@ -23,6 +24,60 @@ from OriginalCGCNN.CGCNNOrig import CrystalGraphConvNet
 
 best_mae_error = 1e10
 
+
+def _write_run_metadata(run_dir, args, model, train_loader, dataset, classification,
+                        feature_dims):
+    """Write run_dir/metadata.json: resolved hyperparameters + model-size stats
+    for the baseline CGCNN. Mirrors the MPNN trainer's metadata."""
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    try:
+        n_train = len(train_loader.sampler)        # SubsetRandomSampler / balanced sampler
+    except TypeError:
+        n_train = len(train_loader.dataset)
+    node_dim, edge_dim = feature_dims
+
+    meta = {
+        "run_id": args.get("run_id"),
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "model_type": args.get("run_tag", "Orig"),
+        "task": "classification" if classification else "regression",
+        "config_file": os.path.abspath(sys.argv[1]),
+        "feature_dims": {"node": int(node_dim), "edge": int(edge_dim)},
+        "architecture": {
+            "atom_feat_len": args["atom_feat_len"],
+            "n_conv": args["n_conv"],
+            "h_feat_len": args["h_feat_len"],
+            "n_hidden": args["n_hidden"],
+        },
+        "training": {
+            "optim": args["optim"],
+            "learning_rate": args["learning_rate"],
+            "weight_decay": args.get("weight_decay", 0),
+            "momentum": args.get("momentum"),
+            "lr_milestones": args["lr_milestones"],
+            "epochs": args["epochs"],
+            "batch_size": args["batch_size"],
+        },
+        "dataset": {
+            "dataset": args.get("dataset"),
+            "total_indexed": len(dataset),
+        },
+        "model_size": {
+            "total_params": total_params,
+            "trainable_params": trainable_params,
+            "effective_train_samples_per_epoch": n_train,
+            "params_per_train_sample": round(total_params / max(1, n_train), 2),
+        },
+    }
+    with open(os.path.join(run_dir, "metadata.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"Model: {total_params:,} params "
+          f"({meta['model_size']['params_per_train_sample']} per train sample, "
+          f"{n_train} effective train samples/epoch)")
+
+
 def main():
     args = {}
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
@@ -33,6 +88,20 @@ def main():
         return -1
 
     classification = args.get("task", "regression") == "classification"
+
+    # --- Per-run output directory: model_data/<run_tag>_<timestamp>/ ---
+    # Mirrors the MPNN trainer: each run is self-contained (config copy +
+    # metadata.json + all artifacts). run_tag defaults to "Orig" for the baseline.
+    run_tag = args.get("run_tag", "Orig")
+    model_data_dir = args.get("model_data_dir", "model_data")
+    run_id = f"{run_tag}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    run_dir = os.path.join(model_data_dir, run_id)
+    os.makedirs(run_dir, exist_ok=True)
+    shutil.copy(sys.argv[1], os.path.join(run_dir, "config.json"))
+    out_base = os.path.basename(args.get("out_file", "result")) or "result"
+    args["out_file"] = os.path.join(run_dir, out_base)
+    args["run_id"] = run_id
+    print(f"Run output dir: {run_dir}")
 
     # load data (OriginalCGCNN baseline; the CE variant has been retired)
     dataset = CIFData(args["dataset_rd"], args["atom_init"], args["dataset"])
@@ -88,6 +157,10 @@ def main():
         args["cuda"] = True
     else:
         args["cuda"] = False
+
+    # Record run metadata (hyperparameters + model size) before training.
+    _write_run_metadata(run_dir, args, model, train_loader, dataset, classification,
+                        feature_dims=(orig_atom_fea_len, nbr_fea_len))
 
     criterion = nn.NLLLoss() if classification else nn.L1Loss()
     if args["optim"] == 'SGD':
