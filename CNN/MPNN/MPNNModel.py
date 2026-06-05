@@ -231,7 +231,7 @@ class CrystalMPNN(nn.Module):
                  n_conv: int = 3, h_fea_len: int = 128, n_h: int = 1,
                  edge_aggregation: str = 'ecn_weighted', classification: bool = False,
                  use_poly_edges: bool = True, atom_pooling: str = 'mean',
-                 set2set_steps: int = 3):
+                 set2set_steps: int = 3, dropout: float = 0.0):
         super().__init__()
 
         if atom_pooling not in self._POOLINGS:
@@ -280,8 +280,12 @@ class CrystalMPNN(nn.Module):
 
         # 2-class log-softmax head for the SC/non-SC classifier, else scalar regressor.
         self.fc_out = nn.Linear(h_fea_len, 2 if classification else 1)
+        # Dropout on the pooled crystal vector before the readout MLP. Applied to
+        # BOTH tasks now (previously classification-only). p=0.0 is a no-op, so it
+        # is off unless a config sets `dropout`. Regularizes a high-capacity model
+        # that otherwise memorizes the training set (large train/val MAE gap).
+        self.dropout = nn.Dropout(dropout)
         if classification:
-            self.dropout = nn.Dropout()
             self.logsoftmax = nn.LogSoftmax(dim=1)
         self.n_h = n_h
 
@@ -320,8 +324,7 @@ class CrystalMPNN(nn.Module):
 
         crys_fea = self.conv_to_fc_act(self.conv_to_fc(crys_fea))
 
-        if self.classification:
-            crys_fea = self.dropout(crys_fea)
+        crys_fea = self.dropout(crys_fea)
 
         if self.n_h > 1:
             for fc, act in zip(self.fcs, self.fc_acts):

@@ -160,9 +160,14 @@ def cmd_train_mpnn(args):
 
 
 def cmd_plot(args):
+    import plot  # imported lazily so matplotlib isn't loaded for other commands
+    if args.epoch_log:
+        if not os.path.exists(args.epoch_log):
+            sys.exit(f"error: epoch-log file not found: {args.epoch_log}")
+        plot.plot_epoch_log(args.epoch_log)
+        return
     if not os.path.exists(args.results):
         sys.exit(f"error: results file not found: {args.results} (train a model first)")
-    import plot  # imported lazily so matplotlib isn't loaded for other commands
     plot.plot_results(args.results)
 
 
@@ -408,6 +413,11 @@ def build_parser():
         "--results",
         default="CNN/test_result.csv",
         help="results CSV written by training (default: CNN/test_result.csv)",
+    )
+    pl.add_argument(
+        "--epoch-log",
+        help="instead of the scatter, plot per-epoch stats from an *_epoch_log.csv "
+             "(interactive: checkboxes toggle which columns are shown)",
     )
     pl.set_defaults(func=cmd_plot)
 

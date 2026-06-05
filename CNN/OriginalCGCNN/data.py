@@ -401,24 +401,60 @@ class CIFData(Dataset):
     """
 
     def __init__(self, root_dir, json_name, csv_name, max_num_nbr=12, radius=12, dmin=0, step=0.2,
-                 random_seed=123):
+                 random_seed=123, target_column=None):
         self.root_dir = root_dir
         self.max_num_nbr, self.radius = max_num_nbr, radius
         assert os.path.exists(root_dir), root_dir+' does not exist!'
         self.csv_name = csv_name
         id_prop_file = os.path.join(self.root_dir, self.csv_name)
         assert os.path.exists(id_prop_file), id_prop_file+' does not exist!'
-        # with open(id_prop_file) as f:
-        #     reader = csv.reader(f)
-        #     self.id_prop_data = [row for row in reader]
-        with open(id_prop_file) as f:
-            pickle_data = pd.read_pickle(id_prop_file)
-            # `label` (1 = superconductor, 0 = non-superconductor) is the SC/non-SC
-            # class for classification. Defaults to 1 for older pickles without the
-            # column, so the regression path is unaffected.
-            self.id_prop_data = [[row['id'], row['value'], row['struc_dict'],
-                                  int(row['label']) if 'label' in row else 1]
-                                 for index, row in pickle_data.iterrows()]
+        pickle_data = pd.read_pickle(id_prop_file)
+
+        # Pick which column supplies the regression target. A multi-target pickle
+        # (e.g. the MP energy dataset, with e_above_hull + formation_energy_per_atom)
+        # carries several named target columns; `target_column` (from the config)
+        # selects one. With it unset we fall back to the legacy `value` column, then
+        # `tc`, so older single-target pickles keep working unchanged. The fallback
+        # only accepts a column that actually has data, so a tc-less index (e.g. the
+        # energy dataset, whose `value` is all-empty) raises and tells the user to
+        # set `target_column` instead of silently training on the wrong target.
+        # Mirrors CIFDataV4 (the MPNN path) so both models select targets the same way.
+        structural_cols = {"id", "value", "struc_dict", "label"}
+        named_targets = [c for c in pickle_data.columns
+                         if c not in structural_cols and not pickle_data[c].isna().all()]
+        if target_column is not None:
+            if target_column not in pickle_data.columns:
+                raise ValueError(
+                    f"target_column '{target_column}' not found in {id_prop_file}; "
+                    f"available columns: {list(pickle_data.columns)}")
+            target_key = target_column
+        else:
+            target_key = next(
+                (c for c in ("value", "tc")
+                 if c in pickle_data.columns and not pickle_data[c].isna().all()),
+                None)
+            if target_key is None:
+                raise ValueError(
+                    f"No usable default target ('value'/'tc' absent or all-empty) in "
+                    f"{id_prop_file}. Set 'target_column' in the config to one of "
+                    f"{named_targets}.")
+        self.target_column = target_key
+
+        # `label` (1 = superconductor, 0 = non-superconductor) is the SC/non-SC
+        # class for classification. Defaults to 1 for older pickles without the
+        # column, so the regression path is unaffected. Rows whose chosen target is
+        # missing (NaN) are dropped so they can't poison training.
+        self.id_prop_data = []
+        dropped = 0
+        for _, row in pickle_data.iterrows():
+            value = row[target_key]
+            if pd.isna(value):
+                dropped += 1
+                continue
+            self.id_prop_data.append([row['id'], value, row['struc_dict'],
+                                      int(row['label']) if 'label' in row else 1])
+        if dropped:
+            print(f"CIFData: dropped {dropped} rows with no '{target_key}' value")
 
         random.seed(random_seed)
         random.shuffle(self.id_prop_data)
