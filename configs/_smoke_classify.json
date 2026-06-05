@@ -1,6 +1,6 @@
 {
   "task": "classification",
-  "dataset_rd": "database/MP",
+  "dataset_rd": "database/datafiles/MP",
   "atom_init": "atom_init.json",
   "dataset": "id_prop_basic_combined.pickle",
 

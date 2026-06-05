@@ -19,7 +19,7 @@ never touched.
 | Command | Frequency | What it does |
 |---|---|---|
 | `setup-env` | once | rsyncs `requirements.txt`, creates conda env `ml_sc` (Python 3.11) on the cluster, `pip install -r requirements.txt`. Idempotent — safe to re-run after editing deps. |
-| `sync-data` | once | rsyncs `database/MP/graphs_v4/` (14 GB) + `database/MP/*.pickle`. Resumable (`--partial`); re-running only sends new/changed files. |
+| `sync-data` | once | rsyncs `database/datafiles/MP/graphs_v4/` (14 GB) + `database/datafiles/MP/*.pickle`. Resumable (`--partial`); re-running only sends new/changed files. |
 | `run <config>` | per run | rsyncs `CNN/MPNN/*.py` + `configs/`, generates an `sbatch` script under remote `jobs/`, and submits it. |
 | `sync-code` | (auto) | pushes just code + configs. Called automatically by `run`; rarely needed directly. |
 | `status` | as needed | `squeue` for your jobs. |
@@ -170,7 +170,7 @@ for the per-run file layout — and `fetch` mirrors them back.
 | Step | Local → Remote | Remote → Local |
 |---|---|---|
 | `setup-env` | `requirements.txt` | — |
-| `sync-data` | `database/MP/graphs_v4/`, `database/MP/*.pickle` | — |
+| `sync-data` | `database/datafiles/MP/graphs_v4/`, `database/datafiles/MP/*.pickle` | — |
 | `run` / `sync-code` | `CNN/MPNN/*.py`, `configs/`, generated `jobs/*.slurm` | — |
 | `fetch` | — | `model_data/`, `logs/` |
 

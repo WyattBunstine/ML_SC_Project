@@ -1,5 +1,5 @@
 {
-    "index_path":      "database/MP/energies_MP_v4.pickle",
+    "index_path":      "database/datafiles/MP/energies_MP_v4.pickle",
     "target_column":   "formation_energy_per_atom",
     "max_num_nbr":     14,
     "max_num_poly_nbr": 64,

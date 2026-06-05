@@ -40,23 +40,18 @@ ML_SC_Project/
 │   ├── classify_basic.json # baseline CGCNN, classification (SC/non-SC)
 │   └── mpnn_basic.json     # MPNN (crystal_graph_v4), regression
 │
-├── database/               # dataset construction
+├── database/               # SCRIPTS only — data lives under datafiles/ (gitignored)
 │   ├── database_main.py    # core data-prep library (generators + helpers)
 │   ├── crystal_graph_v4_import.py  # rich graph builder used by the cgv4 kind
-│   ├── atom_init.json      # per-element feature vectors used by the CGCNN
-│   ├── MP/                 # superconductor (3DSC_MP) data
-│   │   ├── 3DSC_MP.csv     # raw 3DSC dataset (headered: cif paths + tc)
-│   │   ├── id_prop.csv     # headerless "<cif_filename>,<tc>" rows
-│   │   ├── id_prop_basic_combined.pickle  # SC + non-SC, labeled (classifier input)
-│   │   └── cifs/           # CIF structure files
-│   ├── Non_SC_DB_MP/
-│   │   ├── Download_MP_data.py  # downloads non-superconductors from the MP API
-│   │   ├── Non_SC.csv      # headerless "<material_id>.cif,0.0"
-│   │   └── cifs/           # downloaded non-SC CIFs
-│   └── MP_Energy/          # MP energy-target dataset (formation energy / e_above_hull)
-│       ├── Download_MP_energy.py  # downloads experimental MP materials + energy targets
-│       ├── mp_energy.csv   # header "cif,material_id,e_above_hull,formation_energy_per_atom"
-│       └── cifs/           # downloaded CIFs
+│   ├── Download_MP_data.py     # downloads non-superconductors from the MP API
+│   ├── Download_MP_energy.py   # downloads experimental MP materials + energy targets
+│   └── datafiles/          # ALL data files — gitignored (CIFs, graphs, pickles, CSVs)
+│       ├── atom_init.json  # per-element feature vectors used by the CGCNN
+│       ├── MP/             # superconductor (3DSC_MP) data: 3DSC_MP.csv, id_prop*.csv,
+│       │   │               #   id_prop_v4 index, graphs_v4/, cifs/
+│       │   └── ...
+│       ├── Non_SC_DB_MP/   # non-SC negatives: Non_SC.csv + cifs/
+│       └── MP_Energy/      # MP energy benchmark: mp_energy.csv + cifs/
 │
 └── CNN/                    # the models (adapted from txie-93/cgcnn)
     ├── CGCNNMain.py        # baseline CGCNN trainer (JSON-config; regression + classification)
@@ -77,8 +72,8 @@ ML_SC_Project/
 | `main.py` | Project CLI for the whole workflow: build datasets, download negatives, train + evaluate, plot. | `python main.py {build-db,download-nonsc,train,train-mpnn,plot} ...` |
 | `plot.py` | `plot_results()` — reads a results CSV, computes MSE, scatter-plots predicted vs. target T_c. | `python main.py plot` |
 | `database/database_main.py` | Core data-prep library: `generate_atom_init`, `generate_Basic_DB`, `generate_CGv4_DB`. | imported (called by `main.py`) |
-| `database/Non_SC_DB_MP/Download_MP_data.py` | `gen_dataset` — pulls non-superconductors (by band gap) from the MP API into CIFs + a prop CSV. Needs `MP_API_KEY`. | `python main.py download-nonsc` |
-| `database/MP_Energy/Download_MP_energy.py` | `gen_dataset` — pulls experimentally-observed MP materials into CIFs + a CSV with `e_above_hull` and `formation_energy_per_atom` target columns (training-time target chosen via the config's `target_column`). Needs `MP_API_KEY`. | `python main.py download-energy` |
+| `database/Download_MP_data.py` | `gen_dataset` — pulls non-superconductors (by band gap) from the MP API into CIFs + a prop CSV. Needs `MP_API_KEY`. | `python main.py download-nonsc` |
+| `database/Download_MP_energy.py` | `gen_dataset` — pulls experimentally-observed MP materials into CIFs + a CSV with `e_above_hull` and `formation_energy_per_atom` target columns (training-time target chosen via the config's `target_column`). Needs `MP_API_KEY`. | `python main.py download-energy` |
 | `CNN/CGCNNMain.py` | Baseline CGCNN training/validation/test loop with checkpointing; regression or classification per config. | `python main.py train <config.json>` |
 | `CNN/MPNN/MPNNMain.py` | MPNN trainer over `crystal_graph_v4` graphs; regression or classification per config. | `python main.py train-mpnn <config.json>` |
 | `CNN/OriginalCGCNN/*` | Baseline CGCNN (model, data loader + sampler, standalone `argparse` trainer). | imported (+ optional standalone) |
@@ -90,7 +85,7 @@ Paths are relative to the project root (the working directory you run from).
 
 | Command / function | Reads | Generates |
 | --- | --- | --- |
-| `main.py build-db --kind atom-init` | pymatgen element data | `database/atom_init.json` |
+| `main.py build-db --kind atom-init` | pymatgen element data | `database/datafiles/atom_init.json` |
 | `main.py build-db --kind basic` | id→property CSV(s) + CIF dir(s) | `<output>.{pickle,csv}` with columns `id, value, struc_dict, label` |
 | `main.py build-db --kind cgv4` | id→property CSV(s) + CIF dir(s) | per-material JSONs in `graphs_v4/` + index `<output>.{pickle,csv}` (`id, value, graph_path, label` + every recognized target column present: `tc`, `e_above_hull`, `formation_energy_per_atom`) |
 | `main.py download-nonsc` | MP API (needs `MP_API_KEY`) | `Non_SC.csv` + one CIF per material |
@@ -110,16 +105,16 @@ plus the best checkpoint. All trainers also write `<out_file>_epoch_log.csv` (pe
 
 ## Usage
 
-> Run all commands from the project root. Paths like `database/MP/cifs/` are resolved
+> Run all commands from the project root. Paths like `database/datafiles/MP/cifs/` are resolved
 > relative to it.
 
 ### 1. Build the feature file and datasets
 
 ```bash
-# Per-element feature vectors -> database/atom_init.json
+# Per-element feature vectors -> database/datafiles/atom_init.json
 python main.py build-db --kind atom-init
 
-# SC-only basic dataset (id, value, struc_dict, label) -> database/MP/id_prop_basic.{pickle,csv}
+# SC-only basic dataset (id, value, struc_dict, label) -> database/datafiles/MP/id_prop_basic.{pickle,csv}
 python main.py build-db --kind basic
 
 # Quick smoke test on the first 50 rows
@@ -130,9 +125,9 @@ python main.py build-db --kind basic --limit 50
 
 | `--kind` | Output (default) | Columns | Used by |
 | --- | --- | --- | --- |
-| `atom-init` | `database/atom_init.json` | `{Z: [Z, block, valence, atomic_radius, electron_affinity, ionization_energy, electronegativity, electron_affinity]}` | CGCNN |
-| `basic` | `database/MP/id_prop_basic.{pickle,csv}` | `id, value, struc_dict, label` | CGCNN |
-| `cgv4` | `database/MP/id_prop_v4.{pickle,csv}` (+ `graphs_v4/`) | `id, value, graph_path, label` (+ any target columns: `tc`, `e_above_hull`, `formation_energy_per_atom`) | MPNN |
+| `atom-init` | `database/datafiles/atom_init.json` | `{Z: [Z, block, valence, atomic_radius, electron_affinity, ionization_energy, electronegativity, electron_affinity]}` | CGCNN |
+| `basic` | `database/datafiles/MP/id_prop_basic.{pickle,csv}` | `id, value, struc_dict, label` | CGCNN |
+| `cgv4` | `database/datafiles/MP/id_prop_v4.{pickle,csv}` (+ `graphs_v4/`) | `id, value, graph_path, label` (+ any target columns: `tc`, `e_above_hull`, `formation_energy_per_atom`) | MPNN |
 
 **Useful flags** (`python main.py build-db -h` for the full list):
 
@@ -151,9 +146,9 @@ python main.py download-nonsc --limit 5000
 
 # Combine SC (label 1) and non-SC (label 0) into one labeled dataset
 python main.py build-db --kind basic \
-  --source database/MP/id_prop.csv database/MP/cifs/ \
-  --nonsc-source database/Non_SC_DB_MP/Non_SC.csv database/Non_SC_DB_MP/cifs/ \
-  --output database/MP/id_prop_basic_combined
+  --source database/datafiles/MP/id_prop.csv database/datafiles/MP/cifs/ \
+  --nonsc-source database/datafiles/Non_SC_DB_MP/Non_SC.csv database/datafiles/Non_SC_DB_MP/cifs/ \
+  --output database/datafiles/MP/id_prop_basic_combined
 ```
 
 The `label` column (1 = SC, 0 = non-SC) is set by which flag the source came from — it is
@@ -173,7 +168,7 @@ python main.py download-energy
 python main.py download-energy --limit 50
 ```
 
-This writes one CIF per material into `database/MP_Energy/cifs/` and `mp_energy.csv` with
+This writes one CIF per material into `database/datafiles/MP_Energy/cifs/` and `mp_energy.csv` with
 columns `cif, material_id, e_above_hull, formation_energy_per_atom`. `e_above_hull` is the
 energy above the convex hull (eV/atom, ≥ 0; 0 = stable); `formation_energy_per_atom` is the
 formation enthalpy (eV/atom, typically negative). **Both targets are kept as columns** — no
@@ -182,8 +177,8 @@ target is baked in at download time. Flags: `--include-theoretical`, `--limit N`
 
 ```bash
 python main.py build-db --kind cgv4 --has-header \
-  --source database/MP_Energy/mp_energy.csv database/MP_Energy/cifs/ \
-  --output database/MP_Energy/id_prop_v4_energy
+  --source database/datafiles/MP_Energy/mp_energy.csv database/datafiles/MP_Energy/cifs/ \
+  --output database/datafiles/MP_Energy/id_prop_v4_energy
 
 # then train on it (ready-made config; formation energy as the target):
 python main.py train-mpnn configs/mpnn_eform.json
@@ -250,7 +245,7 @@ each training run only transfers kilobytes.
   ─────────────────────                        ──────────────────────────────────
   build-db --kind cgv4  ──┐
    → graphs_v4/ + index   │  deploy.sh sync-data (once)
-   pickles                ├───────────────────▶ /data/.../ML_SC_Proj/database/MP/
+   pickles                ├───────────────────▶ /data/.../ML_SC_Proj/database/datafiles/MP/
                           │  deploy.sh setup-env (once)
   requirements.txt ───────┴───────────────────▶ conda env `ml_sc`
                              deploy.sh run <cfg>

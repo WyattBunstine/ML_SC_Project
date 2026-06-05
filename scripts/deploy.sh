@@ -115,17 +115,17 @@ EOF
 # ---------------------------------------------------------------------------
 sync_data() {
     echo ">> Creating remote dirs..."
-    ssh "${SSH}" "mkdir -p '${REMOTE_PATH}/database/MP'"
+    ssh "${SSH}" "mkdir -p '${REMOTE_PATH}/database/datafiles/MP'"
 
     echo ">> Syncing graph database (14 GB, ~89k files) — first run is slow, later runs are fast..."
     rsync -a --info=progress2 --partial \
-        database/MP/graphs_v4 \
-        "${SSH}:${REMOTE_PATH}/database/MP/"
+        database/datafiles/MP/graphs_v4 \
+        "${SSH}:${REMOTE_PATH}/database/datafiles/MP/"
 
     echo ">> Syncing index pickles..."
     rsync -a --info=progress2 \
-        database/MP/*.pickle \
-        "${SSH}:${REMOTE_PATH}/database/MP/"
+        database/datafiles/MP/*.pickle \
+        "${SSH}:${REMOTE_PATH}/database/datafiles/MP/"
 
     echo ">> Dataset sync complete."
 }
@@ -143,7 +143,7 @@ sync_code() {
 # ---------------------------------------------------------------------------
 # Push code+config and submit a SLURM job for the given config.
 # The training entrypoint resolves graph paths RELATIVE to the project root
-# (the pickle stores paths like database/MP/graphs_v4/...), and imports its
+# (the pickle stores paths like database/datafiles/MP/graphs_v4/...), and imports its
 # siblings from CNN/MPNN — so the job must `cd ${REMOTE_PATH}` and run
 # `python CNN/MPNN/MPNNMain.py <config>` exactly as we do locally.
 # ---------------------------------------------------------------------------
