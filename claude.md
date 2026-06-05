@@ -29,8 +29,8 @@ ML_SC_Project/
 ├── main.py                           # CLI: build-db / download-nonsc / download-energy / train / train-mpnn / plot
 ├── plot.py                           # Scatter-plot predictions vs targets
 ├── configs/
-│   ├── basic.json                    # Baseline CGCNN, regression (T_c)
-│   ├── classify_basic.json           # Baseline CGCNN, classification (SC/non-SC)
+│   ├── orig_basic.json                    # Baseline CGCNN, regression (T_c)
+│   ├── orig_classify_basic.json           # Baseline CGCNN, classification (SC/non-SC)
 │   └── mpnn_basic.json               # MPNN (crystal_graph_v4), regression
 ├── database/                        # SCRIPTS only — all data is under datafiles/ (gitignored)
 │   ├── database_main.py             # DB generation: generate_atom_init(),
@@ -43,8 +43,8 @@ ML_SC_Project/
 │       ├── MP/                      # superconductor (3DSC_MP) data
 │       │   ├── id_prop.csv          # Headerless: filename.cif, T_c (5,773 rows)
 │       │   ├── 3DSC_MP.csv          # Full 3DSC dataset with metadata
-│       │   ├── id_prop_basic.pickle # SC-only basic dataset: [id, value, struc_dict, label]
-│       │   ├── id_prop_v4.pickle/.csv # cgv4 index: [id, value, graph_path, label] (+ target cols)
+│       │   ├── SC_MP_basic.pickle # SC-only basic dataset: [id, value, struc_dict, label]
+│       │   ├── SC_MP_V4.pickle/.csv # cgv4 index: [id, value, graph_path, label] (+ target cols)
 │       │   ├── graphs_v4/           # cgv4 per-material JSON graphs (+ failed.txt log)
 │       │   └── cifs/                # CIF structure files
 │       ├── Non_SC_DB_MP/            # non-SC negatives: Non_SC.csv + cifs/
@@ -153,8 +153,8 @@ learned edge features for the MPNN).
 |-----|---------|---------|
 | `task` | `"regression"` / `"classification"` | Training objective (default regression) |
 | `dataset_rd` | `"database/datafiles/MP"` | Directory holding the pickle + `atom_init.json` (CGCNN) |
-| `dataset` | `"id_prop_basic_combined.pickle"` | Pickle name (CGCNN) |
-| `index_path` | `"database/datafiles/MP/id_prop_v4.pickle"` | cgv4 index (MPNN) |
+| `dataset` | `"SC_MP_basic_combined.pickle"` | Pickle name (CGCNN) |
+| `index_path` | `"database/datafiles/MP/SC_MP_V4.pickle"` | cgv4 index (MPNN) |
 | `target_column` | `"formation_energy_per_atom"` | [MPNN] which index target column to regress on; unset → legacy `value`/`tc` |
 | `atom_init` | `"atom_init.json"` | Per-element feature file (CGCNN) |
 | `n_nonsc` | 5000 | [classification] non-SC sampled per epoch |
@@ -165,7 +165,7 @@ learned edge features for the MPNN).
 | `optim` / `learning_rate` / `momentum` / `weight_decay` / `lr_milestones` | `"SGD"` / 0.01 / 0.9 / 0 / [100] | Optimizer |
 | `out_file` | `"CNN/classify_result"` | Output prefix |
 
-Provided configs: `configs/basic.json` (baseline regression), `configs/classify_basic.json`
+Provided configs: `configs/orig_basic.json` (baseline regression), `configs/orig_classify_basic.json`
 (baseline classification on the combined DB), `configs/mpnn_basic.json` (MPNN regression).
 
 ---
@@ -220,21 +220,22 @@ python main.py download-energy                             # both energy columns
 # Build its graphs, then pick the target in the config via target_column
 python main.py build-db --kind cgv4 --has-header \
   --source database/datafiles/MP_Energy/mp_energy.csv database/datafiles/MP_Energy/cifs/ \
-  --output database/datafiles/MP_Energy/id_prop_v4_energy
+  --output database/datafiles/MP_Energy/MP_Energy_V4 \
+  --graph-dir database/datafiles/MP_Energy/graphs_v4
 python main.py train-mpnn configs/mpnn_eform.json         # regress formation energy
 
 # Combined SC + non-SC dataset (labels 1 / 0) for the classifier
 python main.py build-db --kind basic \
   --source database/datafiles/MP/id_prop.csv database/datafiles/MP/cifs/ \
   --nonsc-source database/datafiles/Non_SC_DB_MP/Non_SC.csv database/datafiles/Non_SC_DB_MP/cifs/ \
-  --output database/datafiles/MP/id_prop_basic_combined
+  --output database/datafiles/MP/SC_MP_basic_combined
 
 # Build crystal_graph_v4 graphs for the MPNN (add --nonsc-source for classification)
 python main.py build-db --kind cgv4
 
 # Train baseline CGCNN — regression (T_c) or classification (SC/non-SC)
-python main.py train configs/basic.json
-python main.py train configs/classify_basic.json
+python main.py train configs/orig_basic.json
+python main.py train configs/orig_classify_basic.json
 
 # Train MPNN (requires cgv4 graphs)
 python main.py train-mpnn configs/mpnn_basic.json

@@ -248,6 +248,28 @@ def _compact_v4_graph(graph: dict) -> dict:
     }
 
 
+def _fmt_dur(seconds):
+    """Compact human-readable duration, e.g. '45s', '3m12s', '2h41m'."""
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+def _init_cgv4_worker():
+    """Per-worker init: silence pymatgen's benign CIF-parse UserWarning (e.g.
+    'N fractional coordinates rounded to ideal values to avoid ... finite
+    precision'), which is harmless but would otherwise print once per structure
+    and bury the progress output during a large build."""
+    import warnings
+    warnings.filterwarnings("ignore", message="Issues encountered while parsing CIF",
+                            category=UserWarning)
+
+
 def _process_cgv4_row(task):
     """Worker: build + compact + write one graph JSON.
 
@@ -273,7 +295,7 @@ def _process_cgv4_row(task):
 
 
 def generate_CGv4_DB(data_files: list, output_dir='database/datafiles/MP/graphs_v4',
-                     output_index='database/datafiles/MP/id_prop_v4', has_header=False,
+                     output_index='database/datafiles/MP/SC_MP_V4', has_header=False,
                      limit=None, n_workers=None):
     """Pre-compute crystal_graph_v4 graphs for each material and store as compact JSON files.
 
@@ -353,25 +375,33 @@ def generate_CGv4_DB(data_files: list, output_dir='database/datafiles/MP/graphs_
 
     if total:
         progress = {"done": 0}
+        start = time.time()
 
         def _consume(results_iter):
             for graph_path, kind, cif_id, msg in results_iter:
                 progress["done"] += 1
-                if progress["done"] % 50 == 0 or progress["done"] == total:
-                    print(f"  {progress['done']}/{total} "
-                          f"({100 * progress['done'] / total:.1f}%)")
+                d = progress["done"]
+                if d % 50 == 0 or d == total:
+                    elapsed = time.time() - start
+                    rate = d / elapsed if elapsed > 0 else 0.0
+                    eta = (total - d) / rate if rate > 0 else 0.0
+                    print(f"  {d}/{total} ({100 * d / total:.1f}%) | "
+                          f"elapsed {_fmt_dur(elapsed)} | ETA {_fmt_dur(eta)} | "
+                          f"{rate:.1f} graphs/s")
                 if kind == "ok":
                     built_ok.add(graph_path)
                 else:
                     failed_lines.append(f"{cif_id}\t{msg}\n")
 
         if n_workers == 1:
+            _init_cgv4_worker()   # suppress the CIF-parse warning in this process too
             _consume(map(_process_cgv4_row, tasks))
         else:
             # Context-managed pool so workers are always cleaned up, including
             # on KeyboardInterrupt / exception mid-build. The full iterator is
-            # consumed inside the block, so all tasks finish before exit.
-            with mp.Pool(processes=n_workers) as pool:
+            # consumed inside the block, so all tasks finish before exit. Each
+            # worker silences the benign pymatgen CIF-parse warning on startup.
+            with mp.Pool(processes=n_workers, initializer=_init_cgv4_worker) as pool:
                 _consume(pool.imap_unordered(_process_cgv4_row, tasks))
 
     # Emit one index row per source row whose graph file now exists.
@@ -395,7 +425,7 @@ def generate_CGv4_DB(data_files: list, output_dir='database/datafiles/MP/graphs_
     print(f"Done. {len(index_rows)} structures indexed, see {failed_log} for any failures.")
 
 
-def generate_Basic_DB(data_files: list, output_file='database/datafiles/id_prop_basic', parallel=False, timing=False,
+def generate_Basic_DB(data_files: list, output_file='database/datafiles/MP/SC_MP_basic', parallel=False, timing=False,
                       batch_size=256, has_header=True, limit=None):
     """
 
