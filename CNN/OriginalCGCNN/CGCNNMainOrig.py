@@ -23,7 +23,7 @@ from CGCNNOrig import CrystalGraphConvNet
 parser = argparse.ArgumentParser(description='Crystal Graph Convolutional Neural Networks')
 parser.add_argument('--out_filename', default='test_result')
 parser.add_argument('--json_name', default='atom_init.json')
-parser.add_argument('--csv_name', default='id_prop_basic.pickle')
+parser.add_argument('--csv_name', default='SC_MP_basic.pickle')
 # parser.add_argument('--results_name', default = 'results.csv')
 # parser.add_argument('--loss_name', default = 'loss')
 parser.add_argument('data_options', metavar='OPTIONS', nargs='+',

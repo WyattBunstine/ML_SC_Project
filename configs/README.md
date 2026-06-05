@@ -23,7 +23,7 @@ These have no default; the run fails (or behaves undefined) without them.
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `index_path` | string | Path to the index pickle produced by `build-db --kind cgv4` (e.g. `database/datafiles/MP/id_prop_v4.pickle`). Each row points at a per-material graph JSON. |
+| `index_path` | string | Path to the index pickle produced by `build-db --kind cgv4` (e.g. `database/datafiles/MP/SC_MP_V4.pickle`). Each row points at a per-material graph JSON. |
 | `out_file` | string | Output path **prefix**. All artifacts are written as `<out_file>...` (see [Outputs](#outputs)). |
 | `epochs` | int | Number of training epochs. |
 | `batch_size` | int | Crystals per batch. |
@@ -35,7 +35,7 @@ Minimal valid config (everything else defaulted):
 
 ```json
 {
-    "index_path":    "database/datafiles/MP/id_prop_v4.pickle",
+    "index_path":    "database/datafiles/MP/SC_MP_V4.pickle",
     "out_file":      "CNN/MPNN/mpnn_result",
     "epochs":        1000,
     "batch_size":    64,
@@ -210,7 +210,7 @@ coincide when the ratio is ≥ 1, and both are SC-only when the ratio is `inf`
 
 ```json
 {
-    "index_path":         "database/datafiles/MP/id_prop_v4.pickle",
+    "index_path":         "database/datafiles/MP/SC_MP_V4.pickle",
     "out_file":           "CNN/MPNN/mpnn_result",
     "task":               "regression",
 
@@ -253,7 +253,7 @@ changing `target_column` alone — no rebuild needed.
 
 ```json
 {
-    "index_path":         "database/datafiles/MP_Energy/id_prop_v4_energy.pickle",
+    "index_path":         "database/datafiles/MP_Energy/MP_Energy_V4.pickle",
     "out_file":           "CNN/MPNN/mpnn_eform",
     "task":               "regression",
     "target_column":      "formation_energy_per_atom",
@@ -282,7 +282,7 @@ Requires an index built with non-SC rows
 
 ```json
 {
-    "index_path":         "database/datafiles/MP/id_prop_v4.pickle",
+    "index_path":         "database/datafiles/MP/SC_MP_V4.pickle",
     "out_file":           "CNN/MPNN/mpnn_clf",
     "task":               "classification",
 

@@ -8,7 +8,7 @@ A single CLI for the whole workflow; run all commands from the project root:
 
 Examples:
   python main.py build-db --kind basic
-  python main.py train configs/basic.json
+  python main.py train configs/orig_basic.json
   python main.py plot
 """
 import argparse
@@ -24,8 +24,8 @@ DEFAULT_SOURCE = ["database/datafiles/MP/id_prop.csv", "database/datafiles/MP/ci
 
 DEFAULT_OUTPUTS = {
     "atom-init": "database/datafiles/atom_init.json",
-    "basic": "database/datafiles/MP/id_prop_basic",
-    "cgv4": "database/datafiles/MP/id_prop_v4",
+    "basic": "database/datafiles/MP/SC_MP_basic",
+    "cgv4": "database/datafiles/MP/SC_MP_V4",
 }
 
 DEFAULT_CGV4_GRAPH_DIR = "database/datafiles/MP/graphs_v4"
@@ -178,7 +178,7 @@ A single CLI for the whole workflow: build the database files, download non-SC
 negatives, train and evaluate the models (baseline CGCNN or the crystal_graph_v4
 MPNN, for T_c regression or SC/non-SC classification), and plot predictions. Run
 all commands from the project root, since paths (database/datafiles/MP/cifs/,
-configs/basic.json, ...) are resolved relative to it.
+configs/orig_basic.json, ...) are resolved relative to it.
 """
 
 TOP_EPILOG = """\
@@ -193,15 +193,15 @@ commands:
 typical workflow (from the project root):
   python main.py build-db --kind atom-init          # element feature file
   python main.py build-db --kind basic              # superconductor dataset pickle
-  python main.py train configs/basic.json           # regression: train + evaluate on test
+  python main.py train configs/orig_basic.json           # regression: train + evaluate on test
 
   # SC/non-SC classifier (needs MP_API_KEY for the download):
   python main.py download-nonsc --limit 5000        # non-SC negatives
   python main.py build-db --kind basic \\
       --source database/datafiles/MP/id_prop.csv database/datafiles/MP/cifs/ \\
       --nonsc-source database/datafiles/Non_SC_DB_MP/Non_SC.csv database/datafiles/Non_SC_DB_MP/cifs/ \\
-      --output database/datafiles/MP/id_prop_basic_combined   # combined labeled dataset
-  python main.py train configs/classify_basic.json  # classification: train + evaluate
+      --output database/datafiles/MP/SC_MP_basic_combined   # combined labeled dataset
+  python main.py train configs/orig_classify_basic.json  # classification: train + evaluate
 
   python main.py plot                               # visualize CNN/test_result.csv
 
@@ -209,7 +209,8 @@ typical workflow (from the project root):
   python main.py download-energy                    # experimental MP structures + energies
   python main.py build-db --kind cgv4 --has-header \\
       --source database/datafiles/MP_Energy/mp_energy.csv database/datafiles/MP_Energy/cifs/ \\
-      --output database/datafiles/MP_Energy/id_prop_v4_energy # multi-target cgv4 index
+      --output database/datafiles/MP_Energy/MP_Energy_V4 \\
+      --graph-dir database/datafiles/MP_Energy/graphs_v4   # energy cgv4 index + its own graphs
   python main.py train-mpnn configs/mpnn_eform.json # regress formation energy
 
 See 'python main.py <command> -h' for command-specific options.
@@ -336,13 +337,13 @@ def build_parser():
         help="train and evaluate the baseline CGCNN from a JSON config",
         description="Train the baseline CGCNN and evaluate it on the held-out test "
                     "split, driven by a JSON config. The config's \"task\" key selects "
-                    "T_c regression (configs/basic.json) or SC/non-SC classification "
-                    "(configs/classify_basic.json). Runs CNN/CGCNNMain.py; predictions "
+                    "T_c regression (configs/orig_basic.json) or SC/non-SC classification "
+                    "(configs/orig_classify_basic.json). Runs CNN/CGCNNMain.py; predictions "
                     "and a per-epoch telemetry log are written under the config's out_file.",
     )
     tr.add_argument(
         "config",
-        help="path to the JSON training config (e.g. configs/basic.json or configs/classify_basic.json)",
+        help="path to the JSON training config (e.g. configs/orig_basic.json or configs/orig_classify_basic.json)",
     )
     tr.set_defaults(func=cmd_train)
 

@@ -115,17 +115,20 @@ EOF
 # ---------------------------------------------------------------------------
 sync_data() {
     echo ">> Creating remote dirs..."
-    ssh "${SSH}" "mkdir -p '${REMOTE_PATH}/database/datafiles/MP'"
+    ssh "${SSH}" "mkdir -p '${REMOTE_PATH}/database/datafiles/MP' '${REMOTE_PATH}/database/datafiles/MP_Energy'"
 
-    echo ">> Syncing graph database (14 GB, ~89k files) — first run is slow, later runs are fast..."
-    rsync -a --info=progress2 --partial \
-        database/datafiles/MP/graphs_v4 \
-        "${SSH}:${REMOTE_PATH}/database/datafiles/MP/"
-
-    echo ">> Syncing index pickles..."
-    rsync -a --info=progress2 \
-        database/datafiles/MP/*.pickle \
-        "${SSH}:${REMOTE_PATH}/database/datafiles/MP/"
+    # Each dataset keeps its own graphs_v4/ + index pickles (SC under MP/, the
+    # energy benchmark under MP_Energy/). Sync both so either can be trained on the
+    # cluster. rsync globs/dirs that don't exist locally are skipped harmlessly.
+    for ds in MP MP_Energy; do
+        echo ">> Syncing ${ds} graphs + pickles (first run is slow; later runs send only the delta)..."
+        rsync -a --info=progress2 --partial \
+            "database/datafiles/${ds}/graphs_v4" \
+            "${SSH}:${REMOTE_PATH}/database/datafiles/${ds}/" 2>/dev/null || true
+        rsync -a --info=progress2 \
+            database/datafiles/${ds}/*.pickle \
+            "${SSH}:${REMOTE_PATH}/database/datafiles/${ds}/" 2>/dev/null || true
+    done
 
     echo ">> Dataset sync complete."
 }

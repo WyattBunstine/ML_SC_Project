@@ -36,8 +36,8 @@ ML_SC_Project/
 │   └── deploy.sh           # push code/data to a SLURM cluster (Rockfish) and submit jobs
 │
 ├── configs/
-│   ├── basic.json          # baseline CGCNN, regression (T_c)
-│   ├── classify_basic.json # baseline CGCNN, classification (SC/non-SC)
+│   ├── orig_basic.json          # baseline CGCNN, regression (T_c)
+│   ├── orig_classify_basic.json # baseline CGCNN, classification (SC/non-SC)
 │   └── mpnn_basic.json     # MPNN (crystal_graph_v4), regression
 │
 ├── database/               # SCRIPTS only — data lives under datafiles/ (gitignored)
@@ -48,7 +48,7 @@ ML_SC_Project/
 │   └── datafiles/          # ALL data files — gitignored (CIFs, graphs, pickles, CSVs)
 │       ├── atom_init.json  # per-element feature vectors used by the CGCNN
 │       ├── MP/             # superconductor (3DSC_MP) data: 3DSC_MP.csv, id_prop*.csv,
-│       │   │               #   id_prop_v4 index, graphs_v4/, cifs/
+│       │   │               #   SC_MP_V4 index, graphs_v4/, cifs/
 │       │   └── ...
 │       ├── Non_SC_DB_MP/   # non-SC negatives: Non_SC.csv + cifs/
 │       └── MP_Energy/      # MP energy benchmark: mp_energy.csv + cifs/
@@ -114,7 +114,7 @@ plus the best checkpoint. All trainers also write `<out_file>_epoch_log.csv` (pe
 # Per-element feature vectors -> database/datafiles/atom_init.json
 python main.py build-db --kind atom-init
 
-# SC-only basic dataset (id, value, struc_dict, label) -> database/datafiles/MP/id_prop_basic.{pickle,csv}
+# SC-only basic dataset (id, value, struc_dict, label) -> database/datafiles/MP/SC_MP_basic.{pickle,csv}
 python main.py build-db --kind basic
 
 # Quick smoke test on the first 50 rows
@@ -126,8 +126,8 @@ python main.py build-db --kind basic --limit 50
 | `--kind` | Output (default) | Columns | Used by |
 | --- | --- | --- | --- |
 | `atom-init` | `database/datafiles/atom_init.json` | `{Z: [Z, block, valence, atomic_radius, electron_affinity, ionization_energy, electronegativity, electron_affinity]}` | CGCNN |
-| `basic` | `database/datafiles/MP/id_prop_basic.{pickle,csv}` | `id, value, struc_dict, label` | CGCNN |
-| `cgv4` | `database/datafiles/MP/id_prop_v4.{pickle,csv}` (+ `graphs_v4/`) | `id, value, graph_path, label` (+ any target columns: `tc`, `e_above_hull`, `formation_energy_per_atom`) | MPNN |
+| `basic` | `database/datafiles/MP/SC_MP_basic.{pickle,csv}` | `id, value, struc_dict, label` | CGCNN |
+| `cgv4` | `database/datafiles/MP/SC_MP_V4.{pickle,csv}` (+ `graphs_v4/`) | `id, value, graph_path, label` (+ any target columns: `tc`, `e_above_hull`, `formation_energy_per_atom`) | MPNN |
 
 **Useful flags** (`python main.py build-db -h` for the full list):
 
@@ -148,7 +148,7 @@ python main.py download-nonsc --limit 5000
 python main.py build-db --kind basic \
   --source database/datafiles/MP/id_prop.csv database/datafiles/MP/cifs/ \
   --nonsc-source database/datafiles/Non_SC_DB_MP/Non_SC.csv database/datafiles/Non_SC_DB_MP/cifs/ \
-  --output database/datafiles/MP/id_prop_basic_combined
+  --output database/datafiles/MP/SC_MP_basic_combined
 ```
 
 The `label` column (1 = SC, 0 = non-SC) is set by which flag the source came from — it is
@@ -176,9 +176,7 @@ target is baked in at download time. Flags: `--include-theoretical`, `--limit N`
 `--chunk-size N`. Build graphs from it (`--has-header` reads the column row):
 
 ```bash
-python main.py build-db --kind cgv4 --has-header \
-  --source database/datafiles/MP_Energy/mp_energy.csv database/datafiles/MP_Energy/cifs/ \
-  --output database/datafiles/MP_Energy/id_prop_v4_energy
+python main.py build-db --kind cgv4 --has-header --source database/datafiles/MP_Energy/mp_energy.csv database/datafiles/MP_Energy/cifs/ --output database/datafiles/MP_Energy/MP_Energy_V4 --graph-dir database/datafiles/MP_Energy/graphs_v4
 
 # then train on it (ready-made config; formation energy as the target):
 python main.py train-mpnn configs/mpnn_eform.json
@@ -200,10 +198,10 @@ Training is driven by a JSON config. The `"task"` key selects the objective:
 
 ```bash
 # Baseline CGCNN, T_c regression (superconductors only)
-python main.py train configs/basic.json
+python main.py train configs/orig_basic.json
 
 # Baseline CGCNN, SC/non-SC classification (combined dataset)
-python main.py train configs/classify_basic.json
+python main.py train configs/orig_classify_basic.json
 
 # MPNN over crystal_graph_v4 graphs
 python main.py train-mpnn configs/mpnn_basic.json
@@ -228,7 +226,7 @@ python main.py plot --results path/to/other.csv  # or a custom results file
 ```bash
 python main.py build-db --kind atom-init   # element feature file (if not present)
 python main.py build-db --kind basic       # dataset pickle
-python main.py train configs/basic.json    # train + evaluate
+python main.py train configs/orig_basic.json    # train + evaluate
 python main.py plot                        # visualize results
 ```
 

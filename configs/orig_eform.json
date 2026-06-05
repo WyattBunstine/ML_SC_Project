@@ -1,8 +1,8 @@
 {
   "models": "ORIG",
-  "dataset_rd": "database/datafiles/MP",
-  "atom_init": "atom_init.json",
-  "dataset": "energies_MP_basic.pickle",
+  "dataset_rd": "database/datafiles/MP_Energy",
+  "atom_init": "../atom_init.json",
+  "dataset": "MP_Energy_basic.pickle",
   "target_column": "formation_energy_per_atom",
 
   "batch_size": 128,
