@@ -20,15 +20,15 @@ import database.database_main as database
 
 # Default (id->property csv, cif directory) pair. id_prop.csv is headerless:
 # each row is "<cif_filename>,<tc>" and the filenames live in cifs/.
-DEFAULT_SOURCE = ["database/MP/id_prop.csv", "database/MP/cifs/"]
+DEFAULT_SOURCE = ["database/datafiles/MP/id_prop.csv", "database/datafiles/MP/cifs/"]
 
 DEFAULT_OUTPUTS = {
-    "atom-init": "database/atom_init.json",
-    "basic": "database/MP/id_prop_basic",
-    "cgv4": "database/MP/id_prop_v4",
+    "atom-init": "database/datafiles/atom_init.json",
+    "basic": "database/datafiles/MP/id_prop_basic",
+    "cgv4": "database/datafiles/MP/id_prop_v4",
 }
 
-DEFAULT_CGV4_GRAPH_DIR = "database/MP/graphs_v4"
+DEFAULT_CGV4_GRAPH_DIR = "database/datafiles/MP/graphs_v4"
 
 
 def _action_word(path):
@@ -91,7 +91,7 @@ def cmd_build_db(args):
 def cmd_download_nonsc(args):
     # Lazy import: only needs pymatgen/mp_api when actually downloading, and keeps
     # the (heavy) import off the path of other commands.
-    from database.Non_SC_DB_MP.Download_MP_data import gen_dataset
+    from database.Download_MP_data import gen_dataset
     if not os.environ.get("MP_API_KEY"):
         sys.exit("error: set the MP_API_KEY environment variable before downloading "
                  "(e.g. $env:MP_API_KEY = '...').")
@@ -107,7 +107,7 @@ def cmd_download_nonsc(args):
 def cmd_download_energy(args):
     # Lazy import: only needs pymatgen/mp_api when actually downloading, and keeps
     # the (heavy) import off the path of other commands.
-    from database.MP_Energy.Download_MP_energy import gen_dataset
+    from database.Download_MP_energy import gen_dataset
     if not os.environ.get("MP_API_KEY"):
         sys.exit("error: set the MP_API_KEY environment variable before downloading "
                  "(e.g. $env:MP_API_KEY = '...').")
@@ -177,7 +177,7 @@ ML superconductor screening project entry point.
 A single CLI for the whole workflow: build the database files, download non-SC
 negatives, train and evaluate the models (baseline CGCNN or the crystal_graph_v4
 MPNN, for T_c regression or SC/non-SC classification), and plot predictions. Run
-all commands from the project root, since paths (database/MP/cifs/,
+all commands from the project root, since paths (database/datafiles/MP/cifs/,
 configs/basic.json, ...) are resolved relative to it.
 """
 
@@ -198,9 +198,9 @@ typical workflow (from the project root):
   # SC/non-SC classifier (needs MP_API_KEY for the download):
   python main.py download-nonsc --limit 5000        # non-SC negatives
   python main.py build-db --kind basic \\
-      --source database/MP/id_prop.csv database/MP/cifs/ \\
-      --nonsc-source database/Non_SC_DB_MP/Non_SC.csv database/Non_SC_DB_MP/cifs/ \\
-      --output database/MP/id_prop_basic_combined   # combined labeled dataset
+      --source database/datafiles/MP/id_prop.csv database/datafiles/MP/cifs/ \\
+      --nonsc-source database/datafiles/Non_SC_DB_MP/Non_SC.csv database/datafiles/Non_SC_DB_MP/cifs/ \\
+      --output database/datafiles/MP/id_prop_basic_combined   # combined labeled dataset
   python main.py train configs/classify_basic.json  # classification: train + evaluate
 
   python main.py plot                               # visualize CNN/test_result.csv
@@ -208,8 +208,8 @@ typical workflow (from the project root):
   # MP energy-target benchmark (needs MP_API_KEY for the download):
   python main.py download-energy                    # experimental MP structures + energies
   python main.py build-db --kind cgv4 --has-header \\
-      --source database/MP_Energy/mp_energy.csv database/MP_Energy/cifs/ \\
-      --output database/MP_Energy/id_prop_v4_energy # multi-target cgv4 index
+      --source database/datafiles/MP_Energy/mp_energy.csv database/datafiles/MP_Energy/cifs/ \\
+      --output database/datafiles/MP_Energy/id_prop_v4_energy # multi-target cgv4 index
   python main.py train-mpnn configs/mpnn_eform.json # regress formation energy
 
 See 'python main.py <command> -h' for command-specific options.
@@ -225,14 +225,14 @@ examples:
   python main.py build-db --kind atom-init
   python main.py build-db --kind basic --parallel
   python main.py build-db --kind cgv4 --limit 50
-  python main.py build-db --kind basic --source database/MP/id_prop.csv database/MP/cifs/
+  python main.py build-db --kind basic --source database/datafiles/MP/id_prop.csv database/datafiles/MP/cifs/
   python main.py build-db --kind basic \\
-      --source database/MP/id_prop.csv database/MP/cifs/ \\
-      --nonsc-source database/Non_SC_DB_MP/Non_SC.csv database/Non_SC_DB_MP/cifs/
+      --source database/datafiles/MP/id_prop.csv database/datafiles/MP/cifs/ \\
+      --nonsc-source database/datafiles/Non_SC_DB_MP/Non_SC.csv database/datafiles/Non_SC_DB_MP/cifs/
 
 notes:
   * Run from the project root; all paths are resolved relative to it.
-  * The default source is database/MP/id_prop.csv + database/MP/cifs/, a headerless
+  * The default source is database/datafiles/MP/id_prop.csv + database/datafiles/MP/cifs/, a headerless
     "<cif_filename>,<tc>" file. Pass --has-header for a CSV with 'cif'/'tc' columns
     (e.g. 3DSC_MP.csv).
   * basic writes both <output>.pickle and <output>.csv; the CNN loads the pickle.
@@ -371,9 +371,9 @@ def build_parser():
                     help="minimum band gap in eV (default: 4.0; high cutoff keeps only "
                          "clear insulators, avoiding metallic/SC contamination of negatives)")
     dn.add_argument("--prop-file", default=None,
-                    help="output id->property CSV (default: database/Non_SC_DB_MP/Non_SC.csv)")
+                    help="output id->property CSV (default: database/datafiles/Non_SC_DB_MP/Non_SC.csv)")
     dn.add_argument("--cif-loc", default=None,
-                    help="output CIF directory (default: database/Non_SC_DB_MP/cifs/)")
+                    help="output CIF directory (default: database/datafiles/Non_SC_DB_MP/cifs/)")
     dn.add_argument("--limit", type=int, default=None,
                     help="cap the number of materials downloaded (for class balance vs. ~5.8k SCs)")
     dn.add_argument("--chunk-size", type=int, default=1000,
@@ -393,9 +393,9 @@ def build_parser():
                     "--source mp_energy.csv CIF_DIR'.",
     )
     de.add_argument("--prop-file", default=None,
-                    help="output id->property CSV (default: database/MP_Energy/mp_energy.csv)")
+                    help="output id->property CSV (default: database/datafiles/MP_Energy/mp_energy.csv)")
     de.add_argument("--cif-loc", default=None,
-                    help="output CIF directory (default: database/MP_Energy/cifs/)")
+                    help="output CIF directory (default: database/datafiles/MP_Energy/cifs/)")
     de.add_argument("--limit", type=int, default=None,
                     help="cap the number of materials downloaded (for testing)")
     de.add_argument("--chunk-size", type=int, default=1000,

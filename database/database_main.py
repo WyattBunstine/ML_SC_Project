@@ -54,7 +54,7 @@ def _unpack_source(data_file):
     return csv_path, cif_dir, label
 
 
-def generate_atom_init(output_file='database/atom_init.json', max_z=85):
+def generate_atom_init(output_file='database/datafiles/atom_init.json', max_z=85):
     """Build the per-element feature file consumed by the CNN's AtomInitializer.
 
     Writes a JSON object mapping each atomic number Z (1 .. max_z - 1) to a feature
@@ -272,8 +272,8 @@ def _process_cgv4_row(task):
     return (graph_path, "ok", cif_id, None)
 
 
-def generate_CGv4_DB(data_files: list, output_dir='database/MP/graphs_v4',
-                     output_index='database/MP/id_prop_v4', has_header=False,
+def generate_CGv4_DB(data_files: list, output_dir='database/datafiles/MP/graphs_v4',
+                     output_index='database/datafiles/MP/id_prop_v4', has_header=False,
                      limit=None, n_workers=None):
     """Pre-compute crystal_graph_v4 graphs for each material and store as compact JSON files.
 
@@ -395,7 +395,7 @@ def generate_CGv4_DB(data_files: list, output_dir='database/MP/graphs_v4',
     print(f"Done. {len(index_rows)} structures indexed, see {failed_log} for any failures.")
 
 
-def generate_Basic_DB(data_files: list, output_file='database/id_prop_basic', parallel=False, timing=False,
+def generate_Basic_DB(data_files: list, output_file='database/datafiles/id_prop_basic', parallel=False, timing=False,
                       batch_size=256, has_header=True, limit=None):
     """
 

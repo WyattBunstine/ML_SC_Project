@@ -1,18 +1,12 @@
-/database/MP/cifs
-/database/MP/graphs_v4
-/database/Non_SC_DB_MP/cifs
 /model_data/
+
+# All database data files (CIFs, graphs, pickles, CSVs) live under
+# database/datafiles/ and are NOT versioned in git. Scripts live in database/.
+/database/datafiles/
 
 # Python caches
 __pycache__/
 *.pyc
-
-# Large downloaded / generated datasets (not versioned in git)
-/database/MPtrj/
-/database/MP_Energy/cifs/
-/database/MP/SC_Full_v4.*
-/database/MP/energies_MP_v4.*
-/database/MP_Energy/*.csv
 
 # Run outputs / checkpoints / logs
 *.pth.tar

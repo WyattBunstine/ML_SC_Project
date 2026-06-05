@@ -1,5 +1,5 @@
 {
-    "index_path":      "database/MP/SC_Full_v4.pickle",
+    "index_path":      "database/datafiles/MP/SC_Full_v4.pickle",
     "max_num_nbr":     14,
     "max_num_poly_nbr": 64,
 
