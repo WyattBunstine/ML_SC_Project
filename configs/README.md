@@ -105,7 +105,7 @@ a false alarm.
 
 | Key | Type | Default | Valid values | Description |
 |-----|------|---------|--------------|-------------|
-| `SC_to_non_SC_ratio` | float or string | `"inf"` (none) | `> 0`, or `"inf"`/`"infinity"`/`"none"`/`null` | SC count ÷ non-SC count drawn **per epoch**. `1.0` = one non-SC per SC; `2.0` = half as many non-SC as SC; `"inf"`/omitted = no non-SC. Non-SC are re-sampled fresh every epoch. Requires the index to actually contain non-SC rows (build with `--nonsc-source`). |
+| `SC_to_non_SC_ratio` | float or string | `"inf"` (none) | `> 0`, or `"inf"`/`"infinity"`/`"none"`/`null` | SC count ÷ non-SC count. **Governs the composition of every split — train, val, and test.** `1.0` = one non-SC per SC; `2.0` = half as many non-SC as SC; `"inf"`/omitted = no non-SC in **any** split (so non-SC never leak into the eval sets). Train re-samples its non-SC fresh each epoch; val/test get a fixed ratio-sized non-SC subset. Requires the index to actually contain non-SC rows (build with `--nonsc-source`). |
 
 ### Optimizer / schedule
 
@@ -113,8 +113,18 @@ a false alarm.
 |-----|------|---------|--------------|-------------|
 | `optim` | string | `"SGD"` | `"SGD"`, `"Adam"`, `"AdamW"` | Optimizer. Unknown values raise an error. `AdamW` uses decoupled weight decay (better regularization than `Adam`'s coupled L2 when `weight_decay > 0`; identical when it's 0). |
 | `momentum` | float | `0.9` | — | SGD momentum (ignored by Adam/AdamW). |
-| `weight_decay` | float | `0` | — | Weight decay (coupled L2 for SGD/Adam; decoupled for AdamW). |
-| `lr_milestones` | list[int] | `[100]` | — | Epochs at which the LR is multiplied by 0.1 (`MultiStepLR`, gamma fixed at 0.1). |
+| `weight_decay` | float | `0` | — | Weight decay (coupled L2 for SGD/Adam; decoupled for AdamW). A light value like `1e-4` is a cheap regularizer for an over-capacity model. |
+| `lr_milestones` | list[int] | `[100]` | — | Epochs at which the LR is multiplied by 0.1 (`MultiStepLR`, gamma fixed at 0.1). Ignored during the SWA phase (see below). |
+
+### Regularization & generalization
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `dropout` | float | `0.0` (regression), `0.5` (classification) | Dropout probability on the pooled crystal vector before the readout MLP. Off by default for regression; set e.g. `0.2`–`0.5` to regularize a model with a large train/val gap. |
+| `swa` | bool | `false` | Enable **Stochastic Weight Averaging**: after `swa_start`, average the weights visited under a low constant LR and use that average for the final test eval (saved as `<out>_swa.pth.tar`). The model uses LayerNorm (no BatchNorm), so no `update_bn` pass is needed. Often a few % MAE in the post-plateau regime. |
+| `swa_start` | int | `0.75 × epochs` | Epoch to begin averaging. Should be after the LR has decayed / the curve has plateaued. |
+| `swa_lr` | float | `0.05 × learning_rate` | Constant LR (`SWALR`) held during the SWA phase. |
+| `model_seed` | int | `null` | Seeds torch before weight init. Vary it across runs to build a **diverse ensemble** (without it, every run inits identically). Combine the runs' predictions with `scripts/ensemble.py`. |
 
 ### Logging / output
 
@@ -186,10 +196,11 @@ basename as their prefix (shown below as `<base>`):
 | `<base>_test_balanced.csv` | regression/classification test | Test predictions on the balanced set (only written when the eval split contains non-SC). |
 | `<base>_test_realistic.csv` | classification test | `(cif_id, true_label, p_sc)` on the realistic test set. |
 
-The train/val/test split is **per-class stratified**; val and test are reported
-in both a **realistic** (full class proportions) and a **balanced** (equal
-SC/non-SC) form. When the dataset is SC-only the two coincide and only the
-realistic set is reported.
+The train/val/test split is **per-class stratified**. val and test are reported
+in a **realistic** form (the composition set by `SC_to_non_SC_ratio`) and a
+**balanced** form (1:1, drawn from the same ratio-limited non-SC pool). The two
+coincide when the ratio is ≥ 1, and both are SC-only when the ratio is `inf`
+(non-SC are then excluded from every split, not just train).
 
 ---
 

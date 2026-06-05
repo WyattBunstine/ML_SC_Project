@@ -103,8 +103,12 @@ def main():
     args["run_id"] = run_id
     print(f"Run output dir: {run_dir}")
 
-    # load data (OriginalCGCNN baseline; the CE variant has been retired)
-    dataset = CIFData(args["dataset_rd"], args["atom_init"], args["dataset"])
+    # load data (OriginalCGCNN baseline; the CE variant has been retired).
+    # target_column selects the regression target for multi-target pickles (e.g.
+    # the MP energy dataset: "formation_energy_per_atom" / "e_above_hull"); unset
+    # falls back to the legacy `value`/`tc` column, so SC configs are unaffected.
+    dataset = CIFData(args["dataset_rd"], args["atom_init"], args["dataset"],
+                      target_column=args.get("target_column"))
 
     normalizer = None
     loaders = None

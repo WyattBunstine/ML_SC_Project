@@ -51,6 +51,55 @@ POLY_FEA_LEN = 7
 # proportionally more weight.
 POLY_WEIGHT_IDX = 0
 
+# --- Bond-angle (3-body) RBF basis -----------------------------------------
+# Each stored triplet is a cos(theta) for a pair of bonding edges meeting at a
+# center atom. We expand it in this Gaussian RBF over cos in [-1, 1] and sum the
+# expansions onto the two participating edges (per center), giving each bonding
+# edge an "angular environment" vector that is concatenated to its 8 base
+# features. The basis lives here (not in the stored graph) so it can be retuned
+# without rebuilding the graphs. cos(theta) is used (not theta) so the basis is
+# linear in the dot product and dense where bond angles cluster (90/109.5/180).
+ANGLE_RBF_CENTERS = np.linspace(-1.0, 1.0, 12).astype(np.float32)
+ANGLE_RBF_WIDTH = float(ANGLE_RBF_CENTERS[1] - ANGLE_RBF_CENTERS[0])  # center spacing
+ANGLE_FEA_LEN = int(len(ANGLE_RBF_CENTERS))
+
+
+def _angle_rbf(cos_vals) -> np.ndarray:
+    """Gaussian RBF expansion of cos(theta) values -> (len(cos_vals), ANGLE_FEA_LEN)."""
+    c = np.asarray(cos_vals, dtype=np.float32).reshape(-1, 1)
+    diff = c - ANGLE_RBF_CENTERS.reshape(1, -1)
+    return np.exp(-(diff ** 2) / (2.0 * ANGLE_RBF_WIDTH ** 2)).astype(np.float32)
+
+
+def _build_edge_angle_feats(graph) -> dict:
+    """(edge_id, center_atom) -> MEAN RBF(cos) over the bond-angle triplets that
+    edge participates in at that center. Empty dict if the graph has no triplets
+    (older graphs / feature disabled), in which case edges get a zero angle vector.
+
+    Mean (not sum) so the magnitude doesn't scale with coordination number — the
+    angular *shape* is what matters, and coordination is already a node feature
+    (cn_core / ecn_value). This keeps the feature bounded and the dynamic range
+    tight across low- and high-coordination atoms.
+
+    Compact triplet form: [center, edge_a, edge_b, cos_angle].
+    """
+    triplets = graph.get("angle_triplets") or []
+    if not triplets:
+        return {}
+    rbf = _angle_rbf([t[3] for t in triplets])  # (T, K)
+    sums: dict = {}
+    counts: dict = {}
+    for (center, ea, eb, _cos), r in zip(triplets, rbf):
+        for eid in (ea, eb):
+            key = (eid, center)
+            if key in sums:
+                sums[key] += r
+                counts[key] += 1
+            else:
+                sums[key] = r.copy()
+                counts[key] = 1
+    return {key: sums[key] / counts[key] for key in sums}
+
 
 @lru_cache(maxsize=128)
 def _element_electronic_props(z: int) -> tuple:
@@ -148,11 +197,32 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
     if max_graphs and len(idx) > max_graphs:
         idx = random.Random(seed).sample(idx, max_graphs)
 
+    # When bond angles are on, edge rows are the (8 base + ANGLE_FEA_LEN) vectors
+    # the model actually consumes, so the normalizer matches the widened edges.
+    use_ang = getattr(dataset, "use_bond_angles", False)
+    edge_dim = NBR_FEA_LEN + (ANGLE_FEA_LEN if use_ang else 0)
+
     node_rows, edge_rows, poly_rows = [], [], []
     for i in idx:
         graph = dataset._read_graph(dataset.data[i][2])
         node_rows.extend(_node_to_fea(n) for n in graph["nodes"])
-        edge_rows.extend(_edge_to_fea(e) for e in graph["edges"])
+        if use_ang:
+            acc = _build_edge_angle_feats(graph)
+            edges_by_id = {e["id"]: e for e in graph["edges"]}
+            zero_ang = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
+            # Iterate every directed (edge, center) use exactly as __getitem__ does
+            # — including triplet-less edges, which get a zero angular vector — so
+            # the normalizer stats match the features the model actually sees
+            # (otherwise the structural zeros would be absent from the stats).
+            for center_s, lst in graph.get("adjacency", {}).items():
+                center = int(center_s)
+                for eid, _nbr in lst:
+                    e = edges_by_id.get(eid)
+                    if e is not None:
+                        ang = acc.get((eid, center), zero_ang)
+                        edge_rows.append(np.concatenate([_edge_to_fea(e), ang]))
+        else:
+            edge_rows.extend(_edge_to_fea(e) for e in graph["edges"])
         poly_rows.extend(_poly_edge_to_fea(pe) for pe in graph.get("poly_edges", []))
 
     def _stats(rows, dim):
@@ -173,7 +243,7 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
 
     return {
         "node": _stats(node_rows, NODE_FEA_LEN),
-        "edge": _stats(edge_rows, NBR_FEA_LEN),
+        "edge": _stats(edge_rows, edge_dim),
         "poly": _stats(poly_rows, POLY_FEA_LEN),
     }
 
@@ -204,8 +274,14 @@ class CIFDataV4(Dataset):
 
     def __init__(self, index_path: str, max_num_nbr: int = 14,
                  max_num_poly_nbr: int = 16, graph_cache_size: int = 4096,
-                 random_seed: int = 123, target_column: str = None):
+                 random_seed: int = 123, target_column: str = None,
+                 use_bond_angles: bool = False):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
+        # When True, each bonding edge gets an RBF(cos angle) "angular environment"
+        # vector (ANGLE_FEA_LEN dims) concatenated to its 8 base features, built
+        # from the graph's stored bond-angle triplets. Requires graphs rebuilt with
+        # the angle_triplets field; older graphs yield zero angle vectors.
+        self.use_bond_angles = use_bond_angles
 
         index_df = pd.read_pickle(index_path)
 
@@ -260,6 +336,18 @@ class CIFDataV4(Dataset):
         # labels aligned with __getitem__ index order (after the shuffle above)
         self.labels = [rec[3] for rec in self.data]
 
+        # Guard against the silent footgun: use_bond_angles=True on graphs built
+        # before angle_triplets existed would yield all-zero angular features with
+        # no error. The 'angle_triplets' key is always present in newly-built
+        # graphs (even if empty); its absence means stale graphs -> fail loudly.
+        if self.use_bond_angles and self.data:
+            sample_graph = self._read_graph(self.data[0][2])
+            if "angle_triplets" not in sample_graph:
+                raise ValueError(
+                    "use_bond_angles=True but the graphs have no 'angle_triplets' "
+                    f"field (checked {self.data[0][2]}). Rebuild the cgv4 graphs with "
+                    "the updated builder, or set use_bond_angles=false.")
+
         self.max_num_nbr = max_num_nbr
         self.max_num_poly_nbr = max_num_poly_nbr
         # Bounded (LRU) in-memory cache of fully-built samples, keyed by index.
@@ -313,10 +401,18 @@ class CIFDataV4(Dataset):
         # Build atom feature matrix: (n_atoms, NODE_FEA_LEN)
         atom_fea = np.stack([_node_to_fea(n) for n in nodes], axis=0)
 
-        # Build padded neighbor feature and index tensors
+        # Bond-angle (3-body) features per (edge, center), if enabled. The angular
+        # environment of a bond differs at its two endpoints, so it is keyed by the
+        # center atom whose neighbor list we're building (atom_i below).
+        angle_acc = _build_edge_angle_feats(graph) if self.use_bond_angles else {}
+        zero_angle = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
+
+        # Build padded neighbor feature and index tensors. Edge width grows by
+        # ANGLE_FEA_LEN when bond angles are on.
         nbr_fea_list = []
         nbr_idx_list = []
-        zero_edge = np.zeros(NBR_FEA_LEN, dtype=np.float32)
+        edge_width = NBR_FEA_LEN + (ANGLE_FEA_LEN if self.use_bond_angles else 0)
+        zero_edge = np.zeros(edge_width, dtype=np.float32)
 
         for atom_i in range(n_atoms):
             neighbors = adjacency.get(str(atom_i), [])
@@ -334,7 +430,11 @@ class CIFDataV4(Dataset):
                 edge = edges_by_id.get(eid)
                 if edge is None:
                     continue
-                feas.append(_edge_to_fea(edge))
+                fea = _edge_to_fea(edge)
+                if self.use_bond_angles:
+                    ang = angle_acc.get((eid, atom_i), zero_angle)
+                    fea = np.concatenate([fea, ang])
+                feas.append(fea)
                 idxs.append(nbr_id)
 
             # An atom with no bonding neighbors (e.g. an isolated noble-gas atom)
@@ -518,15 +618,16 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
                          pin_memory=False, seed=123):
     """Build SC/non-SC loaders shared by the regression and classification tasks.
 
-    Stratified per-class split into train/val/test. The train loader draws ALL
-    SC-train indices plus a fresh random sample of non-SC each epoch, sized by
-    ``sc_to_nonsc_ratio`` (see ``nonsc_count_for_ratio``) and reshuffled every
-    epoch via BalancedEpochSampler. val/test are provided in both a "realistic"
-    (full class proportions) and a "balanced" (equal SC/non-SC) form.
+    Stratified per-class split into train/val/test. ``sc_to_nonsc_ratio`` governs
+    the SC:non-SC composition of EVERY split (not just train): the train loader
+    draws all SC-train indices plus a fresh ratio-sized non-SC sample each epoch
+    (reshuffled via BalancedEpochSampler), and val/test get a fixed ratio-sized
+    non-SC subset. val/test are still returned in a "realistic" form (the
+    configured ratio) and a "balanced" form (1:1, drawn from the same ratio-limited
+    pool); the two coincide when ratio >= 1.
 
-    With the default ratio of inf, no non-SC are used: the train set is SC-only
-    and, when the dataset itself is SC-only, every split collapses to SC-only —
-    matching the original behaviour.
+    With the default ratio of inf, no non-SC are used in ANY split: train, val, and
+    test are all SC-only (so non-SC entries never leak into the eval sets).
 
     Returns a dict: train, val_realistic, val_balanced, test_realistic,
     test_balanced, split_sizes, and the train-pool index lists
@@ -547,7 +648,19 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
     sc_train, sc_val, sc_test = split_class(np.where(labels == 1)[0].tolist())
     ns_train, ns_val, ns_test = split_class(np.where(labels == 0)[0].tolist())
 
-    n_nonsc = nonsc_count_for_ratio(len(sc_train), sc_to_nonsc_ratio, len(ns_train))
+    # Apply the SC:non-SC ratio to EVERY split, not just train. Previously val/test
+    # included ALL non-SC ("realistic" = true imbalance), so even at ratio=inf the
+    # eval sets still contained non-SC (e.g. Materials Project entries leaking into
+    # the SC-only T_c-regression test set). Now the ratio governs composition
+    # uniformly: ratio=inf => SC-only train/val/test; ratio=1.0 => 1:1 everywhere.
+    n_nonsc_train = nonsc_count_for_ratio(len(sc_train), sc_to_nonsc_ratio, len(ns_train))
+    n_nonsc_val = nonsc_count_for_ratio(len(sc_val), sc_to_nonsc_ratio, len(ns_val))
+    n_nonsc_test = nonsc_count_for_ratio(len(sc_test), sc_to_nonsc_ratio, len(ns_test))
+
+    # Fixed ratio-sized non-SC subset for val/test (train re-samples its own each
+    # epoch via BalancedEpochSampler, so it keeps the full ns_train pool).
+    ns_val_keep = rng.sample(ns_val, n_nonsc_val) if n_nonsc_val else []
+    ns_test_keep = rng.sample(ns_test, n_nonsc_test) if n_nonsc_test else []
 
     def make_loader(sampler):
         return DataLoader(dataset, batch_size=batch_size, sampler=sampler,
@@ -560,21 +673,25 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
         return list(min_idx) + rng.sample(maj_idx, k)
 
     train_loader = make_loader(
-        BalancedEpochSampler(sc_train, ns_train, n_nonsc, seed=seed))
+        BalancedEpochSampler(sc_train, ns_train, n_nonsc_train, seed=seed))
 
     return {
         "train": train_loader,
-        "val_realistic": make_loader(SubsetRandomSampler(sc_val + ns_val)),
-        "val_balanced": make_loader(SubsetRandomSampler(balanced_subset(sc_val, ns_val))),
-        "test_realistic": make_loader(SubsetRandomSampler(sc_test + ns_test)),
-        "test_balanced": make_loader(SubsetRandomSampler(balanced_subset(sc_test, ns_test))),
+        # "realistic" now reflects the configured ratio (not the dataset's true
+        # imbalance); "balanced" remains a 1:1 diagnostic drawn from the same
+        # ratio-limited non-SC pool, so the two coincide when ratio >= 1 and both
+        # are SC-only when ratio=inf.
+        "val_realistic": make_loader(SubsetRandomSampler(sc_val + ns_val_keep)),
+        "val_balanced": make_loader(SubsetRandomSampler(balanced_subset(sc_val, ns_val_keep))),
+        "test_realistic": make_loader(SubsetRandomSampler(sc_test + ns_test_keep)),
+        "test_balanced": make_loader(SubsetRandomSampler(balanced_subset(sc_test, ns_test_keep))),
         "train_sc_idx": sc_train,
         "train_nonsc_idx": ns_train,
-        "n_nonsc_per_epoch": n_nonsc,
+        "n_nonsc_per_epoch": n_nonsc_train,
         "split_sizes": {
             "train_sc": len(sc_train), "train_nonsc": len(ns_train),
-            "train_nonsc_per_epoch": n_nonsc,
-            "val_sc": len(sc_val), "val_nonsc": len(ns_val),
-            "test_sc": len(sc_test), "test_nonsc": len(ns_test),
+            "train_nonsc_per_epoch": n_nonsc_train,
+            "val_sc": len(sc_val), "val_nonsc": len(ns_val_keep),
+            "test_sc": len(sc_test), "test_nonsc": len(ns_test_keep),
         },
     }

@@ -95,22 +95,37 @@ def generate_atom_init(output_file='database/atom_init.json', max_z=85):
 
 
 def Proc_Basic_Batch(df, out_rows, cif_loc, thread_num, label=1):
-    """Parse each CIF in ``df`` and append an (id, value, struc_dict, label) tuple
-    to the list ``out_rows``. Appending to a list is O(1); the DataFrame is built
-    once by the caller. (The previous ``DataFrame.loc[...] = row`` enlargement was
-    O(n^2) and became pathologically slow on the ~61k-row combined dataset.)"""
+    """Parse each CIF in ``df`` and append a dict row to ``out_rows`` carrying
+    struc_dict, label, the legacy ``value`` (mirrors 'tc' when present), and every
+    recognized target column the source provides (tc / e_above_hull /
+    formation_energy_per_atom). The caller assembles the DataFrame once.
+
+    Mirrors generate_CGv4_DB so the basic/CGCNN path supports the SAME multi-target
+    selection: all target columns are written to the pickle and the consumer
+    (CIFData) picks one at train time via `target_column`. Appending to a list is
+    O(1); the DataFrame is built once by the caller. (The previous
+    ``DataFrame.loc[...] = row`` enlargement was O(n^2) and became pathologically
+    slow on the ~61k-row combined dataset.)"""
     warnings.showwarning = customwarn
-    if 'tc' not in df.columns:
+    target_cols = [c for c in KNOWN_TARGET_COLUMNS if c in df.columns]
+    if not target_cols:
         raise ValueError(
-            "Basic DB build requires a 'tc' target column, but the source CSV has "
-            f"none (columns: {list(df.columns)}). The basic/CGCNN path is single-"
-            "target; for multi-target datasets (e.g. the MP energy dataset) use "
-            "--kind cgv4 and select the target via the config's 'target_column'.")
+            "Basic DB build requires at least one recognized target column "
+            f"({', '.join(KNOWN_TARGET_COLUMNS)}), but the source CSV has none "
+            f"(columns: {list(df.columns)}).")
     t1 = time.time()
     total = len(df)
     for j, (index, row) in enumerate(df.iterrows(), 1):
         structure = pymatgen.core.structure.Structure.from_file(cif_loc + row['cif'])
-        out_rows.append((row['cif'], row['tc'], structure.as_dict(), label))
+        rec = {"id": row['cif'], "struc_dict": structure.as_dict(), "label": label,
+               # Legacy single-target column: mirrors 'tc' only, left empty for
+               # tc-less sources (e.g. the energy dataset) so a consumer that
+               # forgets to set `target_column` errors instead of training on the
+               # wrong target. Same convention as generate_CGv4_DB.
+               "value": row['tc'] if 'tc' in target_cols else None}
+        for c in target_cols:
+            rec[c] = row[c]
+        out_rows.append(rec)
         if j % 500 == 0:
             print("  thread " + str(thread_num) + ": " + str(j) + "/" + str(total) +
                   " (" + str(round(100 * j / total, 1)) + "%)  " +
@@ -206,12 +221,30 @@ def _compact_v4_graph(graph: dict) -> dict:
         compact_poly_adj[str(a)].append((pid, b))
         compact_poly_adj[str(b)].append((pid, a))
 
+    # Bond-angle triplets (3-body): one cos(theta) per pair of bonding edges at a
+    # shared center atom. Stored compactly as [center, edge_a, edge_b, cos] so the
+    # MPNN dataset can expand cos in an RBF basis and aggregate onto the two edges.
+    # Older full graphs without this key compact to an empty list (feature off).
+    compact_triplets = [
+        [int(t["center"]), int(t["edge_a"]), int(t["edge_b"]), float(t["cos_angle"])]
+        for t in graph.get("angle_triplets", [])
+    ]
+
+    # Dihedrals (4-body): [central_edge, edge_i, edge_l, cos_dihedral]. Stored for a
+    # future 4-body experiment; not consumed by the model yet.
+    compact_dihedrals = [
+        [int(d["central_edge"]), int(d["edge_i"]), int(d["edge_l"]), float(d["cos_dihedral"])]
+        for d in graph.get("dihedrals", [])
+    ]
+
     return {
         "nodes": compact_nodes,
         "edges": compact_edges,
         "adjacency": compact_adj,
         "poly_edges": compact_poly_edges,
         "poly_adjacency": compact_poly_adj,
+        "angle_triplets": compact_triplets,
+        "dihedrals": compact_dihedrals,
     }
 
 
@@ -376,7 +409,7 @@ def generate_Basic_DB(data_files: list, output_file='database/id_prop_basic', pa
     :return:
     """
     start = time.time()
-    all_rows = []  # accumulate (id, value, struc_dict, label) tuples, build df once
+    all_rows = []  # accumulate dict rows (id, value, struc_dict, label, +targets), build df once
 
     if not parallel:
         for data_file in data_files:
@@ -396,10 +429,23 @@ def generate_Basic_DB(data_files: list, output_file='database/id_prop_basic', pa
             t1 = time.time()
             threads = []
             sub_lists = []
-            for sub_frame in np.array_split(df, max(1, int(len(df) / batch_size))):
+            errors = []  # threads can't propagate exceptions to the joiner; collect them
+
+            def _worker(frame, out, cdir, tnum, lbl):
+                try:
+                    Proc_Basic_Batch(frame, out, cdir, tnum, label=lbl)
+                except Exception as e:  # noqa: BLE001 - re-raised in the main thread below
+                    errors.append(e)
+
+            # Split into ~batch_size-row chunks with iloc, NOT np.array_split:
+            # under numpy 2.x / pandas 3.0 np.array_split(df, ...) converts the
+            # DataFrame to a bare ndarray (dropping .columns), which breaks the
+            # per-chunk worker. iloc slicing keeps each chunk a real DataFrame.
+            for start_i in range(0, len(df), batch_size):
+                sub_frame = df.iloc[start_i:start_i + batch_size]
                 sub_rows = []  # each thread appends to its own list (no shared state)
                 sub_lists.append(sub_rows)
-                t = threading.Thread(target=Proc_Basic_Batch,
+                t = threading.Thread(target=_worker,
                                      args=(sub_frame, sub_rows, cif_dir, len(sub_lists), label, ))
                 t.start()
                 threads.append(t)
@@ -408,10 +454,22 @@ def generate_Basic_DB(data_files: list, output_file='database/id_prop_basic', pa
             for thread in threads:
                 thread.join()
             print("time waiting for kids " + str(round(time.time() - t1, 1)) + " seconds")
+            # Surface any worker failure instead of silently writing a partial DB.
+            if errors:
+                raise errors[0]
             for sub_rows in sub_lists:
                 all_rows.extend(sub_rows)
 
-    outdf = pd.DataFrame(all_rows, columns=["id", "value", "struc_dict", "label"])
+    # Stable column order: legacy core columns first, then every target column any
+    # source carried (union). Rows are dicts; pandas fills missing keys with NaN.
+    # Matches generate_CGv4_DB's index layout so CIFData can select via target_column.
+    present_targets = [c for c in KNOWN_TARGET_COLUMNS if any(c in r for r in all_rows)]
+    columns = ["id", "value", "struc_dict", "label"] + present_targets
+    outdf = pd.DataFrame(all_rows, columns=columns)
+    if len(outdf) == 0:
+        raise ValueError(
+            f"Basic DB build produced 0 rows for {output_file} — nothing was parsed. "
+            "Check the source CSV path, --has-header, and the cif directory.")
     print(outdf.shape)
     outdf.to_pickle(output_file + ".pickle")
     outdf.to_csv(output_file + ".csv")

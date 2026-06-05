@@ -257,3 +257,79 @@ python main.py plot --results CNN/test_result.csv
   and kept (as T_c=0) in the regressor.
 - CIF files outnumber `id_prop` entries — not all CIFs are used.
 - Requires `torch`, `pymatgen`, `mp-api`, `scikit-learn` (classification metrics), `pandas`, `numpy`.
+
+---
+
+## Future Directions / Research Roadmap
+
+**Premise.** The end goal is predicting superconducting **T_c**; formation energy is a
+"more solved" benchmark used to refine the model. T_c is physically governed by (a)
+**phonons / lattice dynamics** (electron-phonon coupling λ, ω_log — the BCS channel),
+(b) **electronic structure** (DOS at E_F), and (c) **magnetism / spin fluctuations**
+(dominant in unconventional SCs, but phonons likely still contribute there too — the
+cuprate isotope effect is nonzero and grows toward the dome edges, and phonon–spin
+coupling is real). The current model encodes **chemistry + static geometry** but **no
+dynamics and no magnetism** — that gap is where the roadmap aims. The recurring
+constraint is that T_c is **data-starved and label-noisy**, so *transfer learning is the
+through-line* of most of these ideas.
+
+Ordered roughly by effort; each notes *why it should help*, the *honest caveat*, and a
+*first step*.
+
+1. **Three-body bond angles (line graph, ALIGNN-style) — near-term, in progress.**
+   Bonding edges are currently purely two-body (distance/weights/Δχ); the only angles are
+   the coarse polyhedral mean/std on poly-edges. Add the full set of bond angles at each
+   atom via a line graph (nodes = bonds, line-graph edges = bond pairs at a shared atom),
+   the angle expanded in an **RBF(cos θ)** basis. *Why:* the complete rotation-invariant
+   3-body descriptor disambiguates local environments (square-planar vs octahedral, etc.).
+   *Caveat:* 3-body is provably incomplete (Pozdnyakov–Ceriotti 2020) but captures most
+   signal for scalar targets. *First step:* extend the external `crystal_graph_v4` builder
+   to emit bond-angle triplets (and **store dihedrals in the same rebuild** — see #2), add a
+   line-graph channel to `CrystalMPNN`, rebuild graphs once.
+
+2. **Dihedral / 4-body terms (GemNet-style) — a falsifiable T_c hypothesis.**
+   *Why:* dihedrals close the 3-body completeness gap and help GemNet most on *forces /
+   dynamics* — which, if phonons matter for pairing, may transfer to T_c. *Caveat / the
+   honest gap:* T_c is a rotation-invariant **scalar**, mechanistically more like formation
+   energy (where 4-body gains are modest) than like the **vector** force targets where
+   dihedrals shine. *Clean experiment:* store dihedrals during the #1 rebuild but gate them
+   behind a flag, then ablate on **both** formation energy and T_c — the hypothesis predicts
+   *Δ(T_c) ≫ Δ(formation energy)*. Confirm or refute with one controlled test, no second
+   rebuild.
+
+3. **Magnetism — cheapest real gap.** Encode **MP per-site DFT magnetic moments** (and
+   total magnetization) as node features. *Why:* magnetism is central to unconventional SC
+   (AFM cuprate parents, spin-fluctuation pairing in Fe-based) and is entirely absent now.
+   *Caveat:* DFT magmoms are calculation-dependent and least reliable for exactly the
+   strongly-correlated systems that matter; and a *static* moment is a coarse proxy for the
+   *dynamic* spin fluctuations that mediate pairing (same static-vs-dynamic gap as phonons).
+   *First step:* pull `magmom` per site from MP into the cgv4 node features.
+
+4. **Phonon/dynamics features via a pretrained universal MLIP — high-value shortcut.**
+   Instead of training a phonon model on the scarce explicit-phonon data (~1.5k materials in
+   the MP/Petretto DB), run a **pretrained foundation MLIP** (MACE-MP-0, CHGNet, M3GNet,
+   MatterSim, ORB — trained on millions of energy/force/stress points) over the T_c dataset
+   and harvest **site-resolved phonon descriptors** (on-site force constants, atomic MSD /
+   Debye–Waller factors, site-projected phonon-DOS moments) plus global ω_log as node/global
+   features. *Why:* injects the electron-phonon-relevant dynamics the static graph lacks,
+   without the phonon-data bottleneck. *Note:* "per-atom phonon modes" is ill-defined (modes
+   are delocalized) — use site-resolved descriptors. *First step:* prototype with one MLIP
+   (e.g. MACE-MP-0) computing force constants on a few hundred structures.
+
+5. **Pretrain on dynamics, fine-tune on T_c — highest ceiling.** Pretrain the encoder on
+   **energies + forces** from large datasets (MPtrj, Alexandria, OMat24, GNoME), then
+   fine-tune on T_c. *Why:* an encoder trained to predict forces has learned the
+   gradient/curvature of the energy surface — the dynamical response — and forces data is far
+   more abundant than phonon data. The current formation-energy work is the warm-up for this.
+   *Caveat:* biggest infrastructure lift (data plumbing, architecture/objective changes).
+
+6. **Data scale.** For final runs, train on the **million-sample** datasets modern models
+   use (Alexandria/OMat24/GNoME for pretraining); for the T_c target itself, prioritize more
+   superconductor data and label-quality handling (experimental T_c is heterogeneous/noisy),
+   since that — not representation cleverness — likely dominates the error budget.
+
+**Generalization toolkit already in place** (use these to evaluate every change above):
+config-controlled `dropout`, decoupled `weight_decay`, **SWA** (`swa`), seed-varied
+**ensembling** (`model_seed` + `scripts/ensemble.py`), checkpoint re-evaluation
+(`scripts/eval_test.py`, incl. shared `--test-ids` for apples-to-apples model comparison),
+and epoch-log diagnostics (`main.py plot --epoch-log`).

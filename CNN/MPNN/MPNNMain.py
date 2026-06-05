@@ -138,6 +138,7 @@ def main():
         max_num_poly_nbr=args.get("max_num_poly_nbr", 16),
         graph_cache_size=args.get("graph_cache_size", 4096),
         target_column=args.get("target_column"),
+        use_bond_angles=args.get("use_bond_angles", False),
     )
 
     # SC:non-SC ratio controls how many non-SC samples are drawn per epoch
@@ -178,6 +179,13 @@ def main():
     nbr_fea_len = sample_nbr.shape[-1]
     poly_fea_len = sample_poly.shape[-1]
 
+    # Seed torch before constructing the model so weight init is reproducible and,
+    # for ensembling, distinct per member (vary `model_seed` across runs to get
+    # diverse members; otherwise MPNNData's module-level manual_seed(0) makes every
+    # run init identically). Only set when provided, to preserve old behaviour.
+    if args.get("model_seed") is not None:
+        torch.manual_seed(int(args["model_seed"]))
+
     model = CrystalMPNN(
         orig_atom_fea_len=orig_atom_fea_len,
         nbr_fea_len=nbr_fea_len,
@@ -194,6 +202,9 @@ def main():
         use_poly_edges=args.get("use_poly_edges", True),
         atom_pooling=args.get("atom_pooling", "mean"),
         set2set_steps=args.get("set2set_steps", 3),
+        # Off (0.0) by default for regression; classification keeps its historical
+        # 0.5 unless the config overrides it.
+        dropout=args.get("dropout", 0.5 if classification else 0.0),
     )
 
     # Per-feature input standardization, computed on the training pool only
@@ -265,6 +276,21 @@ def _run_regression(args, model, criterion, optimizer, scheduler, loaders, norma
     global best_mae_error
     train_losses, val_losses = [], []
 
+    # Stochastic Weight Averaging: after `swa_start`, average the weights the
+    # optimizer visits under a low constant LR (SWALR). The averaged weights tend
+    # to sit in a flatter minimum that generalizes better — a cheap win in exactly
+    # the post-plateau regime this model shows. The model uses LayerNorm (no
+    # BatchNorm), so no update_bn pass is needed before using the averaged weights.
+    from torch.optim.swa_utils import AveragedModel, SWALR
+    swa_on = bool(args.get("swa", False))
+    swa_model = swa_scheduler = None
+    if swa_on:
+        swa_model = AveragedModel(model)
+        swa_start = int(args.get("swa_start", int(0.75 * args["epochs"])))
+        swa_scheduler = SWALR(optimizer, swa_lr=float(args.get("swa_lr", args["learning_rate"] * 0.05)))
+        print(f"SWA enabled: averaging from epoch {swa_start} at swa_lr="
+              f"{args.get('swa_lr', args['learning_rate'] * 0.05)}")
+
     train_loader = loaders["train"]
     # Model selection on the realistic val MAE; balanced val MAE logged too.
     # When no non-SC are present the balanced set is identical to the realistic
@@ -294,7 +320,13 @@ def _run_regression(args, model, criterion, optimizer, scheduler, loaders, norma
             print("Exit due to NaN")
             sys.exit(1)
 
-        scheduler.step()
+        # During the SWA phase, accumulate the averaged weights and hold a low
+        # constant LR; otherwise follow the normal MultiStepLR schedule.
+        if swa_on and epoch >= swa_start:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+        else:
+            scheduler.step()
 
         is_best = mae_error < best_mae_error
         best_mae_error = min(mae_error, best_mae_error)
@@ -319,8 +351,18 @@ def _run_regression(args, model, criterion, optimizer, scheduler, loaders, norma
     np.save(args["out_file"] + "_lossval.csv", np.array(val_losses))
 
     print("-" * 50 + "\nEvaluating on test set")
-    best_ckpt = torch.load(args["out_file"] + "_model_best.pth.tar")
-    model.load_state_dict(best_ckpt["state_dict"])
+    if swa_on:
+        # Use the SWA-averaged weights (LayerNorm -> no update_bn needed). Saved
+        # separately so the val-best checkpoint is still available for comparison.
+        model.load_state_dict(swa_model.module.state_dict())
+        torch.save({"state_dict": model.state_dict(),
+                    "normalizer": normalizer.state_dict(), "args": args},
+                   args["out_file"] + "_swa.pth.tar")
+        print("Using SWA-averaged weights for the test evaluation "
+              f"(saved {os.path.basename(args['out_file'])}_swa.pth.tar)")
+    else:
+        best_ckpt = torch.load(args["out_file"] + "_model_best.pth.tar")
+        model.load_state_dict(best_ckpt["state_dict"])
     # Evaluate the realistic test set (writes the canonical out_file.csv
     # predictions). Only evaluate the balanced set when non-SC are present —
     # otherwise it is identical to the realistic set.

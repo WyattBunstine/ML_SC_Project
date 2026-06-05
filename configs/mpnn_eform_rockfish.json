@@ -1,5 +1,6 @@
 {
-    "index_path":      "database/MP/SC_Full_v4.pickle",
+    "index_path":      "database/MP/energies_MP_v4.pickle",
+    "target_column":   "formation_energy_per_atom",
     "max_num_nbr":     14,
     "max_num_poly_nbr": 64,
 
@@ -9,12 +10,11 @@
     "h_feat_len":      128,
     "n_hidden":        1,
     "task": "regression",
-    "target_transform": "log1p",
+    "target_transform": "none",
     "edge_aggregation": "attention",
     "atom_pooling":    "set2set",
     "use_poly_edges":  true,
     "normalize_features": true,
-    "target_column": "tc",
 
     "SC_to_non_SC_ratio": "inf",
 
@@ -38,3 +38,4 @@
         "cpus": 24
     }
 }
+

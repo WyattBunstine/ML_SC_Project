@@ -215,9 +215,11 @@ python main.py train-mpnn configs/mpnn_basic.json
 ```
 
 For **classification**, the trainer does a stratified split, trains with a
-`BalancedEpochSampler` (all SC + a fresh random `n_nonsc` non-SC each epoch), and reports
-accuracy / precision / recall / F1 / AUC on both a *realistic* (true-imbalance) and a
-*balanced* validation/test split. Model selection uses realistic-split AUC.
+`BalancedEpochSampler` (all SC + a fresh random ratio-sized non-SC each epoch), and reports
+accuracy / precision / recall / F1 / AUC on both a *realistic* (the composition set by
+`SC_to_non_SC_ratio`) and a *balanced* (1:1) validation/test split. `SC_to_non_SC_ratio`
+governs the SC/non-SC mix of **all** splits — train, val, and test — so `inf` yields
+SC-only sets throughout. Model selection uses realistic-split AUC.
 
 ### 4. Plot predictions (`main.py plot`)
 
