@@ -678,10 +678,10 @@ def _to_input_var(input_batch, cuda):
     """Move a collated input tuple onto the right device.
 
     Layout: (atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-             nbr_angle, crystal_atom_idx).
+             nbr_angle, crystal_seg, n_crystals).
     """
     (atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-     nbr_angle, crystal_atom_idx) = input_batch
+     nbr_angle, crystal_seg, n_crystals) = input_batch
     if cuda:
         return (
             Variable(atom_fea.cuda(non_blocking=True)),
@@ -690,10 +690,11 @@ def _to_input_var(input_batch, cuda):
             Variable(poly_fea.cuda(non_blocking=True)),
             poly_fea_idx.cuda(non_blocking=True),
             nbr_angle.cuda(non_blocking=True),
-            [idx.cuda(non_blocking=True) for idx in crystal_atom_idx],
+            crystal_seg.cuda(non_blocking=True),
+            n_crystals,
         )
     return (Variable(atom_fea), Variable(nbr_fea), nbr_fea_idx,
-            Variable(poly_fea), poly_fea_idx, nbr_angle, crystal_atom_idx)
+            Variable(poly_fea), poly_fea_idx, nbr_angle, crystal_seg, n_crystals)
 
 
 def classification_metrics(log_probs, targets, threshold=0.5, beta=1.0):

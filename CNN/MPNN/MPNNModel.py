@@ -455,7 +455,8 @@ class CrystalMPNN(nn.Module):
                 poly_fea: torch.Tensor,
                 poly_fea_idx: torch.LongTensor,
                 nbr_angle: torch.Tensor,
-                crystal_atom_idx: list) -> torch.Tensor:
+                crystal_seg: torch.LongTensor,
+                n_crystals: int) -> torch.Tensor:
         atom_fea = (atom_fea - self.node_mean) / self.node_std
         atom_fea = self.embedding(atom_fea)
 
@@ -468,7 +469,7 @@ class CrystalMPNN(nn.Module):
             else:
                 atom_fea = conv(atom_fea, nbr_fea, nbr_fea_idx, angle)
 
-        crys_fea = self._pooling(atom_fea, crystal_atom_idx)
+        crys_fea = self._pooling(atom_fea, crystal_seg, n_crystals)
 
         crys_fea = self.conv_to_fc_act(self.conv_to_fc(crys_fea))
 
@@ -483,8 +484,16 @@ class CrystalMPNN(nn.Module):
             out = self.logsoftmax(out)
         return out
 
-    def _pooling(self, atom_fea: torch.Tensor, crystal_atom_idx: list) -> torch.Tensor:
+    def _pooling(self, atom_fea: torch.Tensor, seg: torch.LongTensor,
+                 B: int) -> torch.Tensor:
         """Read out per-atom embeddings into one vector per crystal.
+
+        Fully scatter-based over the segment vector ``seg`` (atom -> crystal id),
+        with ``B`` crystals: no per-crystal Python loop or per-crystal kernels —
+        the loop version cost ~128 small kernel launches per batch in the readout
+        alone. Sums use index_add_, whose accumulation order differs from the old
+        per-crystal mean, so results match to float32 rounding (~1e-7), not
+        bitwise.
 
         Mode is set by ``atom_pooling``:
           'mean'      — average atom embedding (intensive; original behaviour).
@@ -495,38 +504,41 @@ class CrystalMPNN(nn.Module):
                         each crystal, then weighted sum (gated readout).
           'set2set'   — LSTM-driven multi-step attention readout (Vinyals 2015).
         """
-        assert sum(len(idx) for idx in crystal_atom_idx) == atom_fea.shape[0]
+        assert seg.shape[0] == atom_fea.shape[0]
         if self.atom_pooling == 'set2set':
-            return self._set2set(atom_fea, crystal_atom_idx)
-        pooled = []
-        for idx_map in crystal_atom_idx:
-            h = atom_fea[idx_map]  # (n_i, atom_fea_len)
-            if self.atom_pooling == 'mean':
-                pooled.append(h.mean(dim=0, keepdim=True))
-            elif self.atom_pooling == 'mean_max':
-                pooled.append(torch.cat(
-                    [h.mean(dim=0, keepdim=True), h.max(dim=0, keepdim=True).values],
-                    dim=1))
-            else:  # 'attention'
-                w = torch.softmax(self.pool_attn(h), dim=0)  # (n_i, 1)
-                pooled.append((w * h).sum(dim=0, keepdim=True))
-        return torch.cat(pooled, dim=0)
+            return self._set2set(atom_fea, seg, B)
+        N, d = atom_fea.shape
+        counts = torch.bincount(seg, minlength=B).clamp(min=1).unsqueeze(1)  # (B,1)
 
-    def _set2set(self, atom_fea: torch.Tensor, crystal_atom_idx: list) -> torch.Tensor:
+        def seg_mean(x):
+            return x.new_zeros(B, d).index_add_(0, seg, x) / counts
+
+        if self.atom_pooling == 'mean':
+            return seg_mean(atom_fea)
+        if self.atom_pooling == 'mean_max':
+            mx = atom_fea.new_full((B, d), float("-inf")).scatter_reduce_(
+                0, seg.unsqueeze(1).expand(N, d), atom_fea,
+                reduce="amax", include_self=True)
+            return torch.cat([seg_mean(atom_fea), mx], dim=1)
+        # 'attention': numerically-stable per-crystal softmax over atom scores.
+        e = self.pool_attn(atom_fea)                                  # (N, 1)
+        seg_max = atom_fea.new_full((B, 1), float("-inf")).scatter_reduce_(
+            0, seg.unsqueeze(1), e, reduce="amax", include_self=True)
+        e_exp = (e - seg_max[seg]).exp()
+        seg_sum = atom_fea.new_zeros(B, 1).index_add_(0, seg, e_exp)
+        w = e_exp / seg_sum[seg]                                      # (N, 1)
+        return atom_fea.new_zeros(B, d).index_add_(0, seg, w * atom_fea)
+
+    def _set2set(self, atom_fea: torch.Tensor, batch: torch.LongTensor,
+                 B: int) -> torch.Tensor:
         """Set2Set readout (Vinyals et al. 2015), batched over crystals.
 
         Per step t: query q_t = LSTM(q*_{t-1}); attention a_i = softmax_i(h_i·q_t)
         within each crystal; readout r_t = sum_i a_i h_i; q*_t = [q_t, r_t].
-        Returns q*_T of width 2*atom_fea_len, one row per crystal.
+        Returns q*_T of width 2*atom_fea_len, one row per crystal. ``batch`` is
+        the atom->crystal segment vector (already built by collate).
         """
-        device = atom_fea.device
         N, d = atom_fea.shape
-        B = len(crystal_atom_idx)
-
-        # Map every atom to its crystal id (segments for the per-crystal softmax).
-        batch = torch.empty(N, dtype=torch.long, device=device)
-        for c, idx_map in enumerate(crystal_atom_idx):
-            batch[idx_map] = c
 
         h = (atom_fea.new_zeros(1, B, d), atom_fea.new_zeros(1, B, d))
         q_star = atom_fea.new_zeros(B, 2 * d)

@@ -850,10 +850,19 @@ def load_cif_dataset(index_path, **kwargs):
 
 
 def collate_pool(dataset_list):
-    """Collate crystals into a batch, offsetting neighbor indices into the batch atom array."""
+    """Collate crystals into a batch, offsetting neighbor indices into the batch
+    atom array.
+
+    The crystal membership travels as ONE segment tensor ``crystal_seg`` (N,)
+    mapping each atom to its crystal index, plus the python int ``n_crystals``
+    (kept CPU-side so the model never needs a .max().item() sync). The previous
+    list-of-arange-tensors representation cost one tiny tensor + one host->device
+    copy PER CRYSTAL PER BATCH (~128 of each) and forced Python loops in the
+    pooling readout.
+    """
     batch_atom_fea, batch_nbr_fea, batch_nbr_fea_idx = [], [], []
     batch_poly_fea, batch_poly_fea_idx, batch_nbr_angle = [], [], []
-    crystal_atom_idx, batch_target, batch_label = [], [], []
+    counts, batch_target, batch_label = [], [], []
     batch_cif_ids = []
     base_idx = 0
     for ((atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx, nbr_angle),
@@ -865,14 +874,17 @@ def collate_pool(dataset_list):
         batch_poly_fea.append(poly_fea)
         batch_poly_fea_idx.append(poly_fea_idx + base_idx)
         batch_nbr_angle.append(nbr_angle)
-        # Build on the samples' own device: when the dataset is prebuilt on the GPU
-        # this keeps the whole collated batch on-device (no host->device copy), and
-        # it's a plain CPU tensor otherwise.
-        crystal_atom_idx.append(torch.arange(n_i, device=atom_fea.device) + base_idx)
+        counts.append(n_i)
         batch_target.append(target)
         batch_label.append(label)
         batch_cif_ids.append(cif_id)
         base_idx += n_i
+
+    n_crystals = len(dataset_list)
+    device = batch_atom_fea[0].device   # samples' own device (GPU when prebuilt-cuda)
+    crystal_seg = torch.repeat_interleave(
+        torch.arange(n_crystals, device=device),
+        torch.tensor(counts, device=device))
 
     return (
         torch.cat(batch_atom_fea, dim=0),
@@ -881,7 +893,8 @@ def collate_pool(dataset_list):
         torch.cat(batch_poly_fea, dim=0),
         torch.cat(batch_poly_fea_idx, dim=0),
         torch.cat(batch_nbr_angle, dim=0),
-        crystal_atom_idx,
+        crystal_seg,
+        n_crystals,
     ), torch.stack(batch_target, dim=0), torch.cat(batch_label, dim=0), batch_cif_ids
 
 
