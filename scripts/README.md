@@ -19,12 +19,25 @@ never touched.
 | Command | Frequency | What it does |
 |---|---|---|
 | `setup-env` | once | rsyncs `requirements.txt`, creates conda env `ml_sc` (Python 3.11) on the cluster, `pip install -r requirements.txt`. Idempotent — safe to re-run after editing deps. |
-| `sync-data` | once | rsyncs `database/datafiles/MP/graphs_v4/` (14 GB) + `database/datafiles/MP/*.pickle`. Resumable (`--partial`); re-running only sends new/changed files. |
-| `run <config>` | per run | rsyncs `CNN/MPNN/*.py` + `configs/`, generates an `sbatch` script under remote `jobs/`, and submits it. |
+| `sync-data` | once | rsyncs `atom_init.json` + the MP / MP_Energy `graphs_v4/` dirs and index pickles. Resumable (`--partial`); re-running only sends the delta. MPtrj is deliberately NOT synced — it is cluster-built (see below). |
+| `run <config>` | per run | validates the config locally, picks the trainer from the config (MPNN vs baseline CGCNN), rsyncs code + configs, generates an `sbatch` script under remote `jobs/`, and submits it. |
+| `build-mptrj` | once (+ after a graph-format change) | CPU job (partition `parallel`, full node): streams the 12 GB MPtrj JSON and builds ~1.6M cgv4 graphs onto **scratch**. Resumable; also ensures `ijson`/`tess` in the env and ships the builder + source JSON first. |
+| `pack-mptrj` | after build-mptrj (+ after any graph rebuild) | CPU job: packs the MPtrj graphs into the columnar training format (`CNN/MPNN/MPNNPack.py`) on scratch. Training configs point `index_path` at the pack directory. |
 | `sync-code` | (auto) | pushes just code + configs. Called automatically by `run`; rarely needed directly. |
 | `status` | as needed | `squeue` for your jobs. |
 | `logs <jobid>` | as needed | `tail -f` the live SLURM stdout (`logs/<jobname>-<jobid>.out`). |
-| `fetch` | after a run | rsyncs remote `model_data/` + `logs/` back to your machine. |
+| `fetch` | after a run | rsyncs remote `model_data/` + `logs/` back, refreshes `model_data/index.csv` (the per-run comparison table), and moves each SLURM log into its run's directory. Skips `.archive/`. |
+| `reorg [--dry-run]` | once / as needed | migrates old flat run dirs into `model_data/<date>/<run_tag>/` on BOTH remote and local (new runs are born nested). |
+| `archive <rel_path>…` | as needed | retires runs into `model_data/.archive/` on both sides; `fetch` stops pulling them back. Use the `rel_path` column from `index.csv`. |
+
+## Storage layout: /data vs /scratch4
+
+`REMOTE_PATH` on `/data` (group allocation, NOT purged) holds code, configs, logs,
+index pickles, and the MPtrj source JSON. Bulk **regenerable** data lives under
+`SCRATCH_PATH` on `/scratch4` (large, but **purged periodically**): the ~1.6M MPtrj
+graph JSONs and the packed training store. If a purge removes them, re-run
+`build-mptrj` (resumable) and `pack-mptrj`. The split exists because /data's group
+quota cannot hold ~1.6M files / ~400 GB.
 
 ## First-time configuration
 

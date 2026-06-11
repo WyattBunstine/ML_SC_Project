@@ -102,27 +102,35 @@ class MPNNAdapter(ModelAdapter):
 
     def __init__(self, run_dir, config, ckpt_path, device):
         super().__init__(run_dir, config, ckpt_path, device)
-        from MPNNData import CIFDataV4
+        from MPNNData import load_cif_dataset
         from MPNNModel import CrystalMPNN
         from MPNNMain import Normalizer
 
         c = config
-        self.dataset = CIFDataV4(
-            index_path=c["index_path"],
+        edge_agg = c.get("edge_aggregation", c.get("aggregation", "ecn_weighted"))
+        self.dataset = load_cif_dataset(
+            c["index_path"],
             max_num_nbr=c.get("max_num_nbr", 14),
             max_num_poly_nbr=c.get("max_num_poly_nbr", 16),
             graph_cache_size=c.get("graph_cache_size", 4096),
             target_column=c.get("target_column"),
             use_bond_angles=c.get("use_bond_angles", False),
+            use_poly_edges=c.get("use_poly_edges", True),
+            # set_transformer checkpoints were trained WITH the angle-bias matrix;
+            # evaluating without it would silently change the model's inputs.
+            build_angle_bias=(edge_agg == "set_transformer"),
         )
-        (a, n, _, poly, _), _, _, _ = self.dataset[0]
+        (a, n, _, poly, _, _), _, _, _ = self.dataset[0]
         self.model = CrystalMPNN(
             orig_atom_fea_len=a.shape[-1], nbr_fea_len=n.shape[-1], poly_fea_len=poly.shape[-1],
             atom_fea_len=c.get("atom_feat_len", 64), edge_hidden_dim=c.get("edge_hidden_dim", 128),
             n_conv=c.get("n_conv", 3), h_fea_len=c.get("h_feat_len", 128), n_h=c.get("n_hidden", 1),
-            edge_aggregation=c.get("edge_aggregation", c.get("aggregation", "ecn_weighted")),
+            edge_aggregation=edge_agg,
             classification=self.is_classification, use_poly_edges=c.get("use_poly_edges", True),
             atom_pooling=c.get("atom_pooling", "mean"), set2set_steps=c.get("set2set_steps", 3),
+            use_coord_magnitude=c.get("use_coord_magnitude", False),
+            set_transformer_heads=c.get("set_transformer_heads", 4),
+            poly_fusion=c.get("poly_fusion", "sum"),
         )
         # Feature-norm buffers are registered in __init__, so load_state_dict
         # restores both weights and those stats. No need to recompute stats.
@@ -142,11 +150,30 @@ class MPNNAdapter(ModelAdapter):
         from MPNNData import get_sc_nonsc_loaders
         from MPNNMain import _parse_ratio
         c = self.config
+        # Resolve split_by the way the RUN did, not the way today's data would:
+        # 1. metadata.json records the value training actually resolved (the
+        #    run-dir config.json is copied before resolution, so it lacks it);
+        # 2. else the config's explicit value;
+        # 3. else the shared auto-resolution (MPNNData.resolve_split_by).
+        # Without (1), a checkpoint trained under auto->frame, evaluated after the
+        # index gained mp_id (auto->material), would silently reproduce a
+        # DIFFERENT split and score trained-on samples as 'test'.
+        split_by = None
+        meta_path = os.path.join(self.run_dir, "metadata.json")
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path) as f:
+                    split_by = json.load(f).get("dataset", {}).get("split_by")
+            except (OSError, ValueError):
+                pass
+        if split_by is None:
+            from MPNNData import resolve_split_by
+            split_by = resolve_split_by(c.get("split_by"), self.dataset)
         L = get_sc_nonsc_loaders(
             self.dataset, batch_size=c.get("batch_size", 64),
             val_ratio=c["val_ratio"], test_ratio=c["test_ratio"],
             sc_to_nonsc_ratio=_parse_ratio(c.get("SC_to_non_SC_ratio")),
-            num_workers=0, seed=c.get("split_seed", 123))
+            num_workers=0, seed=c.get("split_seed", 123), split_by=split_by)
         key = {"test": "test_realistic", "val": "val_realistic", "train": "train"}[split]
         return list(L[key].sampler)
 
