@@ -23,7 +23,7 @@ import math
 import os
 import sys
 
-KNOWN_TARGETS = ("tc", "e_above_hull", "formation_energy_per_atom")
+KNOWN_TARGETS = ("tc", "e_above_hull", "formation_energy_per_atom", "energy_per_atom")
 
 # Valid enum values, mirrored from CNN/MPNN/MPNNMain.py + MPNNModel.py and
 # CNN/CGCNNMain.py. Kept here so a bad value is caught before a job is submitted.
@@ -31,7 +31,9 @@ MPNN_ENUMS = {
     "task": {"regression", "classification"},
     "target_transform": {"none", "log1p"},
     "optim": {"SGD", "Adam", "AdamW"},
-    "edge_aggregation": {"ecn_weighted", "attention"},
+    "edge_aggregation": {"ecn_weighted", "attention", "set_transformer"},
+    "poly_fusion": {"sum", "gate"},
+    "split_by": {"frame", "material"},
     "atom_pooling": {"mean", "mean_max", "attention", "set2set"},
     "selection_metric": {"auc", "fbeta", "f1", "recall", "precision", "accuracy"},
 }
@@ -149,6 +151,45 @@ def _sample_files_exist(paths, err, what):
         err.append(f"{len(missing)}/{len(paths)} sampled {what} not found (e.g. {shown})")
 
 
+def _check_atom_init_coverage(df, atom_init_path, err):
+    """Fail if any element in the dataset lacks an embedding in atom_init.json.
+
+    The ORIG loader asserts `atom_type in atom_init` per atom (data.py
+    get_atom_fea), so an uncovered element (e.g. the actinides in the MP energy
+    data when atom_init only spans Z<=84) crashes mid-training. Element symbols
+    are pulled straight from each struc_dict's site species — a cheap full-pass
+    dict walk (~0.25s for ~50k rows), so this catches rare heavy elements that
+    sampling a few rows would miss. Report the missing elements and the fix.
+    """
+    try:
+        with open(atom_init_path) as f:
+            covered = {int(k) for k in json.load(f)}
+    except Exception as e:  # noqa: BLE001 — unreadable atom_init already flagged upstream
+        return
+    # Collect unique element symbols across all structures (no pymatgen Structure
+    # build — just walk the dict), then resolve symbol -> Z once.
+    symbols = set()
+    for sd in df["struc_dict"]:
+        if not isinstance(sd, dict):
+            continue
+        for site in sd.get("sites", []):
+            for sp in site.get("species", []):
+                el = sp.get("element")
+                if el:
+                    symbols.add(el)
+    if not symbols:
+        return
+    from pymatgen.core.periodic_table import Element
+    missing = sorted(sym for sym in symbols if Element(sym).Z not in covered)
+    if missing:
+        max_z = max(Element(s).Z for s in missing)
+        err.append(
+            f"atom_init ({atom_init_path}) is missing embeddings for elements "
+            f"present in the dataset: {', '.join(missing)} — the ORIG loader will "
+            f"assert mid-training. Regenerate with coverage through these, e.g. "
+            f"`python main.py build-db --kind atom-init --max-z {max_z + 1}`.")
+
+
 def validate_mpnn(cfg, err, warn, cpus):
     _require(cfg, ["index_path", "out_file", "epochs", "batch_size",
                    "learning_rate", "val_ratio", "test_ratio"], err)
@@ -159,10 +200,24 @@ def validate_mpnn(cfg, err, warn, cpus):
     if not index_path:
         return
     if not os.path.exists(index_path):
-        err.append(f"index_path not found: {index_path}")
+        # Cluster-built datasets (e.g. MPtrj via `deploy.sh build-mptrj` /
+        # `pack-mptrj`) exist ONLY on the cluster, so a locally-missing index is
+        # a warning, not an error. The trade-off: a typo'd path now queues a job
+        # that dies in seconds at dataset load instead of being caught here. The
+        # deeper index checks below are skipped.
+        warn.append(f"index_path not found locally: {index_path} — OK if it is a "
+                    "cluster-built dataset that exists on the remote; otherwise fix the path")
         return
 
     import pandas as pd
+    # A directory is a packed dataset (MPNNPack): validate against its meta
+    # table, which carries the same id/label/target columns as an index pickle.
+    if os.path.isdir(index_path):
+        if not os.path.exists(os.path.join(index_path, "pack_header.json")):
+            err.append(f"index_path {index_path} is a directory but not a packed "
+                       "dataset (no pack_header.json)")
+            return
+        index_path = os.path.join(index_path, "meta.pickle")
     try:
         df = pd.read_pickle(index_path)
     except Exception as e:  # noqa: BLE001
@@ -172,7 +227,8 @@ def validate_mpnn(cfg, err, warn, cpus):
         err.append(f"index_path {index_path} is not a DataFrame (got {type(df).__name__})")
         return
 
-    target_col = _resolve_target(df, cfg, {"id", "value", "graph_path", "label"}, err)
+    # mp_id is the material-grouping key for split_by="material", not a target.
+    target_col = _resolve_target(df, cfg, {"id", "value", "graph_path", "label", "mp_id"}, err)
     _check_target_and_log1p(df, cfg, target_col, err, is_mpnn=True)
 
     # Classification, or any finite SC:non-SC ratio, needs non-SC (label==0) rows.
@@ -217,10 +273,26 @@ def validate_orig(cfg, err, warn, cpus):
         if not hasattr(df, "columns"):
             err.append(f"dataset {pickle_path} is not a DataFrame (got {type(df).__name__})")
             return
+        # The ORIG loader builds each crystal from row['struc_dict'] at load time
+        # (CNN/OriginalCGCNN/data.py). A V4 graph pickle (built for the MPNN model)
+        # carries 'graph_path' instead and has no 'struc_dict', so it would pass
+        # target validation but KeyError at runtime. Catch the model/dataset
+        # mismatch here, with a hint at the likely cause.
+        if "struc_dict" not in df.columns:
+            hint = (" (this looks like an MPNN graph pickle — use the MPNN config "
+                    "with 'index_path', or build a struc_dict dataset for ORIG)"
+                    if "graph_path" in df.columns else "")
+            err.append(f"dataset {pickle_path} has no 'struc_dict' column required by "
+                       f"the ORIG model; columns: {list(df.columns)}{hint}")
+            return
         target_col = _resolve_target(df, cfg, {"id", "value", "struc_dict", "label"}, err)
         # The original CGCNN has no target_transform, so no log1p check; still
         # verify the target column has data.
         _check_target_and_log1p(df, cfg, target_col, err, is_mpnn=False)
+        # Every element in the dataset must have an atom_init embedding, else the
+        # loader asserts mid-training (e.g. actinides absent from a Z<=84 file).
+        if os.path.exists(atom_init_path):
+            _check_atom_init_coverage(df, atom_init_path, err)
 
     _check_workers_vs_cpus(cfg, cpus, warn)
 
