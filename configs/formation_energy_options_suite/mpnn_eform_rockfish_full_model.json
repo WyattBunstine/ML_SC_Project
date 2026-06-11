@@ -4,9 +4,9 @@
     "max_num_nbr":     14,
     "max_num_poly_nbr": 64,
 
-    "atom_feat_len":   128,
-    "edge_hidden_dim": 128,
-    "n_conv":          4,
+    "atom_feat_len":   64,
+    "edge_hidden_dim": 64,
+    "n_conv":          3,
     "h_feat_len":      128,
     "n_hidden":        1,
     "task": "regression",
@@ -15,12 +15,16 @@
     "atom_pooling":    "set2set",
     "use_poly_edges":  true,
     "normalize_features": true,
+    "swa": true,
+    "dropout": 0.2,
 
     "SC_to_non_SC_ratio": "inf",
 
-    "batch_size":      64,
+    "batch_size":      128,
     "num_workers":     12,
-    "graph_cache_size": 16384,
+    "prebuild_dataset": true,
+    "prebuild_device": "cuda",
+    "graph_cache_size": 50000,
     "val_ratio":       0.1,
     "test_ratio":      0.1,
 
@@ -28,14 +32,16 @@
     "learning_rate":   0.001,
     "momentum":        0.9,
     "weight_decay":    0.00001,
-    "lr_milestones":   [500, 800],
-    "epochs":          1000,
+    "lr_milestones":   [200, 400],
+    "epochs":          500,
 
     "print_split":     10,
+    "run_tag":         "eform_full_model",
     "out_file":        "CNN/MPNN/mpnn_result",
 
     "slurm": {
-        "cpus": 24
+        "cpus": 24,
+        "mem": "96G"
     }
 }
 

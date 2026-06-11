@@ -175,7 +175,7 @@ Each element (Z = 1–84) has 8 features: `[Z, block (0=s,1=p,2=d,3=f), valence,
 atomic_radius, electron_affinity, ionization_energy, electronegativity, electron_affinity]`.
 The baseline CGCNN sums these per site weighted by occupancy → (N, 8), embedded to 64-d.
 
-The MPNN instead uses the **14 node + 8 edge + 7 poly-edge** features defined in
+The MPNN instead uses the **14 node + 7 edge + 7 poly-edge** features defined in
 `MPNN/MPNNData.py` (`NODE_FEA_LEN`, `NBR_FEA_LEN`, `POLY_FEA_LEN`). The 14 node features are:
 `Z, oxidation_state, ion_role, chi_pauling, chi_allen, ecn_value, shannon_radius, cn_core,
 hist_{corner,edge,face,other}, ionization_energy, electron_affinity`. The last two are pure
@@ -240,9 +240,26 @@ python main.py train configs/orig_classify_basic.json
 # Train MPNN (requires cgv4 graphs)
 python main.py train-mpnn configs/mpnn_basic.json
 
+# MPtrj energy-pretraining dataset (~1.6M trajectory frames; runs on the cluster):
+./scripts/deploy.sh build-mptrj    # CPU job: stream the 12 GB JSON -> cgv4 graphs on scratch
+./scripts/deploy.sh pack-mptrj     # CPU job: pack graphs into the fast columnar store
+./scripts/deploy.sh run configs/formation_energy_options_suite/mptrj_eform_minimal.json
+# (local equivalents: python main.py build-mptrj / pack-dataset --index ... --out ...)
+
+# Pack ANY cgv4 dataset for ~30x faster training reads (point index_path at the dir)
+python main.py pack-dataset --index database/datafiles/MP_Energy/MP_Energy_V4.pickle \
+  --out database/datafiles/MP_Energy/packed_v1
+
 # Plot regression results
 python main.py plot --results CNN/test_result.csv
 ```
+
+Cluster workflow (deploy/fetch/reorg/archive, /data-vs-scratch storage):
+see `scripts/README.md`. Per-epoch resource telemetry (GPU/CPU/data-wait columns
+in every run's `*_epoch_log.csv`) needs `psutil` + `nvidia-ml-py` (in
+requirements; blank columns if absent). Trajectory datasets MUST split by
+material (`split_by`, auto when the index has `mp_id`) — frame-level splits leak
+near-duplicate frames.
 
 ---
 
@@ -324,6 +341,30 @@ Ordered roughly by effort; each notes *why it should help*, the *honest caveat*,
    use (Alexandria/OMat24/GNoME for pretraining); for the T_c target itself, prioritize more
    superconductor data and label-quality handling (experimental T_c is heterogeneous/noisy),
    since that — not representation cleverness — likely dominates the error budget.
+
+7. **Coordination-environment hypergraph — many-body augment to the polyhedral edges.**
+   The polyhedral edges are a 2-body shadow of a many-body object: a coordination polyhedron
+   is a *set* (central cation + ECoN core-shell ligands), and corner/edge/face sharing is the
+   *overlap* of two such sets (|e_a ∩ e_b| = 1/2/3). Represent each polyhedron as a
+   **hyperedge** (a node-set) and message-pass via factor-nodes: a node→polyhedron aggregation
+   builds a polyhedron-level token (distortion, mean bond length, effective CN) that is
+   broadcast back to its members; polyhedra interact through shared atoms. *Why:* polyhedral
+   distortion and connectivity *are* the descriptors crystallographers reason with, and the
+   hypergraph captures them at the unit level while making the sharing mode **emergent** (set
+   overlap) rather than a hand-computed `shared_count`. The node↔hyperedge aggregation is the
+   **same set-attention primitive** as the per-atom local set-transformer (the "idea A"
+   readout / AllSetTransformer, Chien 2022) applied one scale up, so it reuses that module
+   rather than introducing a separate paradigm. *Caveat:* polyhedron identity is fuzzy on
+   off-equilibrium MPtrj frames (inherited from the ECoN core/extended threshold); heavy
+   hyperedge overlap (a bridging anion sits in many polyhedra) risks over-smoothing; and it
+   partly re-expresses information already in `cn_core` / `sharing_mode_hist` / poly-edges —
+   so A/B it against that existing encoding rather than assuming a gain. Underexplored for
+   crystals specifically (hypergraph NNs are established generally — HGNN/HyperGAT/AllSet — and
+   emerging for molecular functional groups, but coordination-environment hypergraphs for
+   crystals are near-frontier). *First step:* land the per-atom set-transformer first, then
+   have the external `crystal_graph_v4` builder emit polyhedron member-sets (it already
+   identifies them via ECoN), add factor-node hyperedge message passing that reuses the
+   set-attention module, and ablate vs. the current poly-edge channel.
 
 **Generalization toolkit already in place** (use these to evaluate every change above):
 config-controlled `dropout`, decoupled `weight_decay`, **SWA** (`swa`), seed-varied
