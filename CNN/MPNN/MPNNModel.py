@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 
-from MPNNData import ECN_WEIGHT_SRC_IDX, POLY_WEIGHT_IDX
+from MPNNData import (ECN_WEIGHT_SRC_IDX, POLY_WEIGHT_IDX,
+                      ANGLE_RBF_CENTERS, ANGLE_FEA_LEN)
 
 
 class EdgeNet(nn.Module):
@@ -27,6 +28,85 @@ class EdgeNet(nn.Module):
         return x
 
 
+class LocalSetTransformerAgg(nn.Module):
+    """Per-atom local set-transformer aggregation ("idea A").
+
+    Replaces the weighted-sum message with a small multi-head transformer over the
+    atom's coordination shell. The M neighbor slots become tokens ``[h_j ‖ e_ij]``
+    that do self-attention; the attention logit between two neighbors is BIASED by
+    the bond angle between them (a per-head function of an RBF expansion of cos θ,
+    read from the precomputed (M, M) angle matrix) — so atoms (tokens), edges (token
+    features) and angles (attention bias) are fused in one operation. A learned
+    center query then reads out the atom's message. Drop-in for ``aggregate``: same
+    (N, atom_fea_len) output, same residual wrapper.
+
+    The angle matrix uses sentinel 2.0 for "no angle for this pair" (padding, or a
+    pair with no stored triplet); those entries contribute no bias.
+    """
+
+    def __init__(self, atom_fea_len: int, nbr_fea_len: int, n_heads: int = 4):
+        super().__init__()
+        if atom_fea_len % n_heads != 0:
+            raise ValueError(
+                f"atom_fea_len ({atom_fea_len}) must be divisible by "
+                f"set_transformer_heads ({n_heads}).")
+        self.d = atom_fea_len
+        self.h = n_heads
+        self.dh = atom_fea_len // n_heads
+        self.tok_proj = nn.Linear(atom_fea_len + nbr_fea_len, atom_fea_len)
+        self.q = nn.Linear(atom_fea_len, atom_fea_len)
+        self.k = nn.Linear(atom_fea_len, atom_fea_len)
+        self.v = nn.Linear(atom_fea_len, atom_fea_len)
+        self.center_q = nn.Linear(atom_fea_len, atom_fea_len)
+        self.out = nn.Linear(atom_fea_len, atom_fea_len)
+        # RBF basis over cos θ ∈ [-1, 1]: the SAME basis MPNNData uses for the
+        # edge angle vectors (one shared definition — retuning it there retunes
+        # both encodings), mapped per-head to an additive attention bias.
+        centers = torch.from_numpy(ANGLE_RBF_CENTERS.copy())
+        self.register_buffer("angle_centers", centers)
+        self.angle_width = float(centers[1] - centers[0])
+        self.angle_bias = nn.Linear(ANGLE_FEA_LEN, n_heads)
+
+    def _angle_rbf(self, cos: torch.Tensor) -> torch.Tensor:
+        # cos (N, M, M) -> (N, M, M, K)
+        diff = cos.unsqueeze(-1) - self.angle_centers
+        return torch.exp(-(diff ** 2) / (2.0 * self.angle_width ** 2))
+
+    def forward(self, atom_in_fea, nbr_fea_norm, nbr_fea_idx, pad_mask, nbr_angle):
+        N, M = nbr_fea_idx.shape
+        h, dh = self.h, self.dh
+        # Neighbor tokens [h_j ‖ e_ij]  -> (N, M, d)
+        nbr_h = atom_in_fea[nbr_fea_idx.reshape(-1)].view(N, M, self.d)
+        tok = self.tok_proj(torch.cat([nbr_h, nbr_fea_norm], dim=2))
+
+        def heads(x):
+            return x.view(N, M, h, dh).transpose(1, 2)  # (N, h, M, dh)
+
+        q, k, v = heads(self.q(tok)), heads(self.k(tok)), heads(self.v(tok))
+        logits = (q @ k.transpose(-1, -2)) / (dh ** 0.5)  # (N, h, M, M)
+
+        # Angle bias: only for pairs that have a real stored angle (|cos| <= 1).
+        if nbr_angle is not None and nbr_angle.numel() and nbr_angle.shape[-1] == M:
+            real = (nbr_angle.abs() <= 1.0).unsqueeze(1)  # (N, 1, M, M)
+            bias = self.angle_bias(self._angle_rbf(nbr_angle.clamp(-1.0, 1.0)))
+            logits = logits + bias.permute(0, 3, 1, 2) * real
+
+        # Mask padded KEY slots out of the softmax.
+        logits = logits.masked_fill(~pad_mask[:, None, None, :], -1e9)
+        ctx = torch.softmax(logits, dim=-1) @ v  # (N, h, M, dh)
+
+        # Center-query readout over the (real) token contexts.
+        cq = self.center_q(atom_in_fea).view(N, h, 1, dh)
+        r_logits = (cq @ ctx.transpose(-1, -2)).squeeze(2) / (dh ** 0.5)  # (N, h, M)
+        r_logits = r_logits.masked_fill(~pad_mask[:, None, :], -1e9)
+        read = (torch.softmax(r_logits, dim=-1).unsqueeze(-1) * ctx).sum(2)  # (N, h, dh)
+        out = self.out(read.reshape(N, self.d))
+
+        # Atoms with zero real neighbors: softmax over an all-masked row would be
+        # uniform over padding; zero their message so they contribute nothing.
+        return out * pad_mask.any(dim=1, keepdim=True).float()
+
+
 class MPNNConvLayer(nn.Module):
     """Single message-passing layer with a learned EdgeNet and configurable aggregation.
 
@@ -46,15 +126,32 @@ class MPNNConvLayer(nn.Module):
 
     def __init__(self, atom_fea_len: int, nbr_fea_len: int, edge_hidden_dim: int,
                  aggregation: str = 'ecn_weighted',
-                 ecn_weight_idx: int = ECN_WEIGHT_SRC_IDX):
+                 ecn_weight_idx: int = ECN_WEIGHT_SRC_IDX,
+                 use_coord_magnitude: bool = False, n_heads: int = 4):
         super().__init__()
         self.atom_fea_len = atom_fea_len
         self.aggregation = aggregation
         self.ecn_weight_idx = ecn_weight_idx
+        self.use_coord_magnitude = use_coord_magnitude
 
-        self.edge_net = EdgeNet(atom_fea_len, nbr_fea_len, edge_hidden_dim)
+        # The set-transformer aggregation uses its own neighbor-token attention
+        # (LocalSetTransformerAgg); the ecn_weighted / attention variants use the
+        # EdgeNet message. Build only what the chosen variant needs.
+        if aggregation == 'set_transformer':
+            self.set_tr = LocalSetTransformerAgg(atom_fea_len, nbr_fea_len, n_heads)
+        else:
+            self.edge_net = EdgeNet(atom_fea_len, nbr_fea_len, edge_hidden_dim)
         self.norm_out = nn.LayerNorm(atom_fea_len)
         self.act = nn.Softplus()
+
+        # The weighted aggregation normalizes its weights to sum to 1, so it is
+        # intensive and throws away the atom's TOTAL coordination strength (sum of
+        # raw ECoN/shared_count weights over its real neighbors) — a physically
+        # meaningful signal (under- vs over-coordinated sites). When enabled, we
+        # re-inject log1p(total) through a learned projection so the message keeps
+        # a coordination-magnitude channel alongside the intensive average.
+        if use_coord_magnitude:
+            self.coord_proj = nn.Linear(1, atom_fea_len)
 
         # Per-feature input standardization for the EdgeNet, applied ONLY to the
         # raw edge features fed into the MLP. Default identity; filled from the
@@ -73,7 +170,8 @@ class MPNNConvLayer(nn.Module):
 
     def aggregate(self, atom_in_fea: torch.Tensor,
                   nbr_fea: torch.Tensor,
-                  nbr_fea_idx: torch.LongTensor) -> torch.Tensor:
+                  nbr_fea_idx: torch.LongTensor,
+                  nbr_angle: torch.Tensor = None) -> torch.Tensor:
         """Compute the aggregated edge message for each atom (pre-residual).
 
         Separated from ``forward`` so that a multi-edge-type layer can sum
@@ -85,6 +183,7 @@ class MPNNConvLayer(nn.Module):
         atom_in_fea  : (N, atom_fea_len)
         nbr_fea      : (N, M, nbr_fea_len)
         nbr_fea_idx  : (N, M)  — local batch atom indices, padded with self-index
+        nbr_angle    : (N, M, M) cos-angle matrix for 'set_transformer' (else None)
 
         Returns
         -------
@@ -92,55 +191,58 @@ class MPNNConvLayer(nn.Module):
         """
         N, M = nbr_fea_idx.shape
 
-        # Gather neighbor atom features -> (N, M, atom_fea_len)
-        nbr_atom_fea = atom_in_fea[nbr_fea_idx.view(-1)].view(N, M, self.atom_fea_len)
-
-        # Expand center features -> (N, M, atom_fea_len)
-        center_fea = atom_in_fea.unsqueeze(1).expand(N, M, self.atom_fea_len)
-
-        # Standardize edge features for the MLP input ONLY. The padding mask and
+        # Standardize edge features for the message input ONLY. The padding mask and
         # the aggregation weight column below read the RAW nbr_fea, so this does
         # not disturb padding detection or the physical ECoN/shared_count weights.
         nbr_fea_norm = (nbr_fea - self.edge_mean) / self.edge_std
-
-        # Edge network input: [center || neighbor || edge] -> (N, M, 2*atom_fea_len + nbr_fea_len)
-        edge_input = torch.cat([center_fea, nbr_atom_fea, nbr_fea_norm], dim=2)
-
-        # Learned edge representations -> (N, M, atom_fea_len)
-        edge_repr = self.edge_net(edge_input)
-
         # Padding mask: real edges have at least one non-zero feature value
         pad_mask = (nbr_fea.abs().sum(dim=2) > 0)  # (N, M) bool
 
-        if self.aggregation == 'ecn_weighted':
-            # Extract raw weight column (ECoN weight for bonds, shared_count
-            # for poly edges) -> (N, M)
-            ecn_w = nbr_fea[:, :, self.ecn_weight_idx].clamp(min=0.0)
-            ecn_w = ecn_w * pad_mask.float()
-            # Softmax-normalise over the real neighbourhood
-            ecn_w_sum = ecn_w.sum(dim=1, keepdim=True).clamp(min=1e-8)
-            norm_w = ecn_w / ecn_w_sum  # (N, M)
-            aggregated = (norm_w.unsqueeze(2) * edge_repr).sum(dim=1)  # (N, atom_fea_len)
-
-        elif self.aggregation == 'attention':
-            # Learned attention scores -> (N, M, 1)
-            scores = self.attn_fc(edge_repr)
-            # Mask padding positions to -inf so they don't participate in softmax
-            scores = scores.masked_fill(~pad_mask.unsqueeze(2), -1e9)
-            attn_w = torch.softmax(scores, dim=1)  # (N, M, 1)
-            aggregated = (attn_w * edge_repr).sum(dim=1)  # (N, atom_fea_len)
-
+        if self.aggregation == 'set_transformer':
+            aggregated = self.set_tr(atom_in_fea, nbr_fea_norm, nbr_fea_idx,
+                                     pad_mask, nbr_angle)
         else:
-            raise ValueError(f"Unknown aggregation: '{self.aggregation}'. "
-                             "Choose 'ecn_weighted' or 'attention'.")
+            # Gather neighbor + expand center -> edge MLP input [center||nbr||edge]
+            nbr_atom_fea = atom_in_fea[nbr_fea_idx.view(-1)].view(N, M, self.atom_fea_len)
+            center_fea = atom_in_fea.unsqueeze(1).expand(N, M, self.atom_fea_len)
+            edge_input = torch.cat([center_fea, nbr_atom_fea, nbr_fea_norm], dim=2)
+            edge_repr = self.edge_net(edge_input)  # (N, M, atom_fea_len)
+
+            if self.aggregation == 'ecn_weighted':
+                # Raw weight column (ECoN weight for bonds, shared_count for poly).
+                ecn_w = nbr_fea[:, :, self.ecn_weight_idx].clamp(min=0.0)
+                ecn_w = ecn_w * pad_mask.float()
+                ecn_w_sum = ecn_w.sum(dim=1, keepdim=True).clamp(min=1e-8)
+                norm_w = ecn_w / ecn_w_sum  # (N, M)
+                aggregated = (norm_w.unsqueeze(2) * edge_repr).sum(dim=1)
+
+            elif self.aggregation == 'attention':
+                scores = self.attn_fc(edge_repr)
+                scores = scores.masked_fill(~pad_mask.unsqueeze(2), -1e9)
+                attn_w = torch.softmax(scores, dim=1)  # (N, M, 1)
+                aggregated = (attn_w * edge_repr).sum(dim=1)
+
+            else:
+                raise ValueError(f"Unknown aggregation: '{self.aggregation}'. "
+                                 "Choose 'ecn_weighted', 'attention' or 'set_transformer'.")
+
+        if self.use_coord_magnitude:
+            # Total coordination strength = sum of the raw physical weight column
+            # over real neighbors (idx is ecn_weight_center for bonds /
+            # shared_count for poly). Computed from raw nbr_fea so it is independent
+            # of the aggregation mode (attention discards these weights otherwise).
+            coord_mag = (nbr_fea[:, :, self.ecn_weight_idx].clamp(min=0.0)
+                         * pad_mask.float()).sum(dim=1, keepdim=True)  # (N, 1)
+            aggregated = aggregated + self.coord_proj(torch.log1p(coord_mag))
 
         return aggregated
 
     def forward(self, atom_in_fea: torch.Tensor,
                 nbr_fea: torch.Tensor,
-                nbr_fea_idx: torch.LongTensor) -> torch.Tensor:
+                nbr_fea_idx: torch.LongTensor,
+                nbr_angle: torch.Tensor = None) -> torch.Tensor:
         """Single-edge-type message passing: aggregate + residual update."""
-        aggregated = self.aggregate(atom_in_fea, nbr_fea, nbr_fea_idx)
+        aggregated = self.aggregate(atom_in_fea, nbr_fea, nbr_fea_idx, nbr_angle)
         # Residual connection + layer norm + activation
         out = self.act(self.norm_out(aggregated + atom_in_fea))
         return out
@@ -162,29 +264,63 @@ class DualMPNNConvLayer(nn.Module):
     nbr_fea_len     : int   raw bonding-edge feature dimension
     poly_fea_len    : int   raw polyhedral-edge feature dimension
     edge_hidden_dim : int   hidden dimension inside each EdgeNet
-    aggregation     : str   'ecn_weighted' | 'attention'
+    aggregation     : str   'ecn_weighted' | 'attention' | 'set_transformer'
+    poly_fusion     : str   how the bond and poly messages combine:
+                            'sum'  — plain addition (original behaviour); the model
+                                     cannot distinguish the two relation types
+                            'gate' — per-channel sigmoid gates on each message,
+                                     conditioned on both messages, so the model
+                                     weighs bonding vs polyhedral context per atom
     """
 
     def __init__(self, atom_fea_len: int, nbr_fea_len: int, poly_fea_len: int,
-                 edge_hidden_dim: int, aggregation: str = 'ecn_weighted'):
+                 edge_hidden_dim: int, aggregation: str = 'ecn_weighted',
+                 use_coord_magnitude: bool = False, n_heads: int = 4,
+                 poly_fusion: str = 'sum'):
         super().__init__()
+        if poly_fusion not in ('sum', 'gate'):
+            raise ValueError(f"Unknown poly_fusion '{poly_fusion}' (use 'sum' or 'gate').")
+        self.poly_fusion = poly_fusion
         self.bond_conv = MPNNConvLayer(
             atom_fea_len, nbr_fea_len, edge_hidden_dim, aggregation,
             ecn_weight_idx=ECN_WEIGHT_SRC_IDX,
+            use_coord_magnitude=use_coord_magnitude, n_heads=n_heads,
         )
+        # Bond-only set-transformer: the polyhedral channel has no bond-angle
+        # matrix, so it stays on the standard weighted aggregation (ecn_weighted)
+        # rather than the set-transformer. (Revisiting how poly edges are used is a
+        # separate planned step.)
+        poly_aggregation = 'ecn_weighted' if aggregation == 'set_transformer' else aggregation
         self.poly_conv = MPNNConvLayer(
-            atom_fea_len, poly_fea_len, edge_hidden_dim, aggregation,
+            atom_fea_len, poly_fea_len, edge_hidden_dim, poly_aggregation,
             ecn_weight_idx=POLY_WEIGHT_IDX,
+            use_coord_magnitude=use_coord_magnitude,
         )
         self.norm_out = nn.LayerNorm(atom_fea_len)
         self.act = nn.Softplus()
 
+        if poly_fusion == 'gate':
+            # One linear over [bond_msg ‖ poly_msg] emits BOTH per-channel gates
+            # (chunked). Bias starts at +2 (sigmoid ≈ 0.88) so training begins
+            # near the additive baseline and learns selectivity from there,
+            # instead of starting half-attenuated (sigmoid(0) = 0.5).
+            self.fusion_gate = nn.Linear(2 * atom_fea_len, 2 * atom_fea_len)
+            nn.init.zeros_(self.fusion_gate.weight)
+            nn.init.constant_(self.fusion_gate.bias, 2.0)
+
     def forward(self, atom_in_fea: torch.Tensor,
                 nbr_fea: torch.Tensor, nbr_fea_idx: torch.LongTensor,
-                poly_fea: torch.Tensor, poly_fea_idx: torch.LongTensor) -> torch.Tensor:
-        bond_msg = self.bond_conv.aggregate(atom_in_fea, nbr_fea, nbr_fea_idx)
+                poly_fea: torch.Tensor, poly_fea_idx: torch.LongTensor,
+                nbr_angle: torch.Tensor = None) -> torch.Tensor:
+        bond_msg = self.bond_conv.aggregate(atom_in_fea, nbr_fea, nbr_fea_idx, nbr_angle)
         poly_msg = self.poly_conv.aggregate(atom_in_fea, poly_fea, poly_fea_idx)
-        out = self.act(self.norm_out(bond_msg + poly_msg + atom_in_fea))
+        if self.poly_fusion == 'gate':
+            g = torch.sigmoid(self.fusion_gate(torch.cat([bond_msg, poly_msg], dim=1)))
+            g_bond, g_poly = g.chunk(2, dim=1)
+            fused = g_bond * bond_msg + g_poly * poly_msg
+        else:
+            fused = bond_msg + poly_msg
+        out = self.act(self.norm_out(fused + atom_in_fea))
         return out
 
 
@@ -231,8 +367,11 @@ class CrystalMPNN(nn.Module):
                  n_conv: int = 3, h_fea_len: int = 128, n_h: int = 1,
                  edge_aggregation: str = 'ecn_weighted', classification: bool = False,
                  use_poly_edges: bool = True, atom_pooling: str = 'mean',
-                 set2set_steps: int = 3, dropout: float = 0.0):
+                 set2set_steps: int = 3, dropout: float = 0.0,
+                 use_coord_magnitude: bool = False, set_transformer_heads: int = 4,
+                 poly_fusion: str = 'sum'):
         super().__init__()
+        self.uses_angle_bias = (edge_aggregation == 'set_transformer')
 
         if atom_pooling not in self._POOLINGS:
             raise ValueError(f"Unknown atom_pooling '{atom_pooling}'. "
@@ -252,12 +391,17 @@ class CrystalMPNN(nn.Module):
         if use_poly_edges:
             self.convs = nn.ModuleList([
                 DualMPNNConvLayer(atom_fea_len, nbr_fea_len, poly_fea_len,
-                                  edge_hidden_dim, edge_aggregation)
+                                  edge_hidden_dim, edge_aggregation,
+                                  use_coord_magnitude=use_coord_magnitude,
+                                  n_heads=set_transformer_heads,
+                                  poly_fusion=poly_fusion)
                 for _ in range(n_conv)
             ])
         else:
             self.convs = nn.ModuleList([
-                MPNNConvLayer(atom_fea_len, nbr_fea_len, edge_hidden_dim, edge_aggregation)
+                MPNNConvLayer(atom_fea_len, nbr_fea_len, edge_hidden_dim, edge_aggregation,
+                              use_coord_magnitude=use_coord_magnitude,
+                              n_heads=set_transformer_heads)
                 for _ in range(n_conv)
             ])
 
@@ -310,15 +454,19 @@ class CrystalMPNN(nn.Module):
                 nbr_fea_idx: torch.LongTensor,
                 poly_fea: torch.Tensor,
                 poly_fea_idx: torch.LongTensor,
+                nbr_angle: torch.Tensor,
                 crystal_atom_idx: list) -> torch.Tensor:
         atom_fea = (atom_fea - self.node_mean) / self.node_std
         atom_fea = self.embedding(atom_fea)
 
+        # Angle bias is only consumed by the set-transformer aggregation; pass None
+        # otherwise so the standard convs ignore it.
+        angle = nbr_angle if self.uses_angle_bias else None
         for conv in self.convs:
             if self.use_poly_edges:
-                atom_fea = conv(atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx)
+                atom_fea = conv(atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx, angle)
             else:
-                atom_fea = conv(atom_fea, nbr_fea, nbr_fea_idx)
+                atom_fea = conv(atom_fea, nbr_fea, nbr_fea_idx, angle)
 
         crys_fea = self._pooling(atom_fea, crystal_atom_idx)
 
