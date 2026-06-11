@@ -14,7 +14,10 @@ if _rp_path not in sys.path:
     sys.path.insert(0, _rp_path)
 
 try:
-    from crystal_graph_v4 import build_crystal_graph_from_cif
+    from crystal_graph_v4 import (
+        build_crystal_graph_from_cif,
+        build_crystal_graph_from_structure,
+    )
 except ImportError as exc:
     raise ImportError(
         f"Could not import crystal_graph_v4 from '{_rp_path}'. "

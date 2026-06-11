@@ -16,8 +16,16 @@ pandas==3.0.3
 scikit-learn==1.8.0
 pymatgen==2026.5.4
 
+# --- Training telemetry (per-epoch GPU/CPU usage columns in *_epoch_log.csv) ---
+# Both optional at runtime: training degrades gracefully to blank columns if absent.
+psutil==7.2.2
+nvidia-ml-py==13.610.43
+
 # --- Dataset building (Materials Project pulls; run locally, not on the cluster) ---
 mp-api==0.46.1
+# Streaming JSON parser — lets `build-mptrj` walk the ~12 GB MPtrj dump one
+# material at a time instead of loading it whole.
+ijson==3.5.0
 
 # --- Plotting / analysis (run locally, not on the cluster) ---
 matplotlib==3.10.9

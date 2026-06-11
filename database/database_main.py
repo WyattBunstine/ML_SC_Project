@@ -19,7 +19,7 @@ def customwarn(message, category, filename, lineno, file=None, line=None):
 # preserves every one that is present so the MPNN can pick which to train on via
 # the config's `target_column` key (see CNN/MPNN/MPNNData.py). `tc` stays the
 # default/legacy target; extend this tuple to add new targets.
-KNOWN_TARGET_COLUMNS = ("tc", "e_above_hull", "formation_energy_per_atom")
+KNOWN_TARGET_COLUMNS = ("tc", "e_above_hull", "formation_energy_per_atom", "energy_per_atom")
 
 
 def _load_id_prop(csv_path, has_header=True):
@@ -54,12 +54,17 @@ def _unpack_source(data_file):
     return csv_path, cif_dir, label
 
 
-def generate_atom_init(output_file='database/datafiles/atom_init.json', max_z=85):
+def generate_atom_init(output_file='database/datafiles/atom_init.json', max_z=95):
     """Build the per-element feature file consumed by the CNN's AtomInitializer.
 
     Writes a JSON object mapping each atomic number Z (1 .. max_z - 1) to a feature
     vector: [Z, block, valence, atomic_radius, electron_affinity, ionization_energy,
     electronegativity, electron_affinity].
+
+    Default max_z=95 covers Z 1..94 (through Pu): the Materials Project formation-
+    energy data includes actinide-bearing compounds (U, Th, Pu, ...), and the ORIG
+    loader asserts on any element without an embedding here. Bump max_z further if a
+    dataset introduces still-heavier elements.
     """
     elements = {}
     for i in np.arange(1, max_z):
@@ -171,6 +176,14 @@ def _compact_v4_graph(graph: dict) -> dict:
     for edge in graph["edges"]:
         compact_edges.append({
             "id": edge["id"],
+            # Endpoint node ids, kept so the MPNN data layer can orient the
+            # directional (src/tgt) edge features RELATIVE TO THE CENTER atom when
+            # building each atom's neighbor list — otherwise voronoi_/ecn_weight
+            # src/tgt are in fixed storage order and are wrong for the ~half of
+            # directed edges whose center is the stored target. Legacy graphs that
+            # predate these keys fall back to the stored order (see MPNNData).
+            "source": int(edge["source"]),
+            "target": int(edge["target"]),
             "bond_length": float(edge["bond_length"]),
             "bond_length_over_sum_radii": float(edge["bond_length_over_sum_radii"])
                 if edge.get("bond_length_over_sum_radii") is not None else 0.0,
@@ -280,18 +293,75 @@ def _process_cgv4_row(task):
     cif_id, cif_path, graph_path = task
     from database.crystal_graph_v4_import import build_crystal_graph_from_cif
     try:
-        graph = build_crystal_graph_from_cif(cif_path)
+        # compute_spacegroup=False: the compact output drops the metadata block, so
+        # symmetry analysis is wasted work here — and spglib floods stderr / can
+        # wedge workers on distorted structures.
+        graph = build_crystal_graph_from_cif(cif_path, compute_spacegroup=False)
     except Exception as exc:
         return (graph_path, "build_fail", cif_id, f"{type(exc).__name__}: {exc}")
+    return _compact_and_write(graph, graph_path, cif_id)
+
+
+def _compact_and_write(graph, graph_path, item_id):
+    """Compact a full graph and write its JSON ATOMICALLY (tmp + os.replace).
+
+    Shared post-build tail of both build workers. The atomic rename guarantees
+    that a file at graph_path is always a complete JSON: a SIGKILL (e.g. SLURM
+    walltime) mid-write leaves only a .tmp orphan, never a truncated .json — so
+    the resumable builds' exists()-based skip can trust what it finds, and
+    readers never hit JSONDecodeError on a half-written graph.
+    """
+    tmp_path = graph_path + ".tmp"
     try:
         compact = _compact_v4_graph(graph)
-        with open(graph_path, "w") as f:
+        with open(tmp_path, "w") as f:
             json.dump(compact, f)
+        os.replace(tmp_path, graph_path)
     except Exception as exc:
-        if os.path.exists(graph_path):
-            os.remove(graph_path)
-        return (graph_path, "post_fail", cif_id, f"post-processing: {type(exc).__name__}: {exc}")
-    return (graph_path, "ok", cif_id, None)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        return (graph_path, "post_fail", item_id, f"post-processing: {type(exc).__name__}: {exc}")
+    return (graph_path, "ok", item_id, None)
+
+
+def _process_cgv4_structure_row(task):
+    """Worker: build + compact + write one graph JSON from an in-memory structure.
+
+    Same contract as ``_process_cgv4_row`` but the input is a serialized pymatgen
+    Structure dict (an MPtrj frame) instead of a CIF path, so no CIF round-trip.
+    task = (frame_id, structure_dict, graph_path). Returns the same status tuple
+    (graph_path, kind, frame_id, msg). Module-level so multiprocessing can pickle it.
+    """
+    frame_id, structure_dict, graph_path = task
+    from database.crystal_graph_v4_import import build_crystal_graph_from_structure
+    from pymatgen.core.structure import Structure
+    try:
+        structure = Structure.from_dict(structure_dict)
+        # compute_spacegroup=False: metadata-only field the compact output drops;
+        # spglib is also unreliable/slow on off-equilibrium MPtrj frames.
+        graph = build_crystal_graph_from_structure(structure, compute_spacegroup=False)
+    except Exception as exc:
+        return (graph_path, "build_fail", frame_id, f"{type(exc).__name__}: {exc}")
+    return _compact_and_write(graph, graph_path, frame_id)
+
+
+def _write_index_files(index_rows, output_index):
+    """Write the index pickle + csv for a list of row dicts.
+
+    Shared by the CIF-sourced and structure-sourced builders so the index schema
+    (column order, optional mp_id, target-column union) can never drift between
+    them. Columns: legacy core first, then mp_id when any row carries it, then
+    every recognized target column that appeared in any source.
+    """
+    present_targets = [c for c in KNOWN_TARGET_COLUMNS
+                       if any(c in r for r in index_rows)]
+    has_mp_id = any("mp_id" in r for r in index_rows)
+    columns = (["id", "value", "graph_path", "label"]
+               + (["mp_id"] if has_mp_id else []) + present_targets)
+    index_df = pd.DataFrame(index_rows, columns=columns)
+    index_df.to_pickle(output_index + ".pickle")
+    index_df.to_csv(output_index + ".csv", index=False)
+    return index_df
 
 
 def generate_CGv4_DB(data_files: list, output_dir='database/datafiles/MP/graphs_v4',
@@ -414,15 +484,185 @@ def generate_CGv4_DB(data_files: list, output_dir='database/datafiles/MP/graphs_
         with open(failed_log, "a") as f:
             f.writelines(failed_lines)
 
-    # Stable column order: legacy core columns first, then every target column
-    # that appeared in any source (missing -> NaN for rows whose source lacked it).
-    present_targets = [c for c in KNOWN_TARGET_COLUMNS
-                       if any(c in r for r in index_rows)]
-    columns = ["id", "value", "graph_path", "label"] + present_targets
-    index_df = pd.DataFrame(index_rows, columns=columns)
-    index_df.to_pickle(output_index + ".pickle")
-    index_df.to_csv(output_index + ".csv", index=False)
+    _write_index_files(index_rows, output_index)
     print(f"Done. {len(index_rows)} structures indexed, see {failed_log} for any failures.")
+
+
+def generate_CGv4_DB_from_structures(record_iter, output_dir, output_index,
+                                     label=1, limit=None, n_workers=None, chunksize=8):
+    """Build compact cgv4 graphs from a STREAM of in-memory structures + labels.
+
+    The CIF-based ``generate_CGv4_DB`` reads structures off disk; this variant
+    consumes an iterator of records so a multi-GB source (e.g. the 12 GB MPtrj
+    JSON) is never fully materialized. Each record is a dict:
+
+        {"id": <unique frame id>, "structure": <pymatgen Structure as_dict()>,
+         "formation_energy_per_atom": float, "energy_per_atom": float, ...}
+
+    Every recognized target column present (see ``KNOWN_TARGET_COLUMNS``) is
+    carried into the index pickle/csv so the MPNN picks one via `target_column`,
+    exactly like the CIF path. Writes one graph JSON per frame into ``output_dir``
+    and an index at ``output_index`` (+.pickle/.csv).
+
+    Resumable: a frame whose graph JSON already exists is indexed but not rebuilt,
+    so a re-run after a crash only does the remaining frames. Builds run across a
+    process pool; structures are fed lazily (bounded memory) while the lightweight
+    index rows accumulate in RAM. Duplicate ids are skipped (first wins).
+
+    Parameters
+    ----------
+    record_iter : iterable of record dicts (typically a generator that streams)
+    output_dir  : directory for per-frame JSON graphs
+    output_index: path prefix for the index pickle/csv
+    label       : value written to the index's `label` column. Default 1 to match
+                  the energy datasets (MP_Energy): under `SC_to_non_SC_ratio=inf`
+                  the split keeps only label==1 rows and drops label==0, so an
+                  energy-regression dataset must be label 1 or every frame is
+                  excluded from training.
+    limit       : if set, stop after streaming this many (unique) frames — for tests
+    n_workers   : pool size (default os.cpu_count())
+    chunksize   : tasks dispatched per worker hand-off (throughput knob)
+    """
+    import multiprocessing as mp
+
+    os.makedirs(output_dir, exist_ok=True)
+    failed_log = os.path.join(output_dir, "failed.txt")
+
+    index_rows = []      # lightweight rows (NO structure) -> the index at the end
+    ok_paths = set()     # graph_paths that exist (pre-existing or freshly built)
+    seen_ids = set()
+    counters = {"streamed": 0, "skipped_existing": 0, "built": 0, "dup": 0,
+                "failed": 0}
+    start = time.time()
+
+    # Failures are appended + flushed AS THEY HAPPEN (not buffered to the end):
+    # a cancelled/killed job must still leave the failure reasons on disk — the
+    # first cluster run was cancelled and lost all ~116k failure records because
+    # they only existed in memory. Writes are guarded so a full disk can't crash
+    # the run via its own error log.
+    failed_fh = open(failed_log, "a")
+
+    def _record_failure(fid, msg):
+        counters["failed"] += 1
+        try:
+            failed_fh.write(f"{fid}\t{msg}\n")
+            failed_fh.flush()
+        except OSError:
+            pass
+
+    # Resume detection: ONE directory scan up front instead of a per-frame
+    # os.path.exists — 1.6M individual stat() calls against a GPFS directory cost
+    # tens of minutes of metadata traffic in the single-threaded feeder; a scandir
+    # snapshot costs seconds. (Atomic .tmp orphans from a killed run are excluded
+    # by the suffix check and get overwritten harmlessly.)
+    existing_files = {e.name for e in os.scandir(output_dir)
+                      if e.name.endswith(".json")}
+    if existing_files:
+        print(f"  resume: {len(existing_files)} graphs already on disk", flush=True)
+
+    # Generator the pool's feeder thread drains: it both yields build tasks and
+    # records the lightweight index row for every frame (built or already cached).
+    def task_gen():
+        for rec in record_iter:
+            if limit and counters["streamed"] >= limit:
+                break
+            fid = str(rec["id"])
+            if fid in seen_ids:                       # guard against any duplicate frame id
+                counters["dup"] += 1
+                continue
+            seen_ids.add(fid)
+            counters["streamed"] += 1
+            graph_path = os.path.join(output_dir, fid + ".json")
+            row = {"id": fid, "graph_path": graph_path, "label": label, "value": None}
+            # Parent material id: REQUIRED for leakage-free train/val/test splits.
+            # Frames of one trajectory are near-duplicates, so the split must group
+            # by material (CIFDataV4 split_by="material"); the frame-id prefix is
+            # NOT a reliable parent (MPtrj has frames filed under a different
+            # mp_id), hence an explicit column.
+            if rec.get("mp_id") is not None:
+                row["mp_id"] = str(rec["mp_id"])
+            for c in KNOWN_TARGET_COLUMNS:
+                if rec.get(c) is not None:
+                    row[c] = float(rec[c])
+            index_rows.append(row)
+            if fid + ".json" in existing_files:       # resume: already built
+                ok_paths.add(graph_path)
+                counters["skipped_existing"] += 1
+                continue
+            yield (fid, rec["structure"], graph_path)
+
+    n_workers = (os.cpu_count() or 1) if n_workers is None else max(1, int(n_workers))
+
+    # Systematic-storage-failure breaker: legit per-structure failures are fine,
+    # but once writes start failing with quota/disk errors EVERY graph fails —
+    # the first cluster run burned 2h+ churning ~116k such failures. Abort fast
+    # with a clear message instead (the index for what DID build is still written).
+    storage_strikes = {"n": 0}
+    STORAGE_ERRORS = ("Disk quota exceeded", "No space left on device")
+
+    def _consume(results_iter):
+        for graph_path, kind, fid, msg in results_iter:
+            if kind == "ok":
+                ok_paths.add(graph_path)
+                counters["built"] += 1
+                storage_strikes["n"] = 0
+            else:
+                _record_failure(fid, msg)
+                if any(e in (msg or "") for e in STORAGE_ERRORS):
+                    storage_strikes["n"] += 1
+                    if storage_strikes["n"] >= 25:
+                        raise RuntimeError(
+                            "Aborting: 25 consecutive storage failures "
+                            f"(last: {msg}). The output filesystem is full or "
+                            "over quota — free space / raise the quota, then "
+                            "re-run (resumable; built graphs are kept).")
+            done = counters["built"] + counters["failed"]
+            if done % 200 == 0:
+                elapsed = time.time() - start
+                rate = done / elapsed if elapsed > 0 else 0.0
+                print(f"  built {counters['built']} | failed {counters['failed']} | "
+                      f"streamed {counters['streamed']} | {rate:.1f} graphs/s | "
+                      f"elapsed {_fmt_dur(elapsed)}", flush=True)
+
+    print(f"  building MPtrj graphs on {n_workers} worker(s) (streaming; resumable)...")
+    try:
+        if n_workers == 1:
+            _init_cgv4_worker()
+            _consume(map(_process_cgv4_structure_row, task_gen()))
+        else:
+            with mp.Pool(processes=n_workers, initializer=_init_cgv4_worker) as pool:
+                _consume(pool.imap_unordered(_process_cgv4_structure_row, task_gen(),
+                                             chunksize=chunksize))
+    except BaseException:
+        completed = False
+        raise
+    else:
+        completed = True
+    finally:
+        failed_fh.close()
+        # Write an index even when aborting mid-run (e.g. the storage breaker) so
+        # partial progress is inspectable — but an INCOMPLETE run must never
+        # clobber a complete existing index (a re-run that dies after streaming a
+        # few thousand frames would otherwise silently shrink a 1.5M-row index).
+        # Incomplete runs write to <output_index>.partial.* instead. Guarded: on a
+        # full disk this write can itself fail, and that must not mask the
+        # original error.
+        out_prefix = output_index if completed else output_index + ".partial"
+        status = ("complete" if completed
+                  else "PARTIAL — kept separate from any existing full index")
+        try:
+            final_rows = [r for r in index_rows if r["graph_path"] in ok_paths]
+            _write_index_files(final_rows, out_prefix)
+            print(f"Index written ({status}): "
+                  f"{out_prefix}.pickle — {len(final_rows)} frames "
+                  f"({counters['skipped_existing']} pre-existing, "
+                  f"{counters['built']} built this run, {counters['failed']} failed, "
+                  f"{counters['dup']} duplicate ids skipped). "
+                  f"See {failed_log} for any failures.", flush=True)
+        except OSError as exc:
+            print(f"WARNING: could not write index {out_prefix}.pickle: {exc}",
+                  flush=True)
+    return output_index + ".pickle"
 
 
 def generate_Basic_DB(data_files: list, output_file='database/datafiles/MP/SC_MP_basic', parallel=False, timing=False,

@@ -88,6 +88,51 @@ def cmd_build_db(args):
     print("Done.")
 
 
+def cmd_build_mptrj(args):
+    # Build cgv4 graphs for every MPtrj trajectory frame, streaming the bulk JSON
+    # so the 12 GB file is never fully loaded. Energy-only warm-up: each frame's
+    # ef_per_atom -> formation_energy_per_atom and energy_per_atom are indexed as
+    # selectable targets. Needs the RPToleranceFactor graph builder on the path
+    # (same as build-db --kind cgv4), so run this locally, then sync the resulting
+    # graphs_v4/ + index pickle to the cluster.
+    if not os.path.exists(args.input):
+        sys.exit(f"error: MPtrj JSON not found: {args.input}")
+    from database.Extract_MPtrj import iter_mptrj_frames
+
+    graph_dir = args.graph_dir or "database/datafiles/MPtrj/graphs_v4"
+    out = args.output or "database/datafiles/MPtrj/MPtrj_V4"
+    print(f"{_action_word(out + '.pickle')} MPtrj cgv4 dataset -> {out}.pickle / {out}.csv")
+    print(f"  Graph files -> {graph_dir}/   (source: {args.input})")
+    if args.limit:
+        print(f"  (limited to first {args.limit} frames)")
+    database.generate_CGv4_DB_from_structures(
+        iter_mptrj_frames(args.input),
+        output_dir=graph_dir,
+        output_index=out,
+        limit=args.limit,
+        n_workers=args.workers,
+    )
+    print("Done.")
+
+
+def cmd_pack_dataset(args):
+    # Pack a cgv4 index (any dataset: MP_Energy, SC, MPtrj) into the columnar
+    # binary format that PackedCIFDataV4 trains from: graph JSONs are parsed and
+    # neighbor lists extracted ONCE here; training then memory-maps tensors
+    # (~20-40x faster sample reads, no per-epoch JSON cost). Point a config's
+    # index_path at the output directory to train from it.
+    if not os.path.exists(args.index):
+        sys.exit(f"error: index not found: {args.index}")
+    sys.path.insert(0, os.path.join("CNN", "MPNN"))
+    from MPNNPack import pack_dataset
+    print(f"Packing {args.index} -> {args.out}")
+    if args.limit:
+        print(f"  (limited to first {args.limit} samples)")
+    pack_dataset(args.index, args.out, n_workers=args.workers,
+                 limit=args.limit)
+    print("Done.")
+
+
 def cmd_download_nonsc(args):
     # Lazy import: only needs pymatgen/mp_api when actually downloading, and keeps
     # the (heavy) import off the path of other commands.
@@ -162,9 +207,10 @@ def cmd_train_mpnn(args):
 def cmd_plot(args):
     import plot  # imported lazily so matplotlib isn't loaded for other commands
     if args.epoch_log:
-        if not os.path.exists(args.epoch_log):
-            sys.exit(f"error: epoch-log file not found: {args.epoch_log}")
-        plot.plot_epoch_log(args.epoch_log)
+        missing = [f for f in args.epoch_log if not os.path.exists(f)]
+        if missing:
+            sys.exit("error: epoch-log file(s) not found: " + ", ".join(missing))
+        plot.plot_epoch_logs(args.epoch_log)
         return
     if not os.path.exists(args.results):
         sys.exit(f"error: results file not found: {args.results} (train a model first)")
@@ -204,6 +250,8 @@ typical workflow (from the project root):
   python main.py train configs/orig_classify_basic.json  # classification: train + evaluate
 
   python main.py plot                               # visualize CNN/test_result.csv
+  python main.py plot --epoch-log CNN/MPNN/mpnn_result_epoch_log.csv   # one run's per-epoch stats
+  python main.py plot --epoch-log run_a/..._epoch_log.csv run_b/..._epoch_log.csv  # compare runs
 
   # MP energy-target benchmark (needs MP_API_KEY for the download):
   python main.py download-energy                    # experimental MP structures + energies
@@ -321,8 +369,9 @@ def build_parser():
     db.add_argument(
         "--max-z",
         type=int,
-        default=85,
-        help="[atom-init] generate features for Z = 1 .. max_z - 1 (default: 85)",
+        default=95,
+        help="[atom-init] generate features for Z = 1 .. max_z - 1 (default: 95, "
+             "covers actinides through Pu present in the MP energy data)",
     )
     db.add_argument(
         "--graph-dir",
@@ -405,6 +454,51 @@ def build_parser():
                     help="include theoretical (non-experimental) materials too")
     de.set_defaults(func=cmd_download_energy)
 
+    mt = sub.add_parser(
+        "build-mptrj",
+        help="build cgv4 graphs for every MPtrj trajectory frame (energy-only warm-up)",
+        description="Stream the bulk MPtrj JSON (~12 GB, ~1.5M frames) and build one "
+                    "compact crystal_graph_v4 per frame, with each frame's ef_per_atom "
+                    "(-> formation_energy_per_atom) and energy_per_atom indexed as "
+                    "selectable targets. Resumable: re-running skips frames whose graph "
+                    "already exists. Needs the RPToleranceFactor builder on the path "
+                    "(run locally), then sync graphs_v4/ + the index pickle to the cluster. "
+                    "Train with: python main.py train-mpnn <config> (index_path -> the pickle).",
+    )
+    mt.add_argument("--input", default="database/datafiles/MPtrj/MPtrj_2022.9_full.json",
+                    help="bulk MPtrj JSON (default: database/datafiles/MPtrj/MPtrj_2022.9_full.json)")
+    mt.add_argument("--graph-dir", default=None,
+                    help="output dir for per-frame graph JSONs (default: database/datafiles/MPtrj/graphs_v4)")
+    mt.add_argument("--output", default=None,
+                    help="index pickle/csv path prefix (default: database/datafiles/MPtrj/MPtrj_V4)")
+    mt.add_argument("--limit", type=int, default=None,
+                    help="only build the first N frames (for a quick end-to-end test)")
+    mt.add_argument("--workers", type=int, default=None,
+                    help="worker processes (default: os.cpu_count())")
+    mt.set_defaults(func=cmd_build_mptrj)
+
+    pk = sub.add_parser(
+        "pack-dataset",
+        help="pack a cgv4 index + graphs into the fast columnar training format",
+        description="One-time conversion: parse every graph JSON referenced by an "
+                    "index pickle and store the extracted neighbor data as flat "
+                    "binary arrays + offsets (see CNN/MPNN/MPNNPack.py). Training "
+                    "configs then point index_path at the output DIRECTORY; sample "
+                    "tensors are bitwise-identical to the lazy loader but ~20-40x "
+                    "faster to read (no JSON parse / neighbor build per epoch). "
+                    "max_num_nbr / poly / angle flags stay read-time parameters — "
+                    "one pack serves every config variant.",
+    )
+    pk.add_argument("--index", required=True,
+                    help="source index pickle (e.g. database/datafiles/MPtrj/MPtrj_V4.pickle)")
+    pk.add_argument("--out", required=True,
+                    help="output pack directory (e.g. .../MPtrj/packed_v1)")
+    pk.add_argument("--workers", type=int, default=None,
+                    help="extraction worker processes (default: os.cpu_count())")
+    pk.add_argument("--limit", type=int, default=None,
+                    help="only pack the first N samples (for testing)")
+    pk.set_defaults(func=cmd_pack_dataset)
+
     pl = sub.add_parser(
         "plot",
         help="scatter-plot CNN test predictions vs. targets",
@@ -417,8 +511,11 @@ def build_parser():
     )
     pl.add_argument(
         "--epoch-log",
-        help="instead of the scatter, plot per-epoch stats from an *_epoch_log.csv "
-             "(interactive: checkboxes toggle which columns are shown)",
+        nargs="+",
+        metavar="EPOCH_LOG",
+        help="instead of the scatter, overlay per-epoch stats from one or more "
+             "*_epoch_log.csv files (interactive: a row=metric / col=run table "
+             "toggles individual lines; legend grouped by run)",
     )
     pl.set_defaults(func=cmd_plot)
 
