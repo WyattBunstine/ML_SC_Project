@@ -89,13 +89,15 @@ def main():
 
     classification = args.get("task", "regression") == "classification"
 
-    # --- Per-run output directory: model_data/<run_tag>_<timestamp>/ ---
+    # --- Per-run output directory: model_data/<date>/<run_tag>/<run_id>/ ---
     # Mirrors the MPNN trainer: each run is self-contained (config copy +
-    # metadata.json + all artifacts). run_tag defaults to "Orig" for the baseline.
+    # metadata.json + all artifacts), nested under <date>/<run_tag>/ to keep
+    # model_data/ navigable. run_tag defaults to "Orig" for the baseline.
     run_tag = args.get("run_tag", "Orig")
     model_data_dir = args.get("model_data_dir", "model_data")
-    run_id = f"{run_tag}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    run_dir = os.path.join(model_data_dir, run_id)
+    now = datetime.datetime.now()
+    run_id = f"{run_tag}_{now.strftime('%Y-%m-%d_%H-%M-%S')}"
+    run_dir = os.path.join(model_data_dir, now.strftime('%Y-%m-%d'), run_tag, run_id)
     os.makedirs(run_dir, exist_ok=True)
     shutil.copy(sys.argv[1], os.path.join(run_dir, "config.json"))
     out_base = os.path.basename(args.get("out_file", "result")) or "result"
