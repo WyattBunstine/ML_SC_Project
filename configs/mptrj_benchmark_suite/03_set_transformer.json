@@ -1,0 +1,42 @@
+{
+    "index_path": "${ML_SC_DATA}/MPtrj/packed_v1",
+    "target_column": "formation_energy_per_atom",
+    "max_num_nbr": 14,
+    "max_num_poly_nbr": 64,
+    "atom_feat_len": 64,
+    "edge_hidden_dim": 64,
+    "n_conv": 3,
+    "h_feat_len": 128,
+    "n_hidden": 1,
+    "task": "regression",
+    "target_transform": "none",
+    "edge_aggregation": "set_transformer",
+    "atom_pooling": "mean",
+    "use_poly_edges": true,
+    "normalize_features": true,
+    "SC_to_non_SC_ratio": "inf",
+    "split_by": "material",
+    "batch_size": 512,
+    "num_workers": 12,
+    "prebuild_dataset": false,
+    "val_ratio": 0.05,
+    "test_ratio": 0.05,
+    "optim": "AdamW",
+    "learning_rate": 0.004,
+    "momentum": 0.9,
+    "weight_decay": 1e-05,
+    "lr_milestones": [
+        30,
+        50
+    ],
+    "epochs": 60,
+    "print_split": 200,
+    "out_file": "CNN/MPNN/mpnn_result",
+    "slurm": {
+        "cpus": 24,
+        "mem": "96G",
+        "time": "10:00:00"
+    },
+    "set_transformer_heads": 4,
+    "run_tag": "mptrjB_03_set_transformer"
+}

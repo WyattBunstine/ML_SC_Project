@@ -23,7 +23,7 @@ These have no default; the run fails (or behaves undefined) without them.
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `index_path` | string | Path to the index pickle produced by `build-db --kind cgv4` (e.g. `database/datafiles/MP/SC_MP_V4.pickle`). Each row points at a per-material graph JSON. |
+| `index_path` | string | Path to the index pickle produced by `build-db --kind cgv4` (e.g. `database/datafiles/MP/SC_MP_V4.pickle`), OR a **packed dataset directory** produced by `main.py pack-dataset` (auto-detected; ~30x faster sample reads, recommended for large datasets like MPtrj). |
 | `out_file` | string | Output path **prefix**. All artifacts are written as `<out_file>...` (see [Outputs](#outputs)). |
 | `epochs` | int | Number of training epochs. |
 | `batch_size` | int | Crystals per batch. |
@@ -82,8 +82,16 @@ a false alarm.
 | `max_num_nbr` | int | `14` | Bonding-edge neighbors per atom (padded/truncated to this length). |
 | `max_num_poly_nbr` | int | `16` | Polyhedral-edge neighbors per atom (padded/truncated). |
 | `graph_cache_size` | int | `4096` | Max number of **fully-built samples** kept in each worker's in-memory LRU cache. The cache stores the built tensors (not the parsed JSON), so a cached item skips the read *and* all the per-atom neighbor sorting/padding/stacking — the dominant CPU cost — on every epoch after the first. `0` = unbounded. Each worker holds its own cache (with `num_workers > 0`), so cache RAM ≈ `num_workers × graph_cache_size × (built-sample size)`. A built sample is ~60 KB at `max_num_poly_nbr=16`, ~145 KB at `64`. Keep that product under roughly half of the job's RAM. Because built samples are smaller than the old JSON cache, you can afford a much larger value here — ideally large enough to hold each worker's working set so later epochs are nearly free on CPU. |
-| `num_workers` | int | `0` | DataLoader worker processes. `> 0` overlaps loading with compute; workers are persistent so their caches survive across epochs. |
+| `num_workers` | int | `0` | DataLoader worker processes. `> 0` overlaps loading with compute; workers are persistent so their caches survive across epochs. Ignored when `prebuild_dataset` is on (forced to 0 — nothing left to build, and GPU-resident tensors can't cross a worker). |
+| `prebuild_dataset` | bool | `false` | Build **every** sample once up front and keep them all resident, so `__getitem__` becomes a list index (no per-epoch rebuild). Best when the built dataset fits in memory; the build is a one-time ~3–4 min for ~49k graphs. Forces `num_workers=0`. For datasets too large to reside, leave this `false` and use the streaming/LRU path (`num_workers>0` + `graph_cache_size`). |
+| `prebuild_device` | string | `"cpu"` | Where a prebuilt dataset lives: `"cpu"` (RAM; per-batch pinned `non_blocking` copy to GPU — recommended), `"cuda"` (VRAM; removes the per-batch copy but slower startup and spends VRAM), or `"auto"` (cuda if it fits with model headroom, else cpu). Training throughput is ~identical between cpu/cuda. |
 | `split_seed` | int | `123` | Seed for the stratified train/val/test split and the per-epoch non-SC sampling. |
+| `split_by` | string | auto | `"material"` splits whole materials (all frames of one `mp_id` land in the same split — REQUIRED for trajectory datasets like MPtrj, where a frame-level split leaks near-duplicate frames); `"frame"` is the historical row-level split. Default: `material` when the index carries `mp_id`, else `frame`. The resolved value is recorded in `metadata.json`. |
+
+> **Scaling past memory:** for large datasets, pack once with
+> `python main.py pack-dataset` and point `index_path` at the pack directory
+> (~30x faster reads, bitwise-identical samples). Details and the other
+> residence modes: [`CNN/MPNN/DATALOADING.md`](../CNN/MPNN/DATALOADING.md).
 
 ### Model architecture
 
@@ -95,7 +103,10 @@ a false alarm.
 | `h_feat_len` | int | `128` | — | MLP hidden dimension after pooling. |
 | `n_hidden` | int | `1` | — | Number of post-pool MLP layers. |
 | `use_poly_edges` | bool | `true` | — | Message-pass over polyhedral (corner/edge/face-sharing) edges in addition to bonding edges. When `false`, poly inputs are ignored. |
-| `edge_aggregation` | string | `"ecn_weighted"` | `"ecn_weighted"`, `"attention"` | How edge messages are aggregated onto each atom. `ecn_weighted` uses the physical ECoN weight (bonds) / shared_count (poly); `attention` learns a per-edge score. |
+| `edge_aggregation` | string | `"ecn_weighted"` | `"ecn_weighted"`, `"attention"`, `"set_transformer"` | How edge messages are aggregated onto each atom. `ecn_weighted` uses the physical ECoN weight (bonds) / shared_count (poly); `attention` learns a per-edge score; `set_transformer` runs multi-head self-attention over the neighbor tokens with the inter-neighbor bond angle as a per-head attention bias (bond channel only; poly stays `ecn_weighted`). |
+| `set_transformer_heads` | int | `4` | — | Attention heads for `edge_aggregation: "set_transformer"`; `atom_feat_len` must be divisible by it. Ignored otherwise. |
+| `poly_fusion` | string | `"sum"` | `"sum"`, `"gate"` | How the bond and poly messages combine in the dual conv: plain addition, or learned per-channel sigmoid gates over both messages (initialized near the additive baseline). |
+| `use_coord_magnitude` | bool | `false` | — | Re-inject each atom's total raw coordination weight (log1p of the summed ECoN / shared_count) through a learned projection — the intensive weighted aggregation otherwise discards coordination magnitude. |
 | `atom_pooling` | string | `"mean"` | `"mean"`, `"mean_max"`, `"attention"`, `"set2set"` | How atom embeddings are read out into one crystal vector. `mean` = global mean; `mean_max` = concat(mean, max) (2× width, surfaces the most active atom); `attention` = learned per-atom softmax weighting (single step); `set2set` = LSTM-driven multi-step attention readout (Vinyals 2015), 2× width. |
 | `set2set_steps` | int | `3` | — | Number of Set2Set processing steps. Only used when `atom_pooling` is `"set2set"`. |
 | `normalize_features` | bool | `true` | — | Standardize node/edge/poly input features (per-feature z-score) using stats computed on the training split. Strongly recommended. |
@@ -179,16 +190,18 @@ workflow.
 
 ## Outputs
 
-Each run creates a self-contained directory
-`<model_data_dir>/<run_tag>_<YYYY-MM-DD_HH-MM-SS>/` (e.g.
-`model_data/MPNN_2026-06-03_14-30-12/`). Inside, artifacts use the `out_file`
+Each run creates a self-contained directory nested by date and run tag:
+`<model_data_dir>/<YYYY-MM-DD>/<run_tag>/<run_tag>_<YYYY-MM-DD_HH-MM-SS>/` (e.g.
+`model_data/2026-06-03/MPNN/MPNN_2026-06-03_14-30-12/`). The nesting keeps
+`model_data/` navigable as runs accumulate; the leaf keeps the full run id so
+it's self-describing in isolation. Inside, artifacts use the `out_file`
 basename as their prefix (shown below as `<base>`):
 
 | File | When | Contents |
 |------|------|----------|
 | `config.json` | always | Copy of the exact config used for this run. |
 | `metadata.json` | always | Resolved hyperparameters, feature dims, split sizes, and model size — total/trainable params, effective train samples/epoch, and **params per train sample**. |
-| `<base>_epoch_log.csv` | always | Per-epoch metrics (loss, MAE/acc, val metrics, LR, time, is_best). |
+| `<base>_epoch_log.csv` | always | Per-epoch metrics (loss, MAE/acc, val metrics, LR, time, is_best) **plus resource telemetry**: `train_time_sec` / `data_time_sec` (time in the train loop vs. waiting on the dataloader), `gpu_util_pct` (mean), `gpu_mem_gb` (peak), `cpu_pct` (mean, process tree incl. workers; 100 = one core), `rss_gb` (peak). Resource columns need `psutil` + `nvidia-ml-py` (blank otherwise). |
 | `<base>_checkpoint.pth.tar` | always | Latest checkpoint (model + optimizer + normalizer + args). |
 | `<base>_model_best.pth.tar` | always | Best checkpoint (regression: lowest realistic-val MAE; classification: best realistic-val `selection_metric`). |
 | `<base>_losstrain.csv.npy`, `<base>_lossval.csv.npy` | regression | Train/val loss curves. |
@@ -201,6 +214,20 @@ in a **realistic** form (the composition set by `SC_to_non_SC_ratio`) and a
 **balanced** form (1:1, drawn from the same ratio-limited non-SC pool). The two
 coincide when the ratio is ≥ 1, and both are SC-only when the ratio is `inf`
 (non-SC are then excluded from every split, not just train).
+
+### Managing accumulated runs
+
+`scripts/deploy.sh fetch` regenerates `model_data/index.csv` — one row per run
+(date, tag, target, params, epochs trained vs target, completeness, and the
+best-epoch val metrics) so runs are comparable without opening folders.
+
+- `./scripts/deploy.sh reorg` migrates any older **flat** runs into the
+  `<date>/<run_tag>/` layout on both the cluster and locally (idempotent; new
+  runs are already born nested). Add `--dry-run` to preview the move plan.
+- `./scripts/deploy.sh archive <rel_path> [...]` retires a run (use the
+  `rel_path` from `index.csv`) into `model_data/.archive/` on both sides; `fetch`
+  skips `.archive`, so retired runs stop being pulled back and the clutter is
+  gone from the active tree for good (still recoverable under `.archive/`).
 
 ---
 

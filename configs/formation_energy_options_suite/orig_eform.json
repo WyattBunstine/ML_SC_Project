@@ -2,7 +2,7 @@
   "models": "ORIG",
   "dataset_rd": "database/datafiles/MP_Energy",
   "atom_init": "../atom_init.json",
-  "dataset": "MP_Energy_basic.pickle",
+  "dataset": "MP_Energy_orig.pickle",
   "target_column": "formation_energy_per_atom",
 
   "batch_size": 128,
@@ -15,11 +15,11 @@
   "n_hidden": 1,
 
   "optim": "SGD",
-  "learning_rate": 0.01,
-  "momentum": 0.9,
-  "weight_decay": 0.0,
-  "lr_milestones": [100],
-  "epochs": 1000,
+  "learning_rate":   0.001,
+  "momentum":        0.9,
+  "weight_decay":    0.00001,
+  "lr_milestones":   [200, 400],
+  "epochs":          500,
 
   "out_file": "CNN/test_result",
   "print_split": 10

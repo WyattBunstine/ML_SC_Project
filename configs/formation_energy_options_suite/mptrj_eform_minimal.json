@@ -1,5 +1,5 @@
 {
-    "index_path":      "database/datafiles/MP_Energy/MP_Energy_V4.pickle",
+    "index_path":      "${ML_SC_DATA}/MPtrj/packed_v1",
     "target_column":   "formation_energy_per_atom",
     "max_num_nbr":     14,
     "max_num_poly_nbr": 64,
@@ -17,28 +17,31 @@
     "normalize_features": true,
 
     "SC_to_non_SC_ratio": "inf",
+    "split_by":        "material",
 
     "batch_size":      128,
     "num_workers":     12,
-    "prebuild_dataset": true,
-    "prebuild_device": "cuda",
-    "graph_cache_size": 50000,
-    "val_ratio":       0.1,
-    "test_ratio":      0.1,
+
+    "prebuild_dataset": false,
+    "graph_cache_size": 100000,
+
+    "val_ratio":       0.05,
+    "test_ratio":      0.05,
 
     "optim":           "AdamW",
     "learning_rate":   0.001,
     "momentum":        0.9,
     "weight_decay":    0.00001,
-    "lr_milestones":   [200, 400],
-    "epochs":          500,
+    "lr_milestones":   [20, 40],
+    "epochs":          60,
 
     "print_split":     10,
-    "run_tag":         "eform_minimal",
+    "run_tag":         "mptrj_eform_minimal",
     "out_file":        "CNN/MPNN/mpnn_result",
 
     "slurm": {
         "cpus": 24,
-        "mem": "96G"
+        "mem": "96G",
+        "time": "24:00:00"
     }
 }

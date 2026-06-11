@@ -34,7 +34,7 @@
     "epochs":          500,
 
     "print_split":     10,
-    "run_tag":         "eform_minimal",
+    "run_tag":         "eformV2_01_poly_off",
     "out_file":        "CNN/MPNN/mpnn_result",
 
     "slurm": {
