@@ -29,3 +29,8 @@ ijson==3.5.0
 
 # --- Plotting / analysis (run locally, not on the cluster) ---
 matplotlib==3.10.9
+
+# --- Frozen-encoder embeddings (main.py embed-mace; T_c head, Phase 1) ---
+# Pulls e3nn + ase. Only needed where embeddings are (re)computed — the head
+# itself trains from cached .npy files without it. Local: 0.3.16.
+mace-torch

@@ -16,9 +16,18 @@ _LINESTYLES = ["-", "--", "-.", ":"]
 def plot_results(results_file=DEFAULT_RESULTS):
     """Scatter-plot CNN test predictions vs. targets.
 
-    ``results_file`` is the headerless (cif_id, target, prediction) CSV written by
-    CGCNNMain.py's test pass.
+    Accepts either format, sniffed from the first line:
+    - the headerless (cif_id, target, prediction) CSV written by CGCNNMain.py's
+      test pass;
+    - a T_c-head run's ``predictions.csv`` (header with ``tc_true_K`` plus one
+      ``tc_<series>_K`` column per prediction series) -> toggleable multi-series
+      scatter, see :func:`plot_head_predictions`.
     """
+    with open(results_file) as f:
+        header = f.readline()
+    if "tc_true_K" in header:
+        return plot_head_predictions(results_file)
+
     data = pd.read_csv(results_file, header=None)
 
     mse = np.sum(np.abs(data[1] - data[2])) / len(data[1])
@@ -30,6 +39,111 @@ def plot_results(results_file=DEFAULT_RESULTS):
     plt.ylabel("prediction")
     plt.legend()
     plt.show()
+
+
+# Family display order: conventional-leaning first, then oxide, then the
+# unconventional families — so the legend reads along the mechanism axis.
+_FAMILY_ORDER = ["Other", "Chevrel", "Carbon", "Oxide",
+                 "Cuprate", "Ferrite", "Heavy_fermion"]
+_SERIES_MARKERS = ["o", "^", "s", "D", "v", "P"]
+
+
+def plot_head_predictions(predictions_file):
+    """Pred-vs-true scatter for a T_c-head run's ``predictions.csv``.
+
+    Encoding: **color = superconductor family, marker = prediction series**
+    (probe, head, and any future ``tc_<series>_K`` column — discovered from the
+    header, nothing hardcoded). Check boxes toggle each series and each family
+    independently (a point shows when both its series and its family are on),
+    plus a linear/log axis switch — symlog, so the T_c = 0 rows stay visible.
+    Per-series test MAE is shown in the legend; the dashed line is y = x.
+    """
+    from matplotlib.lines import Line2D
+    from matplotlib.widgets import CheckButtons
+
+    df = pd.read_csv(predictions_file)
+    target_all = df["tc_true_K"].to_numpy()
+    pred_cols = [c for c in df.columns
+                 if c.startswith("tc_") and c.endswith("_K") and c != "tc_true_K"]
+    if not pred_cols:
+        raise ValueError(f"no tc_<series>_K prediction columns in {predictions_file}")
+
+    fam_col = df["family"] if "family" in df.columns else pd.Series(["all"] * len(df))
+    families = ([f for f in _FAMILY_ORDER if f in set(fam_col)]
+                + sorted(set(fam_col) - set(_FAMILY_ORDER)))
+    colors = plt.get_cmap("tab10").colors
+    fam_color = {f: colors[i % len(colors)] for i, f in enumerate(families)}
+
+    fig, ax = plt.subplots(figsize=(9.5, 6.5))
+    fig.subplots_adjust(left=0.30, right=0.78)
+
+    # One scatter per (series, family): visibility = series on AND family on.
+    names, series_mae, points = [], {}, {}
+    hi = float(max(target_all.max(), df[pred_cols].to_numpy().max(), 1.0)) * 1.05
+    for si, col in enumerate(pred_cols):
+        name = col[len("tc_"):-len("_K")]
+        names.append(name)
+        series_mae[name] = float(np.abs(df[col] - target_all).mean())
+        marker = _SERIES_MARKERS[si % len(_SERIES_MARKERS)]
+        for fam in families:
+            m = (fam_col == fam).to_numpy()
+            if not m.any():
+                continue
+            points[(name, fam)] = ax.scatter(
+                target_all[m], df[col].to_numpy()[m], s=18, alpha=0.6,
+                marker=marker, color=fam_color[fam], linewidths=0)
+
+    ax.plot([0, hi], [0, hi], color="black", linestyle="--", linewidth=1)
+    ax.set_xlim(0, hi)
+    ax.set_ylim(0, hi)
+    ax.set_xlabel("experimental T_c (K)")
+    ax.set_ylabel("predicted T_c (K)")
+    run_dir = os.path.basename(os.path.dirname(os.path.abspath(predictions_file)))
+    ax.set_title(f"T_c head test predictions — {run_dir}", fontsize="medium")
+
+    # Two-part legend outside the axes: series (marker, with MAE) + families (color).
+    handles = [Line2D([], [], linestyle="none", marker=_SERIES_MARKERS[si], color="0.35",
+                      label=f"{n} — MAE {series_mae[n]:.2f} K")
+               for si, n in enumerate(names)]
+    handles += [Line2D([], [], linestyle="none", marker="o", color=fam_color[f],
+                       label=f"{f} (n={int((fam_col == f).sum())})")
+                for f in families]
+    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1.0),
+              fontsize="small", frameon=True)
+
+    # Toggle stacks on the left: series, families, axis scale.
+    series_ax = fig.add_axes([0.03, 0.74, 0.20, 0.04 + 0.045 * len(names)])
+    series_ax.set_title("series", fontsize="small")
+    series_checks = CheckButtons(series_ax, names, [True] * len(names))
+
+    fam_ax = fig.add_axes([0.03, 0.30, 0.20, 0.04 + 0.045 * len(families)])
+    fam_ax.set_title("family", fontsize="small")
+    fam_checks = CheckButtons(fam_ax, families, [True] * len(families))
+
+    scale_ax = fig.add_axes([0.03, 0.16, 0.20, 0.08])
+    scale = CheckButtons(scale_ax, ["log axes"], [False])
+
+    def refresh(_label=None):
+        s_on = dict(zip(names, series_checks.get_status()))
+        f_on = dict(zip(families, fam_checks.get_status()))
+        for (name, fam), sc in points.items():
+            sc.set_visible(s_on[name] and f_on[fam])
+        fig.canvas.draw_idle()
+
+    def on_scale(_label):
+        kind = "symlog" if scale.get_status()[0] else "linear"
+        extra = {"linthresh": 1.0} if kind == "symlog" else {}
+        ax.set_xscale(kind, **extra)
+        ax.set_yscale(kind, **extra)
+        fig.canvas.draw_idle()
+
+    series_checks.on_clicked(refresh)
+    fam_checks.on_clicked(refresh)
+    scale.on_clicked(on_scale)
+    ax._head_widgets = (series_checks, fam_checks, scale)  # keep refs until show()
+
+    plt.show()
+    return fig
 
 
 def _autoscale_to_visible(ax, lines):

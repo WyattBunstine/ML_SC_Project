@@ -1,0 +1,16 @@
+{
+ "name": "head_mace_mp0_3dsc_noclass",
+ "index_path": "database/datafiles/MP/SC_Full_v4.pickle",
+ "embed_dir": "database/datafiles/MP/mace_mp0_medium",
+ "descriptors": "database/datafiles/MP/head_descriptors_v1.pickle",
+ "metadata_csv": "database/datafiles/MP/3DSC_MP.csv",
+ "split_seed": 123,
+ "val_frac": 0.1,
+ "test_frac": 0.2,
+ "pca_k": 64,
+ "hidden": 64,
+ "dropout": 0.2,
+ "class_pretrain": false,
+ "n_seeds": 5,
+ "device": "cpu"
+}

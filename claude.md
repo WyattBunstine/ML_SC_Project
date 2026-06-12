@@ -274,100 +274,140 @@ near-duplicate frames.
 
 ---
 
-## Future Directions / Research Roadmap
+## Research Roadmap (rewritten 2026-06-12; phased)
 
-**Premise.** The end goal is predicting superconducting **T_c**; formation energy is a
-"more solved" benchmark used to refine the model. T_c is physically governed by (a)
-**phonons / lattice dynamics** (electron-phonon coupling λ, ω_log — the BCS channel),
-(b) **electronic structure** (DOS at E_F), and (c) **magnetism / spin fluctuations**
-(dominant in unconventional SCs, but phonons likely still contribute there too — the
-cuprate isotope effect is nonzero and grows toward the dome edges, and phonon–spin
-coupling is real). The current model encodes **chemistry + static geometry** but **no
-dynamics and no magnetism** — that gap is where the roadmap aims. The recurring
-constraint is that T_c is **data-starved and label-noisy**, so *transfer learning is the
-through-line* of most of these ideas.
+**Premise.** The end target is superconducting **T_c**: data-starved (~6k labels) and
+label-noisy. Physically, T_c is governed by (a) **phonons / lattice dynamics**
+(electron-phonon coupling λ, ω_log — the BCS channel), (b) **electronic structure**
+(DOS at E_F), and (c) **magnetism / spin fluctuations** (dominant in unconventional
+SC). The central strategy is now **transfer learning**: borrow a force-pretrained
+universal MLIP backbone (MACE-MP-0 / CHGNet — both trained on MPtrj), attach our
+chemically-informed model as the T_c head, and fine-tune through a staged curriculum.
+The scientific deliverable beyond screening: the **conventional-vs-unconventional
+generalization gap** of a phonon-pretrained model — measured *differentially* against
+matched no-pretraining baselines — as an interpretable probe of what physics beyond
+electron-phonon is missing. Literature check (2026-06-12) found no prior study doing
+this; closest precedent is Stanev 2018's cross-family non-transfer. Key physics
+caveat: forces carry the phonon *denominator* of λ = N(E_F)⟨I²⟩/M⟨ω²⟩ only — the
+electronic numerator needs auxiliary supervision (Phase 3).
 
-Ordered roughly by effort; each notes *why it should help*, the *honest caveat*, and a
-*first step*.
+**Status ledger (what the original roadmap items became).** Done: 3-body angles
+(old #1) — angle triplets stored and consumed two ways (`use_bond_angles` mean-RBF;
+`set_transformer` angle-biased local attention); the MPtrj 6-arm benchmark
+(2026-06-11) made set_transformer the best arm (val MAE 0.0397 vs 0.0429 poly_on,
+~−7%), and the gain is not explained by parameter count (the gate arm has more
+params, zero gain). Dihedrals stored but unconsumed (old #2 — consumption lands in
+Phase 4). MPtrj scale infra (old #6): 1.58M-frame packed store, material splits,
+telemetry, paired-stats tooling (`scripts/compare_runs.py`), vectorized readout.
+Benchmarked and rejected: `coord_magnitude` (worse than baseline at MPtrj scale —
+off by default). Old #4 (MLIP-derived features) folds into Phase 1; old #5
+(pretrain→fine-tune) is the spine of Phases 1–4; old #3 (magnetism) lands in
+Phase 3; old #7 (hypergraph) is Phase 5 stretch.
 
-1. **Three-body bond angles (line graph, ALIGNN-style) — near-term, in progress.**
-   Bonding edges are currently purely two-body (distance/weights/Δχ); the only angles are
-   the coarse polyhedral mean/std on poly-edges. Add the full set of bond angles at each
-   atom via a line graph (nodes = bonds, line-graph edges = bond pairs at a shared atom),
-   the angle expanded in an **RBF(cos θ)** basis. *Why:* the complete rotation-invariant
-   3-body descriptor disambiguates local environments (square-planar vs octahedral, etc.).
-   *Caveat:* 3-body is provably incomplete (Pozdnyakov–Ceriotti 2020) but captures most
-   signal for scalar targets. *First step:* extend the external `crystal_graph_v4` builder
-   to emit bond-angle triplets (and **store dihedrals in the same rebuild** — see #2), add a
-   line-graph channel to `CrystalMPNN`, rebuild graphs once.
+### Phase 0 — close out the MPtrj benchmark round
+Resubmit poly_off (job 25518913 hit SLURM launch-failure requeue hold; exclude the
+flaky node), walltimes 12h (60 epochs needs 9–11h). Add two control arms to settle
+*why* set_transformer won: a **width-matched poly_on** (~126k params — kills the
+capacity explanation for good) and **`use_bond_angles` + ecn_weighted** (angle
+*information* vs attention *mechanism*). Fix `scripts/eval_test.py` to honor
+`build_angle_bias` from the checkpoint config before producing any test-set numbers.
 
-2. **Dihedral / 4-body terms (GemNet-style) — a falsifiable T_c hypothesis.**
-   *Why:* dihedrals close the 3-body completeness gap and help GemNet most on *forces /
-   dynamics* — which, if phonons matter for pairing, may transfer to T_c. *Caveat / the
-   honest gap:* T_c is a rotation-invariant **scalar**, mechanistically more like formation
-   energy (where 4-body gains are modest) than like the **vector** force targets where
-   dihedrals shine. *Clean experiment:* store dihedrals during the #1 rebuild but gate them
-   behind a flag, then ablate on **both** formation energy and T_c — the hypothesis predicts
-   *Δ(T_c) ≫ Δ(formation energy)*. Confirm or refute with one controlled test, no second
-   rebuild.
+### Phase 1 — pluggable encoder contract (representation-level plug)
+**STATUS: BUILT + first results (2026-06-12).** `CNN/head/` — embed_mace.py
+(`main.py embed-mace`; per-structure alignment assertions, 5,773/5,773 SC
+embedded clean), descriptors.py (41-dim bypass vector, all 60,937 rows),
+HeadModel.py (PCA-whiten + standardizer buffers; 7,189 fresh params at
+defaults), HeadMain.py (`main.py train-head configs/head/...`: ridge probe →
+optional class-pretrain → 5-seed T_c ensemble; family/group-resolved metrics
+in K and log1p-K). First numbers (frozen MACE-MP-0 medium + bypass, no class
+pretraining, test split): probe 6.49 K / head **4.68 K** overall MAE (trivial
+median-predictor: 9.75 K); log-space conventional 0.453 vs cuprates 0.924 —
+the family gap is already visible at the linear-probe level. Probe predictions
+are clamped to the train target range (unclamped ridge + expm1 inverse
+exploded to 12,544 K). Non-SC embed pass + classification-pretrain arm pending
+(embeddings were still building).
 
-3. **Magnetism — cheapest real gap.** Encode **MP per-site DFT magnetic moments** (and
-   total magnetization) as node features. *Why:* magnetism is central to unconventional SC
-   (AFM cuprate parents, spin-fluctuation pairing in Fe-based) and is entirely absent now.
-   *Caveat:* DFT magmoms are calculation-dependent and least reliable for exactly the
-   strongly-correlated systems that matter; and a *static* moment is a coarse proxy for the
-   *dynamic* spin fluctuations that mediate pairing (same static-vs-dynamic gap as phonons).
-   *First step:* pull `magmom` per site from MP into the cgv4 node features.
+Contract (decided 2026-06-12): an **encoder** is anything mapping a structure to
+**contextualized per-atom embeddings `(N, D_enc)`**, aligned to the graph builder's
+atom order. The plug point is the encoder OUTPUT — after all local + global context
+— NOT the model's input features, so encoders are interchangeable beneath one fixed,
+small T_c head (controlled comparison: same head + protocol, swap encoder,
+family-resolved paired stats). First encoder: **frozen MACE-MP-0** (post-interaction
+invariant l=0 node features — what its own readout consumes); later: our pretrained
+GPS model behind the same contract; also `[MACE ‖ ours]` fusion to test
+complementarity. Plumbing: one-time embed pass → packed per-atom column / per-graph
+array + atom-order alignment test. The head additionally takes a
+**physical-descriptor bypass**: pooled hand-crafted invariants (bridge-angle stats,
+sharing-mode histogram, ECoN distribution, composition scalars) — inputs, not
+weights, so zero fresh parameters; in the MACE-first config this is the only path
+our descriptors reach the head. The same lane later carries MLIP-harvested
+site-resolved phonon descriptors (on-site force constants, MSD, phonon-DOS moments
+— old #4). Caveats: MACE-MP-0 was trained on MPtrj (contaminated there; honest
+reads at SuperCon or via an OMat/MPA-trained variant); 3DSC embeddings inherit the
+idealized-structure/doping problem. **Deep fusion** (MACE at the node-feature level
+of a curriculum-pretrained trainable model) is demoted to a later experiment, only
+if shallow `[MACE ‖ ours]` fusion shows the representations are complementary.
 
-4. **Phonon/dynamics features via a pretrained universal MLIP — high-value shortcut.**
-   Instead of training a phonon model on the scarce explicit-phonon data (~1.5k materials in
-   the MP/Petretto DB), run a **pretrained foundation MLIP** (MACE-MP-0, CHGNet, M3GNet,
-   MatterSim, ORB — trained on millions of energy/force/stress points) over the T_c dataset
-   and harvest **site-resolved phonon descriptors** (on-site force constants, atomic MSD /
-   Debye–Waller factors, site-projected phonon-DOS moments) plus global ω_log as node/global
-   features. *Why:* injects the electron-phonon-relevant dynamics the static graph lacks,
-   without the phonon-data bottleneck. *Note:* "per-atom phonon modes" is ill-defined (modes
-   are delocalized) — use site-resolved descriptors. *First step:* prototype with one MLIP
-   (e.g. MACE-MP-0) computing force constants on a few hundred structures.
+### Phase 2 — small T_c head + SuperCon transfer pipeline + our encoder
+**Parameter budget rule:** ~5.8k noisy T_c labels → freshly-initialized parameters
+(the scarce resource) capped around ~10k. Pretrained params being fine-tuned count
+much more gently (low LR + early stopping ⇒ effective capacity ≪ count); frozen
+params are free. Protocol per encoder, in order of increasing risk, validation
+decides where to stop: (1) **linear probe** on the pooled frozen embedding (~300
+params — the standard representation-quality metric, always reported first), (2)
+small MLP head (~5–15k) + dropout/weight-decay/seed ensembles, (3) head + last-block
+unfreezing (LR-grouped or LoRA-style adapters), (4) full fine-tune. Budget
+stretchers: head-trunk pretraining on the **~61k-label Stage-1 SC/non-SC
+classification task** before T_c regression; ensembles (BETE-NET precedent).
+**Our encoder** = the GPS-style sibling model (validated angle-biased local shell
+attention interleaved per block with within-crystal global attention; global token
+may condition the local center query; poly channel as second local relation;
+register-token readout) — pretrained on MPtrj energies (+ Phase 3 curriculum), then
+plugged behind the Phase 1 contract. It is NOT trained on SuperCon from scratch.
+SuperCon side: 3DSC family labels (cuprates/Fe-based/heavy-fermion/…) for
+family-resolved evaluation; ordered-compound subsets to control the
+doping-representation problem. Deliverable: the conventional/unconventional
+**differential** experiment, designed against its three confounds — OOD
+distribution shift (differential vs same architecture without phonon-pretrained
+encoder), doping noise (cuprate T_c is doping-domed and structure-matching destroys
+doping), and family-correlated DFT quality (PBE worst for correlated oxides).
 
-5. **Pretrain on dynamics, fine-tune on T_c — highest ceiling.** Pretrain the encoder on
-   **energies + forces** from large datasets (MPtrj, Alexandria, OMat24, GNoME), then
-   fine-tune on T_c. *Why:* an encoder trained to predict forces has learned the
-   gradient/curvature of the energy surface — the dynamical response — and forces data is far
-   more abundant than phonon data. The current formation-energy work is the warm-up for this.
-   *Caveat:* biggest infrastructure lift (data plumbing, architecture/objective changes).
+### Phase 3 — curriculum middle stage + electronic/magnetic gaps
+Intermediate fine-tune on *computed* electron-phonon datasets before the empirical
+DB: Marques-group high-throughput λ/ω_log (~7k), JARVIS-EPC (~1k), BETE-NET α²F
+(~800). A backbone+head that predicts λ and ω_log well should nail conventional
+SuperCon entries via Allen-Dynes — a direct, clean test of hypothesis 1. Add
+**electronic auxiliaries** as multi-task heads (MP DOS@E_F, band gap, metal/
+insulator) to supply the electronic numerator of λ. Add **per-site DFT magmoms**
+as node features (old #3 — cheapest real gap for unconventional SC; caveat: DFT
+moments least reliable exactly for correlated systems; static moment is a coarse
+proxy for dynamic spin fluctuations).
 
-6. **Data scale.** For final runs, train on the **million-sample** datasets modern models
-   use (Alexandria/OMat24/GNoME for pretraining); for the T_c target itself, prioritize more
-   superconductor data and label-quality handling (experimental T_c is heterogeneous/noisy),
-   since that — not representation cleverness — likely dominates the error budget.
+### Phase 4 — own the backbone (Tier-1 differentiable rework)
+Key fact: forces need **position-differentiability, not internal equivariance** —
+the autograd gradient of an invariant energy is automatically equivariant
+(SchNet/ALIGNN-style). Move featurization in-model: positions + PBC image vectors
+in the batch; recompute bond lengths/ratios, **ECoN weights (smooth closed form —
+the signature prior survives force training)**, bond angles, and dihedrals (finally
+consuming old #2; its falsifiable prediction — dihedrals help T_c more than E_form
+— rides along) inside the forward. Voronoi demotes to fixed topology /
+attention-logit constants (same epistemic status as a neighbor list); smooth cutoff
+envelopes handle topology changes between frames. Then: force-train our model and
+swap it into the same `atom_context` contract in place of MACE; A/B. **Tier-2**
+(irreps/e3nn equivariant internal features) is explicitly out of scope unless
+force-accuracy SOTA becomes a goal — though note attention logits must be invariant
+even in equivariant transformers, so the angle/ECoN/sharing-mode bias machinery
+would survive that rewrite intact.
 
-7. **Coordination-environment hypergraph — many-body augment to the polyhedral edges.**
-   The polyhedral edges are a 2-body shadow of a many-body object: a coordination polyhedron
-   is a *set* (central cation + ECoN core-shell ligands), and corner/edge/face sharing is the
-   *overlap* of two such sets (|e_a ∩ e_b| = 1/2/3). Represent each polyhedron as a
-   **hyperedge** (a node-set) and message-pass via factor-nodes: a node→polyhedron aggregation
-   builds a polyhedron-level token (distortion, mean bond length, effective CN) that is
-   broadcast back to its members; polyhedra interact through shared atoms. *Why:* polyhedral
-   distortion and connectivity *are* the descriptors crystallographers reason with, and the
-   hypergraph captures them at the unit level while making the sharing mode **emergent** (set
-   overlap) rather than a hand-computed `shared_count`. The node↔hyperedge aggregation is the
-   **same set-attention primitive** as the per-atom local set-transformer (the "idea A"
-   readout / AllSetTransformer, Chien 2022) applied one scale up, so it reuses that module
-   rather than introducing a separate paradigm. *Caveat:* polyhedron identity is fuzzy on
-   off-equilibrium MPtrj frames (inherited from the ECoN core/extended threshold); heavy
-   hyperedge overlap (a bridging anion sits in many polyhedra) risks over-smoothing; and it
-   partly re-expresses information already in `cn_core` / `sharing_mode_hist` / poly-edges —
-   so A/B it against that existing encoding rather than assuming a gain. Underexplored for
-   crystals specifically (hypergraph NNs are established generally — HGNN/HyperGAT/AllSet — and
-   emerging for molecular functional groups, but coordination-environment hypergraphs for
-   crystals are near-frontier). *First step:* land the per-atom set-transformer first, then
-   have the external `crystal_graph_v4` builder emit polyhedron member-sets (it already
-   identifies them via ECoN), add factor-node hyperedge message passing that reuses the
-   set-attention module, and ablate vs. the current poly-edge channel.
+### Phase 5 — stretch
+Coordination-environment hypergraph (old #7): polyhedra as hyperedges via
+factor-nodes, reusing the set-attention primitive one scale up (AllSetTransformer);
+needs a builder rebuild (polyhedron member-sets, poly-pair torsions); A/B against
+the existing poly channel rather than assuming a gain. Generative/screening
+integration once the T_c head is trustworthy.
 
-**Generalization toolkit already in place** (use these to evaluate every change above):
+**Generalization toolkit already in place** (use to evaluate every change above):
 config-controlled `dropout`, decoupled `weight_decay`, **SWA** (`swa`), seed-varied
 **ensembling** (`model_seed` + `scripts/ensemble.py`), checkpoint re-evaluation
-(`scripts/eval_test.py`, incl. shared `--test-ids` for apples-to-apples model comparison),
-and epoch-log diagnostics (`main.py plot --epoch-log`).
+(`scripts/eval_test.py`, incl. shared `--test-ids` for apples-to-apples model
+comparison), and epoch-log diagnostics (`main.py plot --epoch-log`).

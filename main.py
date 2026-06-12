@@ -204,6 +204,19 @@ def cmd_train_mpnn(args):
         sys.exit(result.returncode)
 
 
+def cmd_embed_mace(args):
+    from CNN.head.embed_mace import embed_index
+    embed_index(args.index, args.cif_dir, args.out, model=args.model,
+                device=args.device, only_label=args.only_label, limit=args.limit)
+
+
+def cmd_train_head(args):
+    if not os.path.exists(args.config):
+        sys.exit(f"error: config not found: {args.config}")
+    from CNN.head.HeadMain import run
+    run(args.config)
+
+
 def cmd_plot(args):
     import plot  # imported lazily so matplotlib isn't loaded for other commands
     if args.epoch_log:
@@ -498,6 +511,36 @@ def build_parser():
     pk.add_argument("--limit", type=int, default=None,
                     help="only pack the first N samples (for testing)")
     pk.set_defaults(func=cmd_pack_dataset)
+
+    em = sub.add_parser(
+        "embed-mace",
+        help="one-time frozen-MACE embedding pass over a cgv4 index",
+        description="Compute per-atom MACE-MP-0 descriptor matrices (invariant "
+                    "l=0 channels) for every index row and write one <id>.npy "
+                    "per structure (+ manifest.json / failed.txt). Atom order is "
+                    "asserted against each stored graph JSON. Resumable: "
+                    "existing .npy files are skipped. See CNN/head/embed_mace.py.",
+    )
+    em.add_argument("--index", required=True, help="cgv4 index pickle/csv")
+    em.add_argument("--cif-dir", required=True, nargs="+",
+                    help="CIF directory (repeatable; tried in order per id)")
+    em.add_argument("--out", required=True, help="output embedding directory")
+    em.add_argument("--model", default="medium", help="MACE-MP-0 size (default medium)")
+    em.add_argument("--device", default="cuda")
+    em.add_argument("--only-label", type=int, default=None,
+                    help="restrict to index rows with this label (1=SC, 0=non-SC)")
+    em.add_argument("--limit", type=int, default=None)
+    em.set_defaults(func=cmd_embed_mace)
+
+    th = sub.add_parser(
+        "train-head",
+        help="train the small pluggable-encoder T_c head (probe + trunk + ensemble)",
+        description="Linear probe + (optional) SC/non-SC trunk pretraining + "
+                    "seed-ensembled T_c regression on frozen encoder embeddings "
+                    "with the physical-descriptor bypass. See CNN/head/HeadMain.py.",
+    )
+    th.add_argument("config", help="head config JSON (see configs/head/)")
+    th.set_defaults(func=cmd_train_head)
 
     pl = sub.add_parser(
         "plot",
