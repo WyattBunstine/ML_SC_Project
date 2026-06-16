@@ -123,8 +123,8 @@ def cmd_pack_dataset(args):
     # index_path at the output directory to train from it.
     if not os.path.exists(args.index):
         sys.exit(f"error: index not found: {args.index}")
-    sys.path.insert(0, os.path.join("CNN", "MPNN"))
-    from MPNNPack import pack_dataset
+    sys.path.insert(0, os.path.join("models", "common"))
+    from pack import pack_dataset
     print(f"Packing {args.index} -> {args.out}")
     if args.limit:
         print(f"  (limited to first {args.limit} samples)")
@@ -168,11 +168,11 @@ def cmd_download_energy(args):
 def cmd_train(args):
     if not os.path.exists(args.config):
         sys.exit(f"error: config not found: {args.config}")
-    script = os.path.join("CNN", "CGCNNMain.py")
+    script = os.path.join("models", "CGCNNMain.py")
     if not os.path.exists(script):
         sys.exit(f"error: {script} not found (run main.py from the project root)")
 
-    # Run CGCNNMain.py as its own process: it expects its directory (CNN/) on
+    # Run CGCNNMain.py as its own process: it expects its directory (models/) on
     # sys.path for its imports, while data paths in the config are resolved
     # relative to the project root, which we inherit as the cwd.
     print(f"Training CGCNN with config {args.config} ...")
@@ -181,31 +181,37 @@ def cmd_train(args):
         sys.exit(result.returncode)
 
 
-def cmd_train_mpnn(args):
-    if not os.path.exists(args.config):
-        sys.exit(f"error: config not found: {args.config}")
-    script = os.path.join("CNN", "MPNN", "MPNNMain.py")
+def _run_trainer(script, script_dir, config, banner):
+    """Run a model trainer entry as its own process. The entry self-inserts
+    models/common on sys.path; we add its own package dir to PYTHONPATH so it can
+    import its sibling modules, and inherit cwd so config data paths resolve."""
+    if not os.path.exists(config):
+        sys.exit(f"error: config not found: {config}")
     if not os.path.exists(script):
         sys.exit(f"error: {script} not found (run main.py from the project root)")
-
-    # MPNNMain.py lives in CNN/MPNN/ and imports from that directory, so we
-    # run it from there with the project root injected into PYTHONPATH so that
-    # relative data paths in the config resolve correctly.
     env = os.environ.copy()
-    mpnn_dir = os.path.join("CNN", "MPNN")
-    env["PYTHONPATH"] = mpnn_dir + os.pathsep + env.get("PYTHONPATH", "")
-    print(f"Training MPNN with config {args.config} ...")
-    result = subprocess.run(
-        [sys.executable, script, os.path.abspath(args.config)],
-        cwd=os.getcwd(),
-        env=env,
-    )
+    env["PYTHONPATH"] = script_dir + os.pathsep + env.get("PYTHONPATH", "")
+    print(banner)
+    result = subprocess.run([sys.executable, script, os.path.abspath(config)],
+                            cwd=os.getcwd(), env=env)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
 
+def cmd_train_mpnn(args):
+    _run_trainer(os.path.join("models", "MPNN", "MPNNMain.py"),
+                 os.path.join("models", "MPNN"), args.config,
+                 f"Training MPNN with config {args.config} ...")
+
+
+def cmd_train_gps(args):
+    _run_trainer(os.path.join("models", "GPSTransformer", "gps_main.py"),
+                 os.path.join("models", "GPSTransformer"), args.config,
+                 f"Training GPSTransformer with config {args.config} ...")
+
+
 def cmd_embed_mace(args):
-    from CNN.head.embed_mace import embed_index
+    from models.head.embed_mace import embed_index
     embed_index(args.index, args.cif_dir, args.out, model=args.model,
                 device=args.device, only_label=args.only_label, limit=args.limit)
 
@@ -213,7 +219,7 @@ def cmd_embed_mace(args):
 def cmd_train_head(args):
     if not os.path.exists(args.config):
         sys.exit(f"error: config not found: {args.config}")
-    from CNN.head.HeadMain import run
+    from models.head.HeadMain import run
     run(args.config)
 
 
@@ -262,8 +268,8 @@ typical workflow (from the project root):
       --output database/datafiles/MP/SC_MP_basic_combined   # combined labeled dataset
   python main.py train configs/orig_classify_basic.json  # classification: train + evaluate
 
-  python main.py plot                               # visualize CNN/test_result.csv
-  python main.py plot --epoch-log CNN/MPNN/mpnn_result_epoch_log.csv   # one run's per-epoch stats
+  python main.py plot                               # visualize models/test_result.csv
+  python main.py plot --epoch-log models/MPNN/mpnn_result_epoch_log.csv   # one run's per-epoch stats
   python main.py plot --epoch-log run_a/..._epoch_log.csv run_b/..._epoch_log.csv  # compare runs
 
   # MP energy-target benchmark (needs MP_API_KEY for the download):
@@ -400,7 +406,7 @@ def build_parser():
         description="Train the baseline CGCNN and evaluate it on the held-out test "
                     "split, driven by a JSON config. The config's \"task\" key selects "
                     "T_c regression (configs/orig_basic.json) or SC/non-SC classification "
-                    "(configs/orig_classify_basic.json). Runs CNN/CGCNNMain.py; predictions "
+                    "(configs/orig_classify_basic.json). Runs models/CGCNNMain.py; predictions "
                     "and a per-epoch telemetry log are written under the config's out_file.",
     )
     tr.add_argument(
@@ -414,13 +420,24 @@ def build_parser():
         help="train and evaluate the MPNN (v4 graph) model from a JSON config",
         description="Train CrystalMPNN using pre-computed crystal_graph_v4 graphs. "
                     "Build the graph database first with: python main.py build-db --kind cgv4. "
-                    "Runs CNN/MPNN/MPNNMain.py; results are written to config's out_file + '.csv'.",
+                    "Runs models/MPNN/MPNNMain.py; results are written to config's out_file + '.csv'.",
     )
     tm.add_argument(
         "config",
         help="path to the JSON training config (e.g. configs/mpnn_basic.json)",
     )
     tm.set_defaults(func=cmd_train_mpnn)
+
+    tg = sub.add_parser(
+        "train-gps",
+        help="train and evaluate the GPSTransformer (v4 graph) model from a JSON config",
+        description="Train GPSCrystalNet (local angle-biased shell attention + "
+                    "within-crystal global attention) on crystal_graph_v4 graphs. "
+                    "Runs models/GPSTransformer/gps_main.py; shares the data layer "
+                    "and training loop with the MPNN via models/common.",
+    )
+    tg.add_argument("config", help="path to the JSON training config (e.g. configs/gps/gps_eform.json)")
+    tg.set_defaults(func=cmd_train_gps)
 
     dn = sub.add_parser(
         "download-nonsc",
@@ -495,7 +512,7 @@ def build_parser():
         help="pack a cgv4 index + graphs into the fast columnar training format",
         description="One-time conversion: parse every graph JSON referenced by an "
                     "index pickle and store the extracted neighbor data as flat "
-                    "binary arrays + offsets (see CNN/MPNN/MPNNPack.py). Training "
+                    "binary arrays + offsets (see models/MPNN/MPNNPack.py). Training "
                     "configs then point index_path at the output DIRECTORY; sample "
                     "tensors are bitwise-identical to the lazy loader but ~20-40x "
                     "faster to read (no JSON parse / neighbor build per epoch). "
@@ -519,7 +536,7 @@ def build_parser():
                     "l=0 channels) for every index row and write one <id>.npy "
                     "per structure (+ manifest.json / failed.txt). Atom order is "
                     "asserted against each stored graph JSON. Resumable: "
-                    "existing .npy files are skipped. See CNN/head/embed_mace.py.",
+                    "existing .npy files are skipped. See models/head/embed_mace.py.",
     )
     em.add_argument("--index", required=True, help="cgv4 index pickle/csv")
     em.add_argument("--cif-dir", required=True, nargs="+",
@@ -537,7 +554,7 @@ def build_parser():
         help="train the small pluggable-encoder T_c head (probe + trunk + ensemble)",
         description="Linear probe + (optional) SC/non-SC trunk pretraining + "
                     "seed-ensembled T_c regression on frozen encoder embeddings "
-                    "with the physical-descriptor bypass. See CNN/head/HeadMain.py.",
+                    "with the physical-descriptor bypass. See models/head/HeadMain.py.",
     )
     th.add_argument("config", help="head config JSON (see configs/head/)")
     th.set_defaults(func=cmd_train_head)
@@ -549,8 +566,8 @@ def build_parser():
     )
     pl.add_argument(
         "--results",
-        default="CNN/test_result.csv",
-        help="results CSV written by training (default: CNN/test_result.csv)",
+        default="models/test_result.csv",
+        help="results CSV written by training (default: models/test_result.csv)",
     )
     pl.add_argument(
         "--epoch-log",

@@ -32,7 +32,7 @@
     "epochs": 2,
     "print_split": 500,
     "run_tag": "mptrj_smoke_2ep",
-    "out_file": "CNN/MPNN/mpnn_result",
+    "out_file": "models/MPNN/mpnn_result",
     "slurm": {
         "cpus": 24,
         "mem": "96G",

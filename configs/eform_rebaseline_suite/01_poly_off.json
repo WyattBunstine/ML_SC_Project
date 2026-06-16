@@ -35,7 +35,7 @@
 
     "print_split":     10,
     "run_tag":         "eformV2_01_poly_off",
-    "out_file":        "CNN/MPNN/mpnn_result",
+    "out_file":        "models/MPNN/mpnn_result",
 
     "slurm": {
         "cpus": 24,

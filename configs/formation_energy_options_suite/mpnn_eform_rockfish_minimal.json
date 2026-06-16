@@ -35,7 +35,7 @@
 
     "print_split":     10,
     "run_tag":         "eform_minimal",
-    "out_file":        "CNN/MPNN/mpnn_result",
+    "out_file":        "models/MPNN/mpnn_result",
 
     "slurm": {
         "cpus": 24,

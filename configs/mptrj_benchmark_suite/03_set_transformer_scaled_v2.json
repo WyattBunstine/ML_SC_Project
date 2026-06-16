@@ -3,16 +3,16 @@
     "target_column": "formation_energy_per_atom",
     "max_num_nbr": 14,
     "max_num_poly_nbr": 64,
-    "atom_feat_len": 64,
-    "edge_hidden_dim": 64,
-    "n_conv": 3,
+    "atom_feat_len": 128,
+    "edge_hidden_dim": 128,
+    "n_conv": 4,
     "h_feat_len": 128,
-    "n_hidden": 1,
+    "n_hidden": 2,
     "task": "regression",
     "target_transform": "none",
-    "edge_aggregation": "ecn_weighted",
+    "edge_aggregation": "set_transformer",
     "atom_pooling": "mean",
-    "use_poly_edges": false,
+    "use_poly_edges": true,
     "normalize_features": true,
     "SC_to_non_SC_ratio": "inf",
     "split_by": "material",
@@ -22,20 +22,24 @@
     "val_ratio": 0.05,
     "test_ratio": 0.05,
     "optim": "AdamW",
-    "learning_rate": 0.004,
+    "learning_rate": 0.003,
+    "warmup_epochs": 0.5,
+    "grad_clip": 1.0,
     "momentum": 0.9,
     "weight_decay": 1e-05,
     "lr_milestones": [
-        30,
-        50
+        60,
+        120,
+        180
     ],
-    "epochs": 60,
+    "epochs": 250,
     "print_split": 200,
     "out_file": "models/MPNN/mpnn_result",
     "slurm": {
         "cpus": 24,
         "mem": "96G",
-        "time": "08:00:00"
+        "time": "72:00:00"
     },
-    "run_tag": "mptrjB_01_poly_off"
+    "set_transformer_heads": 8,
+    "run_tag": "mptrjB_03_set_transformer_scaled_v2"
 }

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-DEFAULT_RESULTS = "CNN/test_result.csv"
+DEFAULT_RESULTS = "models/test_result.csv"
 
 # Per-run line styles (cycled if there are more runs than styles). Combined with
 # the per-(metric,run) color below, this gives runs a second visual cue beyond
@@ -48,6 +48,19 @@ _FAMILY_ORDER = ["Other", "Chevrel", "Carbon", "Oxide",
 _SERIES_MARKERS = ["o", "^", "s", "D", "v", "P"]
 
 
+def _formula_from_id(cif_id):
+    """Pull the chemical formula out of a 3DSC cif id.
+
+    Ids look like ``Ag0.02Ge2Pd1.98Sr1-MP-mp-978986-synth_doped.cif`` — the
+    formula is the prefix before the ``-MP-`` material-id tag. Falls back to the
+    id minus ``.cif`` when the pattern is absent.
+    """
+    base = str(cif_id)
+    if "-MP-" in base:
+        return base.split("-MP-")[0]
+    return base[:-4] if base.endswith(".cif") else base
+
+
 def plot_head_predictions(predictions_file):
     """Pred-vs-true scatter for a T_c-head run's ``predictions.csv``.
 
@@ -77,21 +90,31 @@ def plot_head_predictions(predictions_file):
     fig, ax = plt.subplots(figsize=(9.5, 6.5))
     fig.subplots_adjust(left=0.30, right=0.78)
 
+    # Per-point formula (for hover) and per-series predictions (for the tooltip).
+    formulas = ([_formula_from_id(i) for i in df["id"]]
+                if "id" in df.columns else [""] * len(df))
+    series_pred = {}
+
     # One scatter per (series, family): visibility = series on AND family on.
-    names, series_mae, points = [], {}, {}
+    # point_rows maps each collection's point index back to its dataframe row,
+    # so a hovered point can be traced to its formula/values.
+    names, series_mae, points, point_rows = [], {}, {}, {}
     hi = float(max(target_all.max(), df[pred_cols].to_numpy().max(), 1.0)) * 1.05
     for si, col in enumerate(pred_cols):
         name = col[len("tc_"):-len("_K")]
         names.append(name)
-        series_mae[name] = float(np.abs(df[col] - target_all).mean())
+        pred_all = df[col].to_numpy()
+        series_pred[name] = pred_all
+        series_mae[name] = float(np.abs(pred_all - target_all).mean())
         marker = _SERIES_MARKERS[si % len(_SERIES_MARKERS)]
         for fam in families:
             m = (fam_col == fam).to_numpy()
             if not m.any():
                 continue
             points[(name, fam)] = ax.scatter(
-                target_all[m], df[col].to_numpy()[m], s=18, alpha=0.6,
+                target_all[m], pred_all[m], s=45, alpha=0.6,
                 marker=marker, color=fam_color[fam], linewidths=0)
+            point_rows[(name, fam)] = np.where(m)[0]
 
     ax.plot([0, hi], [0, hi], color="black", linestyle="--", linewidth=1)
     ax.set_xlim(0, hi)
@@ -123,6 +146,9 @@ def plot_head_predictions(predictions_file):
     scale_ax = fig.add_axes([0.03, 0.16, 0.20, 0.08])
     scale = CheckButtons(scale_ax, ["log axes"], [False])
 
+    hover_ax = fig.add_axes([0.03, 0.05, 0.20, 0.08])
+    hover_check = CheckButtons(hover_ax, ["hover: formula"], [True])
+
     def refresh(_label=None):
         s_on = dict(zip(names, series_checks.get_status()))
         f_on = dict(zip(families, fam_checks.get_status()))
@@ -137,10 +163,45 @@ def plot_head_predictions(predictions_file):
         ax.set_yscale(kind, **extra)
         fig.canvas.draw_idle()
 
+    # Hover tooltip: formula (+ this series' value vs. truth) for the point under
+    # the cursor. Scans only currently-visible collections; gated by a checkbox.
+    annot = ax.annotate("", xy=(0, 0), xytext=(14, 14), textcoords="offset points",
+                        bbox=dict(boxstyle="round", fc="w", ec="0.5", alpha=0.95),
+                        fontsize="small", zorder=20)
+    annot.set_visible(False)
+
+    def _hide_annot():
+        if annot.get_visible():
+            annot.set_visible(False)
+            fig.canvas.draw_idle()
+
+    def on_hover(event):
+        if not hover_check.get_status()[0] or event.inaxes is not ax:
+            _hide_annot()
+            return
+        for (name, fam), art in points.items():
+            if not art.get_visible():
+                continue
+            hit, info = art.contains(event)
+            if hit:
+                i = int(info["ind"][0])
+                row = int(point_rows[(name, fam)][i])
+                annot.xy = tuple(art.get_offsets()[i])
+                annot.set_text(
+                    f"{formulas[row]}  ({fam})\n"
+                    f"{name}: {series_pred[name][row]:.1f} K   true: {target_all[row]:.1f} K")
+                annot.set_visible(True)
+                fig.canvas.draw_idle()
+                return
+        _hide_annot()
+
     series_checks.on_clicked(refresh)
     fam_checks.on_clicked(refresh)
     scale.on_clicked(on_scale)
-    ax._head_widgets = (series_checks, fam_checks, scale)  # keep refs until show()
+    hover_check.on_clicked(lambda _l: _hide_annot())
+    fig.canvas.mpl_connect("motion_notify_event", on_hover)
+    # keep refs until show()
+    ax._head_widgets = (series_checks, fam_checks, scale, hover_check, annot)
 
     plt.show()
     return fig

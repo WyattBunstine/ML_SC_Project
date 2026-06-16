@@ -29,7 +29,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from MPNNData import (CIFDataV4, _extract_ragged, _assemble_sample,
+from data import (CIFDataV4, _extract_ragged, _assemble_sample,
                       _select_target_key, build_data_rows, rows_meanstd,
                       accumulate_slot_rbf,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN)

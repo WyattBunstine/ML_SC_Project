@@ -844,7 +844,7 @@ def load_cif_dataset(index_path, **kwargs):
     """
     if os.path.isdir(index_path) and os.path.exists(
             os.path.join(index_path, "pack_header.json")):
-        from MPNNPack import PackedCIFDataV4
+        from pack import PackedCIFDataV4
         return PackedCIFDataV4(index_path, **kwargs)
     return CIFDataV4(index_path=index_path, **kwargs)
 

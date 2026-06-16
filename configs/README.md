@@ -1,6 +1,6 @@
 # MPNN training config reference
 
-JSON config files for the crystal_graph_v4 MPNN model (`CNN/MPNN/MPNNMain.py`).
+JSON config files for the crystal_graph_v4 MPNN model (`models/MPNN/MPNNMain.py`).
 
 Run a config with:
 
@@ -9,7 +9,7 @@ python main.py train-mpnn configs/<your_config>.json
 ```
 
 (The baseline CGCNN trainer, `python main.py train ...`, uses a **different**
-schema — see `CNN/CGCNNMain.py`. This document is only for `train-mpnn`.)
+schema — see `models/CGCNNMain.py`. This document is only for `train-mpnn`.)
 
 A config is a flat JSON object of key/value pairs. Unknown keys are ignored.
 Every key except the few listed under **Required** has a default, so a minimal
@@ -36,7 +36,7 @@ Minimal valid config (everything else defaulted):
 ```json
 {
     "index_path":    "database/datafiles/MP/SC_MP_V4.pickle",
-    "out_file":      "CNN/MPNN/mpnn_result",
+    "out_file":      "models/MPNN/mpnn_result",
     "epochs":        1000,
     "batch_size":    64,
     "learning_rate": 0.01,
@@ -91,7 +91,7 @@ a false alarm.
 > **Scaling past memory:** for large datasets, pack once with
 > `python main.py pack-dataset` and point `index_path` at the pack directory
 > (~30x faster reads, bitwise-identical samples). Details and the other
-> residence modes: [`CNN/MPNN/DATALOADING.md`](../CNN/MPNN/DATALOADING.md).
+> residence modes: [`models/MPNN/DATALOADING.md`](../models/MPNN/DATALOADING.md).
 
 ### Model architecture
 
@@ -238,7 +238,7 @@ best-epoch val metrics) so runs are comparable without opening folders.
 ```json
 {
     "index_path":         "database/datafiles/MP/SC_MP_V4.pickle",
-    "out_file":           "CNN/MPNN/mpnn_result",
+    "out_file":           "models/MPNN/mpnn_result",
     "task":               "regression",
 
     "max_num_nbr":        14,
@@ -281,7 +281,7 @@ changing `target_column` alone — no rebuild needed.
 ```json
 {
     "index_path":         "database/datafiles/MP_Energy/MP_Energy_V4.pickle",
-    "out_file":           "CNN/MPNN/mpnn_eform",
+    "out_file":           "models/MPNN/mpnn_eform",
     "task":               "regression",
     "target_column":      "formation_energy_per_atom",
 
@@ -310,7 +310,7 @@ Requires an index built with non-SC rows
 ```json
 {
     "index_path":         "database/datafiles/MP/SC_MP_V4.pickle",
-    "out_file":           "CNN/MPNN/mpnn_clf",
+    "out_file":           "models/MPNN/mpnn_clf",
     "task":               "classification",
 
     "use_poly_edges":     true,

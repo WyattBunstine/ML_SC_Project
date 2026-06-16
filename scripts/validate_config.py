@@ -8,8 +8,8 @@ Detects the config type and checks, for whichever it is:
   * the regression target is resolvable, and that log1p is not applied to a target
     with negative values (e.g. formation energies) which would produce NaNs
 
-  - "MPNN"     config: has `index_path` -> CNN/MPNN/MPNNMain.py + CIFDataV4
-  - "Original" config: has `dataset`   -> CNN/CGCNNMain.py + CIFData
+  - "MPNN"     config: has `index_path` -> models/MPNN/MPNNMain.py + CIFDataV4
+  - "Original" config: has `dataset`   -> models/CGCNNMain.py + CIFData
 
 Exit code 0 = OK (warnings allowed), 1 = one or more errors (printed). Paths in a
 config are resolved relative to the current working directory (the project root).
@@ -25,8 +25,8 @@ import sys
 
 KNOWN_TARGETS = ("tc", "e_above_hull", "formation_energy_per_atom", "energy_per_atom")
 
-# Valid enum values, mirrored from CNN/MPNN/MPNNMain.py + MPNNModel.py and
-# CNN/CGCNNMain.py. Kept here so a bad value is caught before a job is submitted.
+# Valid enum values, mirrored from models/MPNN/MPNNMain.py + MPNNModel.py and
+# models/CGCNNMain.py. Kept here so a bad value is caught before a job is submitted.
 MPNN_ENUMS = {
     "task": {"regression", "classification"},
     "target_transform": {"none", "log1p"},
@@ -274,7 +274,7 @@ def validate_orig(cfg, err, warn, cpus):
             err.append(f"dataset {pickle_path} is not a DataFrame (got {type(df).__name__})")
             return
         # The ORIG loader builds each crystal from row['struc_dict'] at load time
-        # (CNN/OriginalCGCNN/data.py). A V4 graph pickle (built for the MPNN model)
+        # (models/OriginalCGCNN/data.py). A V4 graph pickle (built for the MPNN model)
         # carries 'graph_path' instead and has no 'struc_dict', so it would pass
         # target validation but KeyError at runtime. Catch the model/dataset
         # mismatch here, with a hint at the likely cause.
