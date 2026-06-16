@@ -17,7 +17,7 @@ def customwarn(message, category, filename, lineno, file=None, line=None):
 
 # Recognized regression-target columns a source CSV may carry. The cgv4 index
 # preserves every one that is present so the MPNN can pick which to train on via
-# the config's `target_column` key (see CNN/MPNN/MPNNData.py). `tc` stays the
+# the config's `target_column` key (see models/MPNN/MPNNData.py). `tc` stays the
 # default/legacy target; extend this tuple to add new targets.
 KNOWN_TARGET_COLUMNS = ("tc", "e_above_hull", "formation_energy_per_atom", "energy_per_atom")
 

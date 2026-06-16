@@ -24,6 +24,6 @@
   "lr_milestones": [100],
   "epochs": 1,
 
-  "out_file": "CNN/classify_result",
+  "out_file": "models/classify_result",
   "print_split": 10
 }

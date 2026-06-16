@@ -88,7 +88,7 @@ def build_descriptor_table(index_path, out_path,
     """Compute descriptors for every index row -> pickle of {id: vector}."""
     import pandas as pd
 
-    from CNN.head.embed_mace import remap_graph_path
+    from models.head.embed_mace import remap_graph_path
 
     df = pd.read_pickle(index_path) if index_path.endswith(".pickle") else pd.read_csv(index_path)
     table, failed = {}, []

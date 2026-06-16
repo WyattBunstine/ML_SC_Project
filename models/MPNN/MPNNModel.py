@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from MPNNData import (ECN_WEIGHT_SRC_IDX, POLY_WEIGHT_IDX,
+from data import (ECN_WEIGHT_SRC_IDX, POLY_WEIGHT_IDX,
                       ANGLE_RBF_CENTERS, ANGLE_FEA_LEN)
 
 

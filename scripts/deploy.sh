@@ -174,14 +174,17 @@ sync_data() {
 # No --delete: never touches remote model_data/ or results.
 # ---------------------------------------------------------------------------
 sync_code() {
-    ssh "${SSH}" "mkdir -p '${REMOTE_PATH}/CNN/MPNN' '${REMOTE_PATH}/CNN/OriginalCGCNN' '${REMOTE_PATH}/configs' '${REMOTE_PATH}/logs' '${REMOTE_PATH}/jobs'"
-    # Ship BOTH trainers + their packages: the MPNN entrypoint (CNN/MPNN/) and the
-    # baseline CGCNN (CNN/CGCNNMain.py + the OriginalCGCNN package it imports), so
-    # `run` can dispatch either model. *.py only — never the local checkpoints /
-    # test_result artifacts / __pycache__ that also live under CNN/.
-    rsync -a CNN/*.py              "${SSH}:${REMOTE_PATH}/CNN/"
-    rsync -a CNN/MPNN/*.py         "${SSH}:${REMOTE_PATH}/CNN/MPNN/"
-    rsync -a CNN/OriginalCGCNN/*.py "${SSH}:${REMOTE_PATH}/CNN/OriginalCGCNN/"
+    ssh "${SSH}" "mkdir -p '${REMOTE_PATH}/models/common' '${REMOTE_PATH}/models/MPNN' '${REMOTE_PATH}/models/GPSTransformer' '${REMOTE_PATH}/models/OriginalCGCNN' '${REMOTE_PATH}/configs' '${REMOTE_PATH}/logs' '${REMOTE_PATH}/jobs'"
+    # Ship the shared infra (models/common: data layer, packer, resmon, trainer) +
+    # each model package (MPNN, GPSTransformer) + the baseline CGCNN
+    # (models/CGCNNMain.py + the OriginalCGCNN package it imports), so `run` can
+    # dispatch any model. *.py only — never the local checkpoints / test_result
+    # artifacts / __pycache__ that also live under models/.
+    rsync -a models/*.py              "${SSH}:${REMOTE_PATH}/models/"
+    rsync -a models/common/*.py       "${SSH}:${REMOTE_PATH}/models/common/"
+    rsync -a models/MPNN/*.py         "${SSH}:${REMOTE_PATH}/models/MPNN/"
+    rsync -a models/GPSTransformer/*.py "${SSH}:${REMOTE_PATH}/models/GPSTransformer/"
+    rsync -a models/OriginalCGCNN/*.py "${SSH}:${REMOTE_PATH}/models/OriginalCGCNN/"
     rsync -a configs/              "${SSH}:${REMOTE_PATH}/configs/"
 }
 
@@ -298,21 +301,30 @@ PY
     # carries "index_path" (pre-computed graphs); the baseline CGCNN carries
     # "dataset" (a struc_dict pickle) and/or "models":"ORIG". Routing on the data
     # key is the reliable signal — nothing in the code reads "models". Without
-    # this, every job ran CNN/MPNN/MPNNMain.py, so an ORIG config silently trained
+    # this, every job ran models/MPNN/MPNNMain.py, so an ORIG config silently trained
     # the wrong model.
     local entrypoint
     if ! entrypoint="$(python3 - "${config}" <<'PY'
 import json, sys
 cfg = json.load(open(sys.argv[1]))
+arch = str(cfg.get("architecture", "")).strip().lower()
 models = str(cfg.get("models", "")).strip().upper()
 has_index, has_dataset = "index_path" in cfg, "dataset" in cfg
-if models == "ORIG" or (has_dataset and not has_index):
+if arch == "gps":
+    # GPS is a v4-graph model (carries index_path); route it to its own trainer.
+    # Without this branch it would fall through to MPNNMain and silently train a
+    # CrystalMPNN on the GPS config.
+    if not has_index:
+        sys.stderr.write("  architecture=gps but config has no 'index_path'\n")
+        sys.exit(1)
+    print("models/GPSTransformer/gps_main.py")
+elif models == "ORIG" or (has_dataset and not has_index):
     if has_index and not has_dataset:        # contradictory: ORIG model, MPNN data
         sys.stderr.write("  models=ORIG but config has 'index_path' (MPNN data), not 'dataset'\n")
         sys.exit(1)
-    print("CNN/CGCNNMain.py")
+    print("models/CGCNNMain.py")
 elif has_index:
-    print("CNN/MPNN/MPNNMain.py")
+    print("models/MPNN/MPNNMain.py")
 else:
     sys.stderr.write("  cannot determine model: config has neither 'index_path' (MPNN) nor 'dataset' (ORIG)\n")
     sys.exit(1)

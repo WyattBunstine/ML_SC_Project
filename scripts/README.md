@@ -22,7 +22,7 @@ never touched.
 | `sync-data` | once | rsyncs `atom_init.json` + the MP / MP_Energy `graphs_v4/` dirs and index pickles. Resumable (`--partial`); re-running only sends the delta. MPtrj is deliberately NOT synced — it is cluster-built (see below). |
 | `run <config>` | per run | validates the config locally, picks the trainer from the config (MPNN vs baseline CGCNN), rsyncs code + configs, generates an `sbatch` script under remote `jobs/`, and submits it. |
 | `build-mptrj` | once (+ after a graph-format change) | CPU job (partition `parallel`, full node): streams the 12 GB MPtrj JSON and builds ~1.6M cgv4 graphs onto **scratch**. Resumable; also ensures `ijson`/`tess` in the env and ships the builder + source JSON first. |
-| `pack-mptrj` | after build-mptrj (+ after any graph rebuild) | CPU job: packs the MPtrj graphs into the columnar training format (`CNN/MPNN/MPNNPack.py`) on scratch. Training configs point `index_path` at the pack directory. |
+| `pack-mptrj` | after build-mptrj (+ after any graph rebuild) | CPU job: packs the MPtrj graphs into the columnar training format (`models/MPNN/MPNNPack.py`) on scratch. Training configs point `index_path` at the pack directory. |
 | `sync-code` | (auto) | pushes just code + configs. Called automatically by `run`; rarely needed directly. |
 | `status` | as needed | `squeue` for your jobs. |
 | `logs <jobid>` | as needed | `tail -f` the live SLURM stdout (`logs/<jobname>-<jobid>.out`). |
@@ -184,7 +184,7 @@ for the per-run file layout — and `fetch` mirrors them back.
 |---|---|---|
 | `setup-env` | `requirements.txt` | — |
 | `sync-data` | `database/datafiles/MP/graphs_v4/`, `database/datafiles/MP/*.pickle` | — |
-| `run` / `sync-code` | `CNN/MPNN/*.py`, `configs/`, generated `jobs/*.slurm` | — |
+| `run` / `sync-code` | `models/MPNN/*.py`, `configs/`, generated `jobs/*.slurm` | — |
 | `fetch` | — | `model_data/`, `logs/` |
 
 `run` does **not** re-send the graph database — it relies on `sync-data` having

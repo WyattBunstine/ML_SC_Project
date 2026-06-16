@@ -20,6 +20,6 @@
   "lr_milestones": [100],
   "epochs": 1000,
 
-  "out_file": "CNN/test_result",
+  "out_file": "models/test_result",
   "print_split": 10
 }

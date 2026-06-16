@@ -15,9 +15,16 @@ from sklearn import metrics
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import MultiStepLR
 
-from MPNNData import (load_cif_dataset, collate_pool, get_sc_nonsc_loaders,
+# Shared, model-agnostic infra lives in the sibling models/common package; put it
+# on sys.path so the bare `from data/resmon import ...` resolve however launched.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+
+from data import (load_cif_dataset, collate_pool, get_sc_nonsc_loaders,
                       compute_feature_stats, resolve_split_by)
 from MPNNModel import CrystalMPNN
+from train import (Normalizer, AverageMeter, _fmt_res, _save_checkpoint,
+                   _to_input_var, _resolve_warmup_steps, _warmup_and_step,
+                   run_regression)
 
 
 def _parse_ratio(v):
@@ -33,8 +40,6 @@ def _parse_ratio(v):
             return float("inf")
         return float(v)
     return float(v)
-
-best_mae_error = 1e10
 
 
 def _write_run_metadata(run_dir, args, model, loaders, dataset, classification,
@@ -78,6 +83,9 @@ def _write_run_metadata(run_dir, args, model, loaders, dataset, classification,
             "learning_rate": args.get("learning_rate"),
             "weight_decay": args.get("weight_decay", 0),
             "lr_milestones": args.get("lr_milestones", [100]),
+            "warmup_epochs": args.get("warmup_epochs"),
+            "warmup_steps": args.get("warmup_steps"),
+            "grad_clip": args.get("grad_clip", 0),
             "epochs": args.get("epochs"),
             "batch_size": args.get("batch_size"),
             "target_transform": args.get("target_transform", "none"),
@@ -353,131 +361,7 @@ def main():
     if classification:
         _run_classification(args, model, criterion, optimizer, scheduler, loaders)
     else:
-        _run_regression(args, model, criterion, optimizer, scheduler, loaders, normalizer)
-
-
-def _run_regression(args, model, criterion, optimizer, scheduler, loaders, normalizer):
-    global best_mae_error
-    train_losses, val_losses = [], []
-
-    # Stochastic Weight Averaging: after `swa_start`, average the weights the
-    # optimizer visits under a low constant LR (SWALR). The averaged weights tend
-    # to sit in a flatter minimum that generalizes better — a cheap win in exactly
-    # the post-plateau regime this model shows. The model uses LayerNorm (no
-    # BatchNorm), so no update_bn pass is needed before using the averaged weights.
-    from torch.optim.swa_utils import AveragedModel, SWALR
-    swa_on = bool(args.get("swa", False))
-    swa_model = swa_scheduler = None
-    if swa_on:
-        swa_model = AveragedModel(model)
-        swa_start = int(args.get("swa_start", int(0.75 * args["epochs"])))
-        swa_scheduler = SWALR(optimizer, swa_lr=float(args.get("swa_lr", args["learning_rate"] * 0.05)))
-        print(f"SWA enabled: averaging from epoch {swa_start} at swa_lr="
-              f"{args.get('swa_lr', args['learning_rate'] * 0.05)}")
-
-    train_loader = loaders["train"]
-    # Model selection on the realistic val MAE; balanced val MAE logged too.
-    # When no non-SC are present the balanced set is identical to the realistic
-    # one, so skip the redundant pass and mirror the realistic MAE.
-    val_real = loaders["val_realistic"]
-    val_bal = loaders["val_balanced"]
-    has_nonsc = loaders["split_sizes"]["val_nonsc"] > 0
-
-    # per-epoch telemetry log (mirrors CGCNNMain.py). Resource columns: GPU
-    # utilization/memory + process-tree CPU/RSS sampled by a background thread —
-    # so over/under-allocation (idle GPU, starved dataloader workers) is visible
-    # per epoch instead of requiring a separate profiling run.
-    from resmon import ResourceMonitor
-    monitor = ResourceMonitor(interval=2.0).start()
-    print(ResourceMonitor.describe())
-    epoch_log_file = open(args["out_file"] + "_epoch_log.csv", "w", newline="")
-    epoch_logger = csv.writer(epoch_log_file)
-    epoch_logger.writerow(["epoch", "train_loss", "train_mae", "val_loss",
-                           "val_mae", "val_bal_mae", "lr", "epoch_time_sec",
-                           "train_time_sec", "data_time_sec",
-                           "gpu_util_pct", "gpu_mem_gb", "cpu_pct", "rss_gb",
-                           "is_best"])
-
-    for epoch in range(args["epochs"]):
-        epoch_start = time.time()
-        lr = optimizer.param_groups[0]["lr"]
-
-        train_loss, train_mae, data_time_s, train_time_s = _train(
-            train_loader, model, criterion, optimizer, epoch, normalizer, args)
-        mae_error, val_loss = _validate(val_real, model, criterion, normalizer, args)
-        bal_mae = _validate(val_bal, model, criterion, normalizer, args)[0] if has_nonsc else mae_error
-
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
-
-        if mae_error != mae_error:
-            print("Exit due to NaN")
-            sys.exit(1)
-
-        # During the SWA phase, accumulate the averaged weights and hold a low
-        # constant LR; otherwise follow the normal MultiStepLR schedule.
-        if swa_on and epoch >= swa_start:
-            swa_model.update_parameters(model)
-            swa_scheduler.step()
-        else:
-            scheduler.step()
-
-        is_best = mae_error < best_mae_error
-        best_mae_error = min(mae_error, best_mae_error)
-        _save_checkpoint({
-            "epoch": epoch + 1,
-            "state_dict": model.state_dict(),
-            "best_mae_error": best_mae_error,
-            "optimizer": optimizer.state_dict(),
-            "normalizer": normalizer.state_dict(),
-            "args": args,
-        }, is_best, args["out_file"])
-
-        epoch_time = time.time() - epoch_start
-        res = monitor.epoch_stats()
-        epoch_logger.writerow([epoch, float(train_loss), float(train_mae),
-                               float(val_loss), float(mae_error), float(bal_mae), lr,
-                               epoch_time, round(train_time_s, 2), round(data_time_s, 2),
-                               res["gpu_util_pct"], res["gpu_mem_gb"],
-                               res["cpu_pct"], res["rss_gb"],
-                               int(is_best)])
-        epoch_log_file.flush()
-        if epoch % args.get("print_split", 10) == 0:
-            print(f">> epoch {epoch}: {epoch_time:.1f}s total "
-                  f"(train {train_time_s:.1f}s, of which data-wait {data_time_s:.1f}s) | "
-                  f"GPU {_fmt_res(res['gpu_util_pct'])}% {_fmt_res(res['gpu_mem_gb'])}GB | "
-                  f"CPU {_fmt_res(res['cpu_pct'])}% RSS {_fmt_res(res['rss_gb'])}GB")
-
-    monitor.stop()
-    epoch_log_file.close()
-
-    np.save(args["out_file"] + "_losstrain.csv", np.array(train_losses))
-    np.save(args["out_file"] + "_lossval.csv", np.array(val_losses))
-
-    print("-" * 50 + "\nEvaluating on test set")
-    if swa_on:
-        # Use the SWA-averaged weights (LayerNorm -> no update_bn needed). Saved
-        # separately so the val-best checkpoint is still available for comparison.
-        model.load_state_dict(swa_model.module.state_dict())
-        torch.save({"state_dict": model.state_dict(),
-                    "normalizer": normalizer.state_dict(), "args": args},
-                   args["out_file"] + "_swa.pth.tar")
-        print("Using SWA-averaged weights for the test evaluation "
-              f"(saved {os.path.basename(args['out_file'])}_swa.pth.tar)")
-    else:
-        best_ckpt = torch.load(args["out_file"] + "_model_best.pth.tar")
-        model.load_state_dict(best_ckpt["state_dict"])
-    # Evaluate the realistic test set (writes the canonical out_file.csv
-    # predictions). Only evaluate the balanced set when non-SC are present —
-    # otherwise it is identical to the realistic set.
-    real_mae, _ = _validate(loaders["test_realistic"], model, criterion,
-                            normalizer, args, test=True)
-    if loaders["split_sizes"]["test_nonsc"] > 0:
-        bal_test_mae, _ = _validate(loaders["test_balanced"], model, criterion,
-                                    normalizer, args, test=True, tag="balanced")
-        print(f" ** Test MAE (realistic): {real_mae:.3f}  (balanced): {bal_test_mae:.3f}")
-    else:
-        print(f" ** Test MAE: {real_mae:.3f}")
+        run_regression(args, model, criterion, optimizer, scheduler, loaders, normalizer)
 
 
 def _run_classification(args, model, criterion, optimizer, scheduler, loaders):
@@ -568,135 +452,6 @@ def _run_classification(args, model, criterion, optimizer, scheduler, loaders):
     print(" ** Test (balanced): ", {k: round(v, 4) for k, v in test_bal.items()})
 
 
-def _train(loader, model, criterion, optimizer, epoch, normalizer, args):
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
-    losses = AverageMeter()
-    mae_errors = AverageMeter()
-    model.train()
-    end = time.time()
-
-    for i, (input_batch, target, _lab, _) in enumerate(loader):
-        data_time.update(time.time() - end)
-
-        input_var = _to_input_var(input_batch, args["cuda"])
-
-        target_normed = normalizer.norm(target)
-        target_var = Variable(target_normed.cuda(non_blocking=True) if args["cuda"] else target_normed)
-
-        output = model(*input_var)
-        loss = criterion(output, target_var)
-
-        # Metric accumulation stays ON-DEVICE and graph-free. The previous
-        # .cpu() pulls here forced a full GPU sync twice per batch (~22k pipeline
-        # stalls per MPtrj epoch). denorm(target_var) recovers the raw target
-        # on-device (denorm∘norm == identity up to fp32 rounding), avoiding a
-        # second host->device copy. Values materialize only when formatted at
-        # print time (every print_split batches) and at the epoch-end float() —
-        # so per-batch "Time" now reads as async launch time, with sync cost
-        # landing on the print batches; epoch totals are unaffected.
-        with torch.no_grad():
-            mae_error = (normalizer.denorm(output.detach())
-                         - normalizer.denorm(target_var.detach())).abs().mean()
-        losses.update(loss.detach(), target.size(0))
-        mae_errors.update(mae_error, target.size(0))
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if i % args.get("print_split", 10) == 0:
-            print(f"Epoch: [{epoch}][{i}/{len(loader)}]\t"
-                  f"Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
-                  f"Data {data_time.val:.3f} ({data_time.avg:.3f})\t"
-                  f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
-                  f"MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})")
-
-    # data_time.sum = seconds the loop spent WAITING on the DataLoader (collate +
-    # any worker fetch); batch_time.sum − data_time.sum ≈ model compute + syncs.
-    # float() here is the single end-of-epoch GPU sync for the accumulated metrics.
-    return float(losses.avg), float(mae_errors.avg), data_time.sum, batch_time.sum
-
-
-def _validate(loader, model, criterion, normalizer, args, test=False, tag=""):
-    batch_time = AverageMeter()
-    losses = AverageMeter()
-    mae_errors = AverageMeter()
-    test_targets, test_preds, test_cif_ids = [], [], []
-    model.eval()
-    end = time.time()
-
-    for i, (input_batch, target, _lab, batch_cif_ids) in enumerate(loader):
-        with torch.no_grad():
-            input_var = _to_input_var(input_batch, args["cuda"])
-
-            target_normed = normalizer.norm(target)
-            target_var = Variable(target_normed.cuda(non_blocking=True) if args["cuda"] else target_normed)
-
-            output = model(*input_var)
-            loss = criterion(output, target_var)
-
-        # On-device metric accumulation (no per-batch sync) — see _train. The
-        # test branch still pulls predictions to the CPU (needed for the results
-        # CSV), but test runs once, not every epoch.
-        with torch.no_grad():
-            mae_error = (normalizer.denorm(output.detach())
-                         - normalizer.denorm(target_var.detach())).abs().mean()
-        losses.update(loss.detach(), target.size(0))
-        mae_errors.update(mae_error, target.size(0))
-
-        if test:
-            test_preds += normalizer.denorm(output.data.cpu()).view(-1).tolist()
-            test_targets += target.view(-1).tolist()
-            test_cif_ids += batch_cif_ids
-
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if i % args.get("print_split", 10) == 0:
-            print(f"  [{i}/{len(loader)}]  Loss {losses.val:.4f} ({losses.avg:.4f})  "
-                  f"MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})")
-
-    label = "**" if test else "*"
-    print(f" {label} MAE {mae_errors.avg:.3f}")
-
-    if test:
-        results_path = args["out_file"] + ("_test_%s.csv" % tag if tag else ".csv")
-        with open(results_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            for cif_id, tgt, pred in zip(test_cif_ids, test_targets, test_preds):
-                writer.writerow((cif_id, tgt, pred))
-
-    # Single end-of-pass sync; downstream comparisons/checkpoints get plain floats.
-    return float(mae_errors.avg), float(losses.avg)
-
-
-def _to_input_var(input_batch, cuda):
-    """Move a collated input tuple onto the right device.
-
-    Layout: (atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-             nbr_angle, crystal_seg, n_crystals).
-    """
-    (atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-     nbr_angle, crystal_seg, n_crystals) = input_batch
-    if cuda:
-        return (
-            Variable(atom_fea.cuda(non_blocking=True)),
-            Variable(nbr_fea.cuda(non_blocking=True)),
-            nbr_fea_idx.cuda(non_blocking=True),
-            Variable(poly_fea.cuda(non_blocking=True)),
-            poly_fea_idx.cuda(non_blocking=True),
-            nbr_angle.cuda(non_blocking=True),
-            crystal_seg.cuda(non_blocking=True),
-            n_crystals,
-        )
-    return (Variable(atom_fea), Variable(nbr_fea), nbr_fea_idx,
-            Variable(poly_fea), poly_fea_idx, nbr_angle, crystal_seg, n_crystals)
-
-
 def classification_metrics(log_probs, targets, threshold=0.5, beta=1.0):
     """Metrics for the SC/non-SC head. log_probs: (N,2) log-softmax CPU tensor;
     targets: (N,) long tensor.
@@ -730,6 +485,10 @@ def _train_classification(loader, model, criterion, optimizer, epoch, args):
     model.train()
     end = time.time()
 
+    steps_per_epoch = len(loader)
+    warmup_steps = _resolve_warmup_steps(args, steps_per_epoch)
+    base_lr = args["learning_rate"]
+
     for i, (input_batch, target, label, _) in enumerate(loader):
         data_time.update(time.time() - end)
         input_var = _to_input_var(input_batch, args["cuda"])
@@ -745,7 +504,8 @@ def _train_classification(loader, model, criterion, optimizer, epoch, args):
 
         optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        _warmup_and_step(optimizer, model, args, base_lr, warmup_steps,
+                         epoch * steps_per_epoch + i)
 
         batch_time.update(time.time() - end)
         end = time.time()
@@ -797,71 +557,6 @@ def _validate_classification(loader, model, criterion, args, test=False, tag="")
 
 
 # --- Utilities (mirrors CGCNNMain.py) ---
-
-class Normalizer:
-    """Target normalizer with an optional monotone transform applied BEFORE the
-    z-score (and inverted after denorm).
-
-    transform="log1p" trains the regressor in log(1+T_c) space, which spreads
-    out the densely-packed low-T_c region so the loss stops being dominated by
-    a handful of high-T_c materials. T_c=0 maps to 0 (log1p(0)=0), so non-SC
-    negatives are handled cleanly. norm() returns the transformed+standardized
-    target (the training objective); denorm() inverts all the way back to real
-    T_c, so reported MAE stays in physical units and is comparable across
-    transforms.
-    """
-
-    def __init__(self, tensor, transform="none"):
-        self.transform = transform
-        t = self._fwd(tensor)
-        self.mean = torch.mean(t)
-        self.std = torch.std(t)
-
-    def _fwd(self, x):
-        return torch.log1p(x) if self.transform == "log1p" else x
-
-    def _inv(self, y):
-        return torch.expm1(y) if self.transform == "log1p" else y
-
-    def norm(self, tensor):
-        return (self._fwd(tensor) - self.mean) / self.std
-
-    def denorm(self, normed_tensor):
-        return self._inv(normed_tensor * self.std + self.mean)
-
-    def state_dict(self):
-        return {"mean": self.mean, "std": self.std, "transform": self.transform}
-
-    def load_state_dict(self, state_dict):
-        self.mean = state_dict["mean"]
-        self.std = state_dict["std"]
-        self.transform = state_dict.get("transform", "none")
-
-
-class AverageMeter:
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = self.avg = self.sum = self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-
-def _fmt_res(v):
-    """Telemetry print formatting: '' (source unavailable) -> '?'; a legitimate
-    0.0 reading (e.g. a fully idle GPU) must still print as 0.0."""
-    return "?" if v == "" else v
-
-
-def _save_checkpoint(state, is_best, filename):
-    torch.save(state, filename + "_checkpoint.pth.tar")
-    if is_best:
-        shutil.copyfile(filename + "_checkpoint.pth.tar", filename + "_model_best.pth.tar")
 
 
 if __name__ == "__main__":

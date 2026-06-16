@@ -53,7 +53,7 @@ ML_SC_Project/
 │       ├── Non_SC_DB_MP/   # non-SC negatives: Non_SC.csv + cifs/
 │       └── MP_Energy/      # MP energy benchmark: mp_energy.csv + cifs/
 │
-└── CNN/                    # the models (adapted from txie-93/cgcnn)
+└── models/                    # the models (adapted from txie-93/cgcnn)
     ├── CGCNNMain.py        # baseline CGCNN trainer (JSON-config; regression + classification)
     ├── OriginalCGCNN/      # baseline CGCNN
     │   ├── CGCNNMainOrig.py  # standalone argparse trainer (not wired into main.py)
@@ -74,10 +74,10 @@ ML_SC_Project/
 | `database/database_main.py` | Core data-prep library: `generate_atom_init`, `generate_Basic_DB`, `generate_CGv4_DB`. | imported (called by `main.py`) |
 | `database/Download_MP_data.py` | `gen_dataset` — pulls non-superconductors (by band gap) from the MP API into CIFs + a prop CSV. Needs `MP_API_KEY`. | `python main.py download-nonsc` |
 | `database/Download_MP_energy.py` | `gen_dataset` — pulls experimentally-observed MP materials into CIFs + a CSV with `e_above_hull` and `formation_energy_per_atom` target columns (training-time target chosen via the config's `target_column`). Needs `MP_API_KEY`. | `python main.py download-energy` |
-| `CNN/CGCNNMain.py` | Baseline CGCNN training/validation/test loop with checkpointing; regression or classification per config. | `python main.py train <config.json>` |
-| `CNN/MPNN/MPNNMain.py` | MPNN trainer over `crystal_graph_v4` graphs; regression or classification per config. | `python main.py train-mpnn <config.json>` |
-| `CNN/OriginalCGCNN/*` | Baseline CGCNN (model, data loader + sampler, standalone `argparse` trainer). | imported (+ optional standalone) |
-| `CNN/MPNN/MPNNModel.py`, `MPNNData.py` | MPNN model and graph dataset/loaders. | imported |
+| `models/CGCNNMain.py` | Baseline CGCNN training/validation/test loop with checkpointing; regression or classification per config. | `python main.py train <config.json>` |
+| `models/MPNN/MPNNMain.py` | MPNN trainer over `crystal_graph_v4` graphs; regression or classification per config. | `python main.py train-mpnn <config.json>` |
+| `models/OriginalCGCNN/*` | Baseline CGCNN (model, data loader + sampler, standalone `argparse` trainer). | imported (+ optional standalone) |
+| `models/MPNN/MPNNModel.py`, `MPNNData.py` | MPNN model and graph dataset/loaders. | imported |
 
 ### Files read and generated per command
 
@@ -92,7 +92,7 @@ Paths are relative to the project root (the working directory you run from).
 | `main.py download-energy` | MP API (needs `MP_API_KEY`) | `mp_energy.csv` (`cif, material_id, e_above_hull, formation_energy_per_atom`) + one CIF per material |
 | `main.py train <config>` | config JSON; `<dataset_rd>/<dataset>` pickle + `<dataset_rd>/<atom_init>` | checkpoints, predictions, `<out_file>_epoch_log.csv` (see below) |
 | `main.py train-mpnn <config>` | config JSON; `index_path` (cgv4 index) + the referenced graph JSONs | same output families as `train` |
-| `plot.py` | a results CSV (default `CNN/test_result.csv`) | a matplotlib plot |
+| `plot.py` | a results CSV (default `models/test_result.csv`) | a matplotlib plot |
 
 Outputs by task: **regression** → `<out_file>.csv` (`cif_id, target_tc, predicted_tc`),
 `<out_file>_model_best.pth.tar`, loss `.npy` dumps; **classification** →
@@ -217,7 +217,7 @@ SC-only sets throughout. Model selection uses realistic-split AUC.
 ### 4. Plot predictions (`main.py plot`)
 
 ```bash
-python main.py plot                              # reads CNN/test_result.csv
+python main.py plot                              # reads models/test_result.csv
 python main.py plot --results path/to/other.csv  # or a custom results file
 ```
 
@@ -247,13 +247,13 @@ each training run only transfers kilobytes.
                           │  deploy.sh setup-env (once)
   requirements.txt ───────┴───────────────────▶ conda env `ml_sc`
                              deploy.sh run <cfg>
-  configs/*.json, CNN/MPNN/*.py ──────────────▶ sbatch job → python MPNNMain.py
+  configs/*.json, models/MPNN/*.py ──────────────▶ sbatch job → python MPNNMain.py
                                                    → model_data/<run>/ + logs/
   model_data/, logs/  ◀───────────────────────  deploy.sh fetch
    → main.py plot
 ```
 
-The SLURM job runs `python CNN/MPNN/MPNNMain.py <config>` from the project root —
+The SLURM job runs `python models/MPNN/MPNNMain.py <config>` from the project root —
 exactly what `main.py train-mpnn <config>` does locally — so results are
 identical to a local run, just on a GPU node.
 

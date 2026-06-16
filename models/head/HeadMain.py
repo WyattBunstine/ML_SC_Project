@@ -34,8 +34,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from CNN.head.HeadData import assemble, family_mae_report, make_splits
-from CNN.head.HeadModel import Standardizer, TcHead
+from models.head.HeadData import assemble, family_mae_report, make_splits
+from models.head.HeadModel import Standardizer, TcHead
 
 DEFAULTS = {
     "split_seed": 123, "val_frac": 0.1, "test_frac": 0.2,

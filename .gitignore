@@ -11,6 +11,7 @@ __pycache__/
 # Run outputs / checkpoints / logs
 *.pth.tar
 /logs/
-/CNN/MPNN/model_data/
-/CNN/MPNN/mpnn_result*
-/CNN/test_result_epoch_log.csv
+# Unanchored so the models/ reorg keeps the same run-outputs ignored as the old CNN/ tree.
+model_data/
+mpnn_result*
+test_result_epoch_log.csv

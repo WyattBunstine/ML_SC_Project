@@ -9,9 +9,9 @@ goals, realized as a **two-stage hurdle**:
 2. **Stage 2 — regress** the critical temperature T_c (in Kelvin) for superconductors.
 
 Two graph-neural-network families are trained and compared:
-- **Baseline CGCNN** (`CNN/OriginalCGCNN/`, after [txie-93/cgcnn](https://github.com/txie-93/cgcnn)),
-  driven by `CNN/CGCNNMain.py`.
-- **MPNN** (`CNN/MPNN/`) — a message-passing network with learned edge features that
+- **Baseline CGCNN** (`models/OriginalCGCNN/`, after [txie-93/cgcnn](https://github.com/txie-93/cgcnn)),
+  driven by `models/CGCNNMain.py`.
+- **MPNN** (`models/MPNN/`) — a message-passing network with learned edge features that
   consumes the richer `crystal_graph_v4` graphs.
 
 > The earlier coordination-environment variant (`CGCNNCoordEnv`) has been **retired**
@@ -49,7 +49,7 @@ ML_SC_Project/
 │       │   └── cifs/                # CIF structure files
 │       ├── Non_SC_DB_MP/            # non-SC negatives: Non_SC.csv + cifs/
 │       └── MP_Energy/               # MP energy benchmark: mp_energy.csv + cifs/
-└── CNN/
+└── models/
     ├── CGCNNMain.py                  # Baseline CGCNN trainer (main.py train) — regression + classification
     ├── classify_result*, test_result*  # outputs (predictions, checkpoints, epoch logs)
     ├── OriginalCGCNN/                # baseline CGCNN
@@ -129,8 +129,8 @@ Both trainers are JSON-config driven and support two tasks via the `"task"` key:
   - **Model selection (`is_best`) by AUC on the realistic val split** (falls back to F1
     if a split is single-class).
 
-The baseline CGCNN trains via `CNN/CGCNNMain.py` on the `struc_dict` pickle; the MPNN
-trains via `CNN/MPNN/MPNNMain.py` on the `graphs_v4` index. Both share the same crystal
+The baseline CGCNN trains via `models/CGCNNMain.py` on the `struc_dict` pickle; the MPNN
+trains via `models/MPNN/MPNNMain.py` on the `graphs_v4` index. Both share the same crystal
 graph construction idea (up to ~12–14 neighbors, Gaussian-expanded distances for the CGCNN;
 learned edge features for the MPNN).
 
@@ -163,7 +163,7 @@ learned edge features for the MPNN).
 | `aggregation` | `"ecn_weighted"` / `"attention"` | [MPNN] edge aggregation |
 | `batch_size` / `epochs` | 128 / 300–1000 | Training loop |
 | `optim` / `learning_rate` / `momentum` / `weight_decay` / `lr_milestones` | `"SGD"` / 0.01 / 0.9 / 0 / [100] | Optimizer |
-| `out_file` | `"CNN/classify_result"` | Output prefix |
+| `out_file` | `"models/classify_result"` | Output prefix |
 
 Provided configs: `configs/orig_basic.json` (baseline regression), `configs/orig_classify_basic.json`
 (baseline classification on the combined DB), `configs/mpnn_basic.json` (MPNN regression).
@@ -251,7 +251,7 @@ python main.py pack-dataset --index database/datafiles/MP_Energy/MP_Energy_V4.pi
   --out database/datafiles/MP_Energy/packed_v1
 
 # Plot regression results
-python main.py plot --results CNN/test_result.csv
+python main.py plot --results models/test_result.csv
 ```
 
 Cluster workflow (deploy/fetch/reorg/archive, /data-vs-scratch storage):
@@ -313,7 +313,7 @@ capacity explanation for good) and **`use_bond_angles` + ecn_weighted** (angle
 `build_angle_bias` from the checkpoint config before producing any test-set numbers.
 
 ### Phase 1 — pluggable encoder contract (representation-level plug)
-**STATUS: BUILT + first results (2026-06-12).** `CNN/head/` — embed_mace.py
+**STATUS: BUILT + first results (2026-06-12).** `models/head/` — embed_mace.py
 (`main.py embed-mace`; per-structure alignment assertions, 5,773/5,773 SC
 embedded clean), descriptors.py (41-dim bypass vector, all 60,937 rows),
 HeadModel.py (PCA-whiten + standardizer buffers; 7,189 fresh params at
@@ -411,3 +411,58 @@ config-controlled `dropout`, decoupled `weight_decay`, **SWA** (`swa`), seed-var
 **ensembling** (`model_seed` + `scripts/ensemble.py`), checkpoint re-evaluation
 (`scripts/eval_test.py`, incl. shared `--test-ids` for apples-to-apples model
 comparison), and epoch-log diagnostics (`main.py plot --epoch-log`).
+
+---
+
+## Potential Future Directions (non-binding idea bank)
+
+Recorded from the 2026-06-15/16 design discussions — **exploratory, not committed**.
+Kept so the reasoning isn't lost; revisit if/when the relevant stage is reached.
+The full GPS encoder spec lives in `models/GPSTransformer/ARCHITECTURE.md`.
+
+1. **Own the encoder via MACE distillation.** Train our GPS encoder to reproduce
+   MACE's energies/forces (teacher = MACE, labels free + dense + noise-free — run
+   MACE over many structures, no DFT). Makes "match MACE's forces" an achievable
+   training target instead of a from-scratch fight; the force-matching *residual*
+   diagnoses where our explicit-physics inductive bias is insufficient (metals,
+   off-equilibrium frames). Then compare distilled-ours vs. MACE under one head.
+   Faithful distillation of an equivariant teacher may want l=1 (PaiNN-style)
+   vector channels — equivariance in service of distillation fidelity, not a SOTA
+   chase.
+
+2. **Off-equilibrium DOS acquisition** (to supervise the electronic *coupling*
+   ∂DOS/∂x, which MP's equilibrium-only DOS can't). Options, with the catch on each:
+   - *ML-DOS teacher (Mat2Spec/DOSnet): TRAP* — they're equilibrium-trained, so
+     they share our blind spot and just propagate the equilibrium prior.
+   - *Hamiltonian-learning models (DeepH/DeepH-E3): the real shortcut IF a
+     broadly-pretrained, universal-chemistry one exists* — they predict H(R), so
+     DOS generalizes across configurations. Coverage was the gap as of early 2026;
+     worth re-checking.
+   - *DFTB: chemistry-limited* — ~1000x faster, but Slater-Koster params are patchy
+     exactly for the TM/f-element/intermetallic SC chemistries.
+   - *Targeted DFT single-points: the only path to NEW trustworthy off-eq DOS* —
+     bounded if curated (equilibrium + a few small displacements per material,
+     stratified to SC chemistries → ~10-50k single-points, not 1.4M). Workflow +
+     projected-DOS parsing + E_F alignment is the real lift, not core-hours. Hold
+     behind a value check (does the electronic channel even help T_c?).
+   - *Free stopgap:* MPtrj's per-frame `bandgap` (off-eq electronic scalar) — but
+     uninformative among metals (gap≡0), so weak for SC families specifically.
+
+3. **AFLOW as a supplementary source** (NOT a base — it's equilibrium-only, no
+   trajectory forces, so it can't replace MPtrj for the force leg). Use for: bigger
+   equilibrium DOS coverage if MP is thin; its phonon subset (APL/AAPL) as a direct
+   curvature/λ signal for a Phase-3 curriculum. Caveat: AFLOW's DFT protocol differs
+   from MP/MPtrj → cross-dataset label inconsistency when mixed. The latent fork:
+   force-centric (MPtrj base) vs. broad-equilibrium-property pretraining (AFLOW
+   base, drop forces) — the latter only if we relax the force thesis.
+
+4. **Hessian / phonon fine-tuning (PFT).** E+F training can still get curvature
+   (2nd derivatives) slightly wrong; directly supervising force constants / phonon
+   properties (e.g. from AFLOW-APL or a computed λ/ω_log set) sharpens the
+   phonon-relevant content — a Phase-3 curriculum step on top of force pretraining.
+
+5. **Physics ensemble / multi-teacher distillation.** Several specialist physics
+   models each provide one label channel (MACE→forces, a DOS model→DOS, …) and our
+   encoder learns from all. Coherent for *equilibrium* multi-property labels;
+   inherits the Option-2 trap for anything off-equilibrium (a teacher can't label
+   outside its training distribution).

@@ -23,6 +23,6 @@
   "lr_milestones": [100],
   "epochs": 1,
 
-  "out_file": "CNN/_smoke_classify_result",
+  "out_file": "models/_smoke_classify_result",
   "print_split": 5
 }

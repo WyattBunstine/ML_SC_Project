@@ -32,5 +32,5 @@
     "epochs":          100,
 
     "print_split":     10,
-    "out_file":        "CNN/MPNN/mpnn_eform"
+    "out_file":        "models/MPNN/mpnn_eform"
 }

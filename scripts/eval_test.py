@@ -42,8 +42,11 @@ import sys
 import torch
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Both trainers import differently: MPNN from CNN/MPNN, original from CNN.
-for p in (os.path.join(REPO_ROOT, "CNN"), os.path.join(REPO_ROOT, "CNN", "MPNN")):
+# Shared data layer lives in models/common; model code in models/MPNN (baseline
+# under models/OriginalCGCNN, reached via models/).
+for p in (os.path.join(REPO_ROOT, "models"),
+          os.path.join(REPO_ROOT, "models", "common"),
+          os.path.join(REPO_ROOT, "models", "MPNN")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -102,7 +105,7 @@ class MPNNAdapter(ModelAdapter):
 
     def __init__(self, run_dir, config, ckpt_path, device):
         super().__init__(run_dir, config, ckpt_path, device)
-        from MPNNData import load_cif_dataset
+        from data import load_cif_dataset
         from MPNNModel import CrystalMPNN
         from MPNNMain import Normalizer
 
@@ -147,7 +150,7 @@ class MPNNAdapter(ModelAdapter):
     def split_indices(self, split):
         if split == "all":
             return list(range(len(self.dataset)))
-        from MPNNData import get_sc_nonsc_loaders
+        from data import get_sc_nonsc_loaders
         from MPNNMain import _parse_ratio
         c = self.config
         # Resolve split_by the way the RUN did, not the way today's data would:
@@ -167,7 +170,7 @@ class MPNNAdapter(ModelAdapter):
             except (OSError, ValueError):
                 pass
         if split_by is None:
-            from MPNNData import resolve_split_by
+            from data import resolve_split_by
             split_by = resolve_split_by(c.get("split_by"), self.dataset)
         L = get_sc_nonsc_loaders(
             self.dataset, batch_size=c.get("batch_size", 64),
@@ -179,7 +182,7 @@ class MPNNAdapter(ModelAdapter):
 
     def predict(self, indices):
         from torch.utils.data import DataLoader
-        from MPNNData import collate_pool
+        from data import collate_pool
         from MPNNMain import _to_input_var
         loader = DataLoader(self.dataset, batch_size=self.config.get("batch_size", 64),
                             sampler=indices, collate_fn=collate_pool, num_workers=0)
