@@ -11,7 +11,8 @@
 #   ./scripts/deploy.sh sync-data                 # one-time: rsync the 14 GB DB + pickles
 #   ./scripts/deploy.sh run configs/mpnn_basic.json   # push code+config, submit SLURM job
 #   ./scripts/deploy.sh build-mptrj               # build MPtrj cgv4 graphs on the cluster (CPU job)
-#   ./scripts/deploy.sh pack-mptrj                # pack graphs into the fast columnar training format
+#   ./scripts/deploy.sh augment-positions         # backfill frac_coords+lattice onto MPtrj graphs (CPU job)
+#   ./scripts/deploy.sh pack-mptrj [out_dir]      # pack graphs into the fast columnar training format
 #   ./scripts/deploy.sh status                    # squeue for your jobs
 #   ./scripts/deploy.sh logs <jobid>              # tail a running job's log
 #   ./scripts/deploy.sh fetch                     # rsync model_data/ + logs back here
@@ -39,6 +40,10 @@ SCRATCH_MPTRJ_GRAPHS="${SCRATCH_PATH}/ML_SC_Proj/MPtrj/graphs_v4"
 # `deploy.sh pack-mptrj`, read directly by training (configs point index_path
 # here). Regenerable from graphs+index in a few hours, so scratch is fine.
 SCRATCH_MPTRJ_PACK="${SCRATCH_PATH}/ML_SC_Proj/MPtrj/packed_v1"
+# v2 pack carries positions (frac_coords + lattice) for the long-range distance
+# bias; built after `deploy.sh augment-positions` + a re-pack. Kept separate so
+# packed_v1 (positionless) stays valid for MPNN + the non-distance-bias GPS rungs.
+SCRATCH_MPTRJ_PACK_V2="${SCRATCH_PATH}/ML_SC_Proj/MPtrj/packed_v2"
 
 # --- SLURM resource request (Rockfish-specific — verify against your allocation) ---
 SLURM_PARTITION="a100"                   # Rockfish GPU partition (a100 nodes)
@@ -205,9 +210,6 @@ run() {
     # Config path must be relative to the repo root (that's the remote cwd too).
     local config_rel="${config#./}"
     local cfg_base; cfg_base="$(basename "${config_rel}" .json)"
-    local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
-    local job_name="mpnn_${cfg_base}_${stamp}"
-    local job_file="jobs/${job_name}.slurm"
 
     # --- Per-config SLURM overrides ----------------------------------------
     # A config may carry an optional top-level "slurm" object to request
@@ -334,6 +336,19 @@ PY
         exit 1
     fi
     echo ">> Model entrypoint: ${entrypoint}"
+
+    # Name the job after the dispatched model (was hard-coded "mpnn_") so squeue
+    # and the log filenames are self-describing for GPS / ORIG runs too.
+    local model_prefix
+    case "${entrypoint}" in
+        *GPSTransformer*) model_prefix="gps" ;;
+        *MPNN*)           model_prefix="mpnn" ;;
+        *CGCNNMain*)      model_prefix="orig" ;;
+        *)                model_prefix="job" ;;
+    esac
+    local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
+    local job_name="${model_prefix}_${cfg_base}_${stamp}"
+    local job_file="jobs/${job_name}.slurm"
 
     echo ">> Pushing code + configs..."
     sync_code
@@ -478,7 +493,30 @@ EOF
 # bitwise-identical to the lazy loader but ~30x faster to read. Resumable is NOT
 # needed (a re-run overwrites; ~30-60 min on a parallel node).
 # ---------------------------------------------------------------------------
+# Augment existing MPtrj graphs IN PLACE with positions (frac_coords + lattice)
+# from the source structures — no Voronoi rebuild — so a re-pack can carry geometry
+# for the long-range distance bias. Resumable. Then re-pack to packed_v2.
+augment_positions() {
+    echo ">> Pushing code..."
+    sync_code
+    rsync -a main.py       "${SSH}:${REMOTE_PATH}/"
+    rsync -a database/*.py "${SSH}:${REMOTE_PATH}/database/"
+
+    submit_cpu_job "augment_positions" "24:00:00" "$(cat <<EOF
+python main.py augment-positions \\
+    --graph-dir "${SCRATCH_MPTRJ_GRAPHS}" \\
+    --input database/datafiles/MPtrj/MPtrj_2022.9_full.json \\
+    --workers ${SLURM_CPU_CPUS}
+EOF
+)"
+    echo ">> Submitted. When done, re-pack the now-positioned graphs into v2:"
+    echo ">>   ./scripts/deploy.sh pack-mptrj ${SCRATCH_MPTRJ_PACK_V2}   (packed_v1 untouched)"
+}
+
+# pack-mptrj [out_dir]: default writes packed_v1; pass ${SCRATCH_MPTRJ_PACK_V2}
+# after augment-positions to build the positioned v2 pack without clobbering v1.
 pack_mptrj() {
+    local out_pack="${1:-${SCRATCH_MPTRJ_PACK}}"
     echo ">> Pushing code..."
     sync_code
     rsync -a main.py "${SSH}:${REMOTE_PATH}/"
@@ -486,11 +524,11 @@ pack_mptrj() {
     submit_cpu_job "pack_mptrj" "06:00:00" "$(cat <<EOF
 python main.py pack-dataset \\
     --index database/datafiles/MPtrj/MPtrj_V4.pickle \\
-    --out "${SCRATCH_MPTRJ_PACK}" \\
+    --out "${out_pack}" \\
     --workers ${SLURM_CPU_CPUS}
 EOF
 )"
-    echo ">> Submitted. When done, train with configs whose index_path = ${SCRATCH_MPTRJ_PACK}"
+    echo ">> Submitted. When done, train with configs whose index_path = ${out_pack}"
 }
 
 # ---------------------------------------------------------------------------
@@ -643,7 +681,8 @@ case "${cmd}" in
     sync-code) sync_code ;;
     run)         run "$@" ;;
     build-mptrj) build_mptrj ;;
-    pack-mptrj)  pack_mptrj ;;
+    augment-positions) augment_positions ;;
+    pack-mptrj)  pack_mptrj "$@" ;;
     status)    status ;;
     logs)      logs "$@" ;;
     fetch)     fetch ;;
