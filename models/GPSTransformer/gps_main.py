@@ -16,6 +16,10 @@ import shutil
 import sys
 import warnings
 
+# Reduce CUDA allocator fragmentation from the GPS poly shell-attention's large
+# (N, heads, M, M) tensors. Must be set before torch initializes the CUDA allocator.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -24,7 +28,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 # Shared infra (models/common) on path, then GPS model from this dir.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
 from data import (load_cif_dataset, get_sc_nonsc_loaders,  # noqa: E402
-                  compute_feature_stats, resolve_split_by)
+                  compute_feature_stats, resolve_split_by, collate_pool_geom)
 from train import Normalizer, run_regression  # noqa: E402
 from model import GPSCrystalNet  # noqa: E402
 
@@ -82,7 +86,17 @@ def main():
         sc_to_nonsc_ratio=float("inf"),
         num_workers=args.get("num_workers", 0),
         pin_memory=torch.cuda.is_available(),
-        seed=args.get("split_seed", 123), split_by=split_by)
+        seed=args.get("split_seed", 123), split_by=split_by,
+        # Bound the within-crystal global-attention memory (B x Lmax^2) by batching
+        # similar-sized cells; max_atoms_per_batch caps the peak (large-cell batches
+        # get fewer crystals). Off by default -> unchanged behavior when unset.
+        size_grouped=args.get("size_grouped_batches", False),
+        max_atoms_per_batch=args.get("max_atoms_per_batch"),
+        size_pool_factor=args.get("size_pool_factor", 20),
+        prefetch_factor=args.get("prefetch_factor"),
+        # GPS batches carry frac_coords + lattice (zeros on a positionless pack) so
+        # the optional long-range distance bias has geometry.
+        collate_fn=collate_pool_geom)
     print(f"split_by={split_by} -> split sizes:", loaders["split_sizes"])
 
     sc_idx = loaders["train_sc_idx"]
@@ -113,6 +127,16 @@ def main():
         gps_global_heads=args.get("gps_global_heads", args.get("set_transformer_heads", 8)),
         gps_ffn_mult=args.get("gps_ffn_mult", 2),
         local_transformer=args.get("local_transformer", True),
+        per_atom_head=args.get("per_atom_head", True),
+        # Ablation-ladder knobs (default to the full model).
+        use_bond_edges=args.get("use_bond_edges", True),
+        shell_aggregation=args.get("shell_aggregation", "attention"),
+        use_angle_bias=args.get("use_angle_bias", True),
+        # Long-range PBC distance bias on the global attention (needs a positioned
+        # pack, e.g. packed_v2). Off by default.
+        use_dist_bias=args.get("use_dist_bias", False),
+        dist_cutoff=args.get("dist_cutoff", 8.0),
+        n_dist_rbf=args.get("n_dist_rbf", 16),
     )
 
     if args.get("normalize_features", True):
@@ -132,10 +156,12 @@ def main():
             "architecture": {k: args.get(k) for k in (
                 "atom_feat_len", "n_conv", "h_feat_len", "n_hidden", "set_transformer_heads",
                 "gps_global", "gps_global_heads", "gps_ffn_mult", "local_transformer",
-                "atom_pooling", "use_poly_edges")},
+                "per_atom_head", "use_bond_edges", "shell_aggregation", "use_angle_bias",
+                "use_dist_bias", "atom_pooling", "use_poly_edges")},
             "training": {k: args.get(k) for k in (
                 "optim", "learning_rate", "weight_decay", "lr_milestones",
-                "warmup_epochs", "grad_clip", "epochs", "batch_size", "target_transform")},
+                "warmup_epochs", "grad_clip", "epochs", "batch_size", "target_transform",
+                "size_grouped_batches", "max_atoms_per_batch", "size_pool_factor", "amp")},
             "dataset": {"index_path": args.get("index_path"),
                         "target_column": args.get("target_column"),
                         "total_indexed": len(dataset), "split_by": split_by,
