@@ -16,10 +16,23 @@ import os
 import shutil
 import sys
 import time
+from contextlib import nullcontext
 
 import numpy as np
 import torch
 from torch.autograd import Variable
+
+
+def _autocast(args):
+    """bf16 autocast context when `amp` is set and running on CUDA, else a no-op.
+
+    bf16 (not fp16) so no GradScaler is needed — its exponent range matches fp32,
+    so gradients can't underflow. Opt-in via the config `amp` flag; off-by-default
+    keeps existing runs (and the MPNN trainer) bit-for-bit unchanged. Halves the
+    big activation tensors (e.g. the GPS poly attention's (N, heads, M, M))."""
+    if args.get("amp") and args.get("cuda"):
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    return nullcontext()
 
 
 class Normalizer:
@@ -89,26 +102,14 @@ def _save_checkpoint(state, is_best, filename):
 
 
 def _to_input_var(input_batch, cuda):
-    """Move a collated input tuple onto the right device.
-
-    Layout: (atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-             nbr_angle, crystal_seg, n_crystals).
-    """
-    (atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-     nbr_angle, crystal_seg, n_crystals) = input_batch
-    if cuda:
-        return (
-            Variable(atom_fea.cuda(non_blocking=True)),
-            Variable(nbr_fea.cuda(non_blocking=True)),
-            nbr_fea_idx.cuda(non_blocking=True),
-            Variable(poly_fea.cuda(non_blocking=True)),
-            poly_fea_idx.cuda(non_blocking=True),
-            nbr_angle.cuda(non_blocking=True),
-            crystal_seg.cuda(non_blocking=True),
-            n_crystals,
-        )
-    return (Variable(atom_fea), Variable(nbr_fea), nbr_fea_idx,
-            Variable(poly_fea), poly_fea_idx, nbr_angle, crystal_seg, n_crystals)
+    """Move a collated input tuple onto the device, arity-agnostically: every tensor
+    element is moved (non_blocking), non-tensors (e.g. the python int n_crystals)
+    pass through. Handles both the 8-element MPNN batch and the 10-element GPS batch
+    (which appends frac_coords + lattice for the distance bias)."""
+    if not cuda:
+        return tuple(input_batch)
+    return tuple(x.cuda(non_blocking=True) if torch.is_tensor(x) else x
+                 for x in input_batch)
 
 
 def _resolve_warmup_steps(args, steps_per_epoch):
@@ -166,14 +167,17 @@ def _train(loader, model, criterion, optimizer, epoch, normalizer, args):
         target_normed = normalizer.norm(target)
         target_var = Variable(target_normed.cuda(non_blocking=True) if args["cuda"] else target_normed)
 
-        output = model(*input_var)
-        loss = criterion(output, target_var)
+        with _autocast(args):
+            output = model(*input_var)
+            loss = criterion(output, target_var)
+        # backward()/clip/step stay OUTSIDE autocast and in fp32 (bf16 needs no
+        # GradScaler); metric below casts output to fp32 so logs aren't bf16-noisy.
 
         # Metric accumulation stays ON-DEVICE and graph-free (see the original
         # MPNN trainer notes): denorm(target_var) recovers the raw target
         # on-device, so values materialize only at print time / epoch end.
         with torch.no_grad():
-            mae_error = (normalizer.denorm(output.detach())
+            mae_error = (normalizer.denorm(output.detach().float())
                          - normalizer.denorm(target_var.detach())).abs().mean()
         losses.update(loss.detach(), target.size(0))
         mae_errors.update(mae_error, target.size(0))
@@ -211,8 +215,10 @@ def _validate(loader, model, criterion, normalizer, args, test=False, tag=""):
             target_normed = normalizer.norm(target)
             target_var = Variable(target_normed.cuda(non_blocking=True) if args["cuda"] else target_normed)
 
-            output = model(*input_var)
-            loss = criterion(output, target_var)
+            with _autocast(args):
+                output = model(*input_var)
+                loss = criterion(output, target_var)
+            output = output.float()    # back to fp32 for the metric + saved predictions
 
         with torch.no_grad():
             mae_error = (normalizer.denorm(output.detach())
