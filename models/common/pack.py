@@ -37,8 +37,12 @@ from data import (CIFDataV4, _extract_ragged, _assemble_sample,
 PACK_VERSION = 1
 
 # field name -> (dtype, row width or None for 1-D); order = write order.
+# frac_coords is atom-aligned (N rows/sample, like atom_fea) so it reuses
+# atom_start/n_atoms — no new offset column. lattice (3x3/sample) rides in meta.
+# Legacy packs without these keys load fine (see _maps / _ragged guards).
 _FIELDS = {
     "atom_fea":  (np.float32, NODE_FEA_LEN),
+    "frac_coords": (np.float32, 3),
     "bond_cnt":  (np.int32, None),
     "bond_nbr":  (np.int32, None),
     "bond_fea":  (np.float32, NBR_FEA_LEN),
@@ -85,7 +89,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
              for name in _FIELDS}
     totals = {name: 0 for name in _FIELDS}   # element rows written per field
     offsets = {col: [] for col in _OFFSET_COLS}
-    kept_pos, failures = [], []
+    kept_pos, failures, lattices = [], [], []
     start = time.time()
 
     def _write(name, arr, dtype):
@@ -113,6 +117,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
             offsets["n_angv"].append(len(r["ang_vcos"]))
             for name, (dtype, _w) in _FIELDS.items():
                 _write(name, r[name], dtype)
+            lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
             kept_pos.append(pos)
             done = len(kept_pos) + len(failures)
             if done % 5000 == 0:
@@ -135,6 +140,10 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
                                   ).reset_index(drop=True)
     for col in _OFFSET_COLS:
         meta[col] = np.asarray(offsets[col], dtype=np.int64)
+    # lattice (3x3, flattened to 9) rides as a meta column, aligned with kept_pos.
+    lat_stack = np.stack(lattices) if lattices else np.zeros((0, 9), dtype=np.float32)
+    if lattices:
+        meta["lattice"] = list(lat_stack)
     meta.to_pickle(os.path.join(out_dir, "meta.pickle"))
 
     header = {
@@ -144,6 +153,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
         "dims": {"node": NODE_FEA_LEN, "edge": NBR_FEA_LEN,
                  "poly": POLY_FEA_LEN, "angle_rbf": ANGLE_FEA_LEN},
         "has_angles": totals["ang_cos"] > 0,
+        "has_positions": bool(np.abs(lat_stack).sum() > 0),
         "source_index": os.path.abspath(index_path),
         "n_failed": len(failures),
     }
@@ -220,6 +230,9 @@ class PackedCIFDataV4(Dataset):
         # Offset arrays in META ORDER; rows reference them by position so the
         # row shuffle below never reorders the arrays themselves.
         self._off = {c: meta[c].to_numpy() for c in _OFFSET_COLS}
+        # Per-sample lattice (3x3), meta-order; None for legacy packs without it.
+        self._lattice = (np.stack(meta["lattice"].to_numpy()).astype(np.float32).reshape(-1, 3, 3)
+                         if "lattice" in meta.columns else None)
 
         # Shared row construction (MPNNData.build_data_rows — bit-identical to
         # CIFDataV4 so the same seed yields the same splits across backends);
@@ -238,7 +251,9 @@ class PackedCIFDataV4(Dataset):
         if self._mm is None or self._mm_pid != os.getpid():
             mm = {}
             for name, (dtype, width) in _FIELDS.items():
-                n = self._header["totals"][name]
+                n = self._header["totals"].get(name)
+                if n is None:        # field absent in this (older) pack -> skip
+                    continue
                 shape = (n,) if width is None else (n, width)
                 if n == 0:
                     # np.memmap raises on a zero-byte file; an empty field (e.g.
@@ -260,9 +275,15 @@ class PackedCIFDataV4(Dataset):
         p0, npo = int(o["poly_start"][pos]), int(o["n_poly"][pos])
         g0, ng = int(o["ang_start"][pos]), int(o["n_ang"][pos])
         v0, nv = int(o["angv_start"][pos]), int(o["n_angv"][pos])
+        frac = (mm["frac_coords"][a0:a0 + n] if "frac_coords" in mm
+                else np.zeros((n, 3), dtype=np.float32))
+        lattice = (self._lattice[pos] if self._lattice is not None
+                   else np.zeros((3, 3), dtype=np.float32))
         return {
             "n_atoms": n,
             "atom_fea": mm["atom_fea"][a0:a0 + n],
+            "frac_coords": frac,
+            "lattice": lattice,
             "bond_cnt": mm["bond_cnt"][a0:a0 + n],
             "bond_nbr": mm["bond_nbr"][b0:b0 + nb],
             "bond_fea": mm["bond_fea"][b0:b0 + nb],

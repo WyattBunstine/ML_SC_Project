@@ -3,6 +3,7 @@ from __future__ import print_function, division
 import json
 import os
 import random
+import warnings
 from collections import OrderedDict
 from functools import lru_cache
 
@@ -494,9 +495,23 @@ def _extract_ragged(graph):
             return np.asarray(lst, dtype=dtype)
         return np.zeros((0,) if width is None else (0, width), dtype=dtype)
 
+    # Geometry for the long-range distance bias (optional): atom-aligned fractional
+    # coords (N,3) + the lattice (3,3). Absent in legacy graphs -> zeros (the model's
+    # distance bias is gated off / warns when positions are all-zero). frac_coords
+    # reuses the atom alignment, so the packer can index it with atom_start/n_atoms.
+    fc = graph.get("frac_coords")
+    frac_coords = (np.asarray(fc, dtype=np.float32).reshape(n_atoms, 3)
+                   if fc is not None and len(fc) == n_atoms
+                   else np.zeros((n_atoms, 3), dtype=np.float32))
+    lat = graph.get("lattice")
+    lattice = (np.asarray(lat, dtype=np.float32).reshape(3, 3)
+               if lat is not None else np.zeros((3, 3), dtype=np.float32))
+
     return {
         "n_atoms": n_atoms,
         "atom_fea": atom_fea.astype(np.float32),
+        "frac_coords": frac_coords,
+        "lattice": lattice,
         "bond_cnt": bond_cnt,
         "bond_nbr": _arr(bond_nbr, np.int32),
         "bond_fea": _arr(bond_fea, np.float32, NBR_FEA_LEN),
@@ -600,7 +615,13 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
         poly_fea_t = torch.zeros((n_atoms, 0, POLY_FEA_LEN), dtype=torch.float32)
         poly_fea_idx = torch.zeros((n_atoms, 0), dtype=torch.long)
 
-    return atom_fea, nbr_fea_t, nbr_fea_idx, poly_fea_t, poly_fea_idx, nbr_angle
+    # Geometry for the long-range distance bias (zeros when the source has none).
+    # Appended to the sample tuple; collate_pool ignores them, collate_pool_geom
+    # (GPS) batches them. copy=True: r["frac_coords"] may be a read-only memmap view.
+    frac_coords = torch.from_numpy(np.array(r["frac_coords"], dtype=np.float32, copy=True))
+    lattice = torch.from_numpy(np.array(r["lattice"], dtype=np.float32, copy=True))
+    return (atom_fea, nbr_fea_t, nbr_fea_idx, poly_fea_t, poly_fea_idx, nbr_angle,
+            frac_coords, lattice)
 
 
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
@@ -617,24 +638,23 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
 
     graph = CIFDataV4._read_graph(graph_path)
     ragged = _extract_ragged(graph)
-    (atom_fea, nbr_fea, nbr_fea_idx,
-     poly_fea, poly_fea_idx, nbr_angle) = _assemble_sample(
-        ragged, max_num_nbr, max_num_poly_nbr,
-        use_poly_edges, use_bond_angles, build_angle_bias)
+    # Pass the FULL assemble tuple through (now includes frac_coords + lattice);
+    # collate_pool slices [:6], collate_pool_geom uses [6:]. Must match the packed
+    # backend's __getitem__, which also returns the whole _assemble_sample tuple.
+    sample = _assemble_sample(ragged, max_num_nbr, max_num_poly_nbr,
+                              use_poly_edges, use_bond_angles, build_angle_bias)
 
     target = torch.FloatTensor([float(target)])
     label = torch.LongTensor([int(label)])
-    return ((atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx, nbr_angle),
-            target, label, cif_id)
+    return (sample, target, label, cif_id)
 
 
 def _sample_to_device(sample, device):
-    """Move a built sample's tensors onto ``device`` (the cif_id string is left as-is)."""
-    ((atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx, nbr_angle),
-     target, label, cif_id) = sample
+    """Move a built sample's tensors onto ``device`` (the cif_id string is left as-is).
+    Arity-agnostic over the input tuple so it handles the geometry-carrying sample."""
+    sample_in, target, label, cif_id = sample
     return (
-        (atom_fea.to(device), nbr_fea.to(device), nbr_fea_idx.to(device),
-         poly_fea.to(device), poly_fea_idx.to(device), nbr_angle.to(device)),
+        tuple(t.to(device) for t in sample_in),
         target.to(device), label.to(device), cif_id,
     )
 
@@ -865,8 +885,11 @@ def collate_pool(dataset_list):
     counts, batch_target, batch_label = [], [], []
     batch_cif_ids = []
     base_idx = 0
-    for ((atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx, nbr_angle),
-         target, label, cif_id) in dataset_list:
+    for (sample, target, label, cif_id) in dataset_list:
+        # sample[:6] are the model inputs; [6:] (frac_coords, lattice) are geometry
+        # that only collate_pool_geom (GPS) consumes — sliced off here, so MPNN's
+        # batch is unchanged.
+        atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx, nbr_angle = sample[:6]
         n_i = atom_fea.shape[0]
         batch_atom_fea.append(atom_fea)
         batch_nbr_fea.append(nbr_fea)
@@ -896,6 +919,19 @@ def collate_pool(dataset_list):
         crystal_seg,
         n_crystals,
     ), torch.stack(batch_target, dim=0), torch.cat(batch_label, dim=0), batch_cif_ids
+
+
+def collate_pool_geom(dataset_list):
+    """collate_pool + geometry for the GPS distance bias: appends batch-concatenated
+    fractional coords (N, 3) and per-crystal lattice (B, 3, 3) to the input tuple,
+    in the SAME atom/crystal order collate_pool uses. The GPS loader selects this;
+    everything else keeps collate_pool (so the MPNN batch is untouched)."""
+    base_input, targets, labels, cif_ids = collate_pool(dataset_list)
+    fracs = [sample[6] for (sample, *_rest) in dataset_list]    # each (n_i, 3)
+    lats = [sample[7] for (sample, *_rest) in dataset_list]     # each (3, 3)
+    frac_coords = torch.cat(fracs, dim=0)                       # (N, 3)
+    lattice = torch.stack(lats, dim=0)                          # (B, 3, 3)
+    return base_input + (frac_coords, lattice), targets, labels, cif_ids
 
 
 def get_train_val_test_loader(dataset, collate_fn=default_collate,
@@ -963,6 +999,104 @@ class BalancedEpochSampler(Sampler):
         return len(self.minority) + self.n_majority
 
 
+def dataset_atom_counts(dataset):
+    """Per-index crystal atom counts (aligned to dataset index), cheaply, or None.
+
+    Packed store: index the in-memory ``n_atoms`` offset column at each row's meta
+    position (``dataset.data[i][2]`` is that position for the packed backend), so
+    no graphs are read. The lazy CIF backend has no such table -> None, and the
+    caller falls back to plain batching.
+    """
+    off = getattr(dataset, "_off", None)
+    if off is None or "n_atoms" not in off:
+        return None
+    n_atoms = np.asarray(off["n_atoms"])
+    positions = np.fromiter((rec[2] for rec in dataset.data),
+                            dtype=np.int64, count=len(dataset.data))
+    return n_atoms[positions]
+
+
+class SizeGroupedBatchSampler(Sampler):
+    """Batch crystals of similar size so the model's padded within-crystal global
+    attention (a ``(B, Lmax, d)`` tensor, ``Lmax`` = the largest cell in the batch)
+    isn't blown up by one big cell sitting among small ones.
+
+    Megabatch-sort bucketing: take the wrapped sampler's per-epoch index order,
+    sort within windows of ``pool_factor * batch_size``, cut into batches, then
+    shuffle the batch ORDER so size isn't monotonic across the epoch. Wrapping a
+    per-epoch sampler (e.g. BalancedEpochSampler) preserves its re-sample/shuffle.
+
+    Two caps make a batch:
+    - ``batch_size``: max crystals per batch (the small-cell regime), and
+    - ``max_atoms`` (optional): max summed atoms per batch. Because a size-grouped
+      batch has little padding waste (all cells ~Lmax), summed atoms ~= B*Lmax, so
+      this cap gives LARGE-cell batches FEWER crystals — which is what actually
+      bounds the PEAK B*Lmax^2 attention cost (size-grouping alone only lowers the
+      average). None disables it (fixed batch_size, average-only benefit).
+    """
+
+    def __init__(self, sampler, sizes, batch_size, max_atoms=None,
+                 pool_factor=20, seed=123, drop_last=False):
+        self.sampler = sampler
+        self.sizes = sizes                       # array: dataset index -> atom count
+        self.batch_size = int(batch_size)
+        self.max_atoms = int(max_atoms) if max_atoms else None
+        self.pool_factor = max(1, int(pool_factor))
+        self.drop_last = drop_last
+        self._rng = random.Random(seed)
+        # The max_atoms cap makes batches variable-size, so the batch COUNT can't be
+        # derived from len(sampler) alone. Materialize the epoch's batches once and
+        # share them between __len__ and __iter__ so they always agree — the trainer
+        # uses len(loader) for warmup_steps and the global step (epoch*len + i); a
+        # len that disagreed with the real batch count would corrupt that schedule.
+        self._pending = None
+
+    def _cut(self, window):
+        batch, batch_atoms = [], 0
+        for i in window:
+            s = int(self.sizes[i])
+            full = len(batch) >= self.batch_size
+            over = self.max_atoms is not None and batch and batch_atoms + s > self.max_atoms
+            if full or over:
+                yield batch
+                batch, batch_atoms = [], 0
+            batch.append(i)
+            batch_atoms += s
+        if batch:
+            yield batch
+
+    def _build(self):
+        idxs = list(self.sampler)               # consumes the wrapped (per-epoch) sampler
+        pool = self.pool_factor * self.batch_size
+        batches = []
+        for s in range(0, len(idxs), pool):
+            window = sorted(idxs[s:s + pool], key=lambda i: self.sizes[i])
+            for batch in self._cut(window):
+                if self.drop_last and len(batch) < self.batch_size:
+                    continue
+                batches.append(batch)
+        self._rng.shuffle(batches)
+        return batches
+
+    def __len__(self):
+        # Build (and cache) this epoch's layout so the count is exact; __iter__ then
+        # consumes the same layout. Re-sampling the wrapped sampler happens here.
+        if self._pending is None:
+            self._pending = self._build()
+        return len(self._pending)
+
+    def __iter__(self):
+        if self._pending is None:
+            self._pending = self._build()
+        batches = self._pending
+        yield from batches
+        # Clear only AFTER a full pass: a len(loader) call DURING iteration (the
+        # trainer's per-step progress print) then returns this same cached layout
+        # instead of rebuilding + re-consuming the wrapped sampler mid-epoch; the
+        # next epoch sees _pending=None and rebuilds/re-samples.
+        self._pending = None
+
+
 def nonsc_count_for_ratio(n_sc_train, sc_to_nonsc_ratio, n_nonsc_available):
     """Number of non-SC samples to draw per epoch for a given SC:non-SC ratio.
 
@@ -979,7 +1113,10 @@ def nonsc_count_for_ratio(n_sc_train, sc_to_nonsc_ratio, n_nonsc_available):
 
 def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
                          sc_to_nonsc_ratio=float("inf"), num_workers=0,
-                         pin_memory=False, seed=123, split_by="frame"):
+                         pin_memory=False, seed=123, split_by="frame",
+                         size_grouped=False, max_atoms_per_batch=None,
+                         size_pool_factor=20, prefetch_factor=None,
+                         collate_fn=collate_pool):
     """Build SC/non-SC loaders shared by the regression and classification tasks.
 
     Stratified per-class split into train/val/test. ``sc_to_nonsc_ratio`` governs
@@ -1064,11 +1201,29 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
     ns_val_keep = rng.sample(ns_val, n_nonsc_val) if n_nonsc_val else []
     ns_test_keep = rng.sample(ns_test, n_nonsc_test) if n_nonsc_test else []
 
+    # Optional size-grouped batching to bound the GPS global-attention memory
+    # (B x Lmax^2). Cheap only for the packed backend; otherwise fall back.
+    sizes = dataset_atom_counts(dataset) if size_grouped else None
+    if size_grouped and sizes is None:
+        warnings.warn("size_grouped batching requested but this dataset backend "
+                      "exposes no cheap atom counts; using plain batching.",
+                      RuntimeWarning)
+
+    # Shared DataLoader kwargs. prefetch_factor (workers stay this many batches
+    # ahead) is only valid with workers, and smooths the variable-size batches the
+    # size-grouped sampler emits; omit it for the single-process path.
+    loader_kw = dict(num_workers=num_workers, collate_fn=collate_fn,
+                     pin_memory=pin_memory, persistent_workers=(num_workers > 0))
+    if prefetch_factor and num_workers > 0:
+        loader_kw["prefetch_factor"] = prefetch_factor
+
     def make_loader(sampler):
-        return DataLoader(dataset, batch_size=batch_size, sampler=sampler,
-                          num_workers=num_workers, collate_fn=collate_pool,
-                          pin_memory=pin_memory,
-                          persistent_workers=(num_workers > 0))
+        if sizes is not None:
+            batch_sampler = SizeGroupedBatchSampler(
+                sampler, sizes, batch_size, max_atoms=max_atoms_per_batch,
+                pool_factor=size_pool_factor, seed=seed)
+            return DataLoader(dataset, batch_sampler=batch_sampler, **loader_kw)
+        return DataLoader(dataset, batch_size=batch_size, sampler=sampler, **loader_kw)
 
     def balanced_subset(min_idx, maj_idx):
         k = min(len(min_idx), len(maj_idx))

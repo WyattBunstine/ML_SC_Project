@@ -250,7 +250,7 @@ def _compact_v4_graph(graph: dict) -> dict:
         for d in graph.get("dihedrals", [])
     ]
 
-    return {
+    out = {
         "nodes": compact_nodes,
         "edges": compact_edges,
         "adjacency": compact_adj,
@@ -259,6 +259,19 @@ def _compact_v4_graph(graph: dict) -> dict:
         "angle_triplets": compact_triplets,
         "dihedrals": compact_dihedrals,
     }
+    # Geometry for the long-range distance bias (Tier 2): atom-aligned fractional
+    # coords (N,3) + the lattice (3,3). Present in the full builder graph; carried
+    # through so a rebuild keeps them. Defensive — omitted if a graph lacks them
+    # (older builders), and `augment-positions` can backfill existing graphs from
+    # the source structures without a rebuild.
+    fcs = [node.get("frac_coords") for node in graph["nodes"]]
+    lat = (graph.get("metadata") or {}).get("lattice_matrix") or graph.get("lattice_matrix")
+    # Both-or-neither: a downstream consumer must never see frac_coords without the
+    # lattice (or vice versa) — the min-image distance needs both.
+    if fcs and all(c is not None for c in fcs) and lat is not None:
+        out["frac_coords"] = [[float(x) for x in c] for c in fcs]
+        out["lattice"] = [[float(x) for x in row] for row in lat]
+    return out
 
 
 def _fmt_dur(seconds):
@@ -343,6 +356,85 @@ def _process_cgv4_structure_row(task):
     except Exception as exc:
         return (graph_path, "build_fail", frame_id, f"{type(exc).__name__}: {exc}")
     return _compact_and_write(graph, graph_path, frame_id)
+
+
+def _augment_one_with_positions(task):
+    """Worker: backfill frac_coords + lattice onto an EXISTING compact graph from
+    its source structure — NO Voronoi rebuild. task = (graph_path, structure_dict,
+    frame_id). Verifies atom order (the builder emits nodes in structure-site order)
+    by matching each node's Z to the site's species before attaching. Returns the
+    status tuple (graph_path, kind, frame_id, msg); kind in
+    ok | skip | missing | mismatch | fail. Atomic write (.tmp + replace)."""
+    graph_path, structure_dict, frame_id = task
+    try:
+        from pymatgen.core.structure import Structure
+        if not os.path.exists(graph_path):
+            return (graph_path, "missing", frame_id, "graph not built")
+        with open(graph_path) as f:
+            graph = json.load(f)
+        if "frac_coords" in graph and "lattice" in graph:
+            return (graph_path, "skip", frame_id, None)          # resumable
+        struct = Structure.from_dict(structure_dict)
+        nodes = graph["nodes"]
+        if len(nodes) != len(struct):
+            return (graph_path, "mismatch", frame_id,
+                    f"n_atoms {len(nodes)} != structure {len(struct)}")
+        for i, node in enumerate(nodes):
+            if int(node["Z"]) != int(struct[i].specie.Z):
+                return (graph_path, "mismatch", frame_id, f"Z order mismatch at atom {i}")
+        graph["frac_coords"] = [[float(x) for x in s.frac_coords] for s in struct]
+        graph["lattice"] = [[float(x) for x in row] for row in struct.lattice.matrix]
+        tmp = graph_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(graph, f)
+        os.replace(tmp, graph_path)
+        return (graph_path, "ok", frame_id, None)
+    except Exception as exc:  # noqa: BLE001 — recorded per sample, run continues
+        return (graph_path, "fail", frame_id, f"{type(exc).__name__}: {exc}")
+
+
+def augment_graphs_with_positions(record_iter, graph_dir, n_workers=None,
+                                  limit=None, chunksize=8):
+    """Backfill frac_coords + lattice onto already-built compact graphs from their
+    source structures (the cheap alternative to a full Voronoi rebuild). Streams the
+    same record iterator the build used (`iter_mptrj_frames`), so a frame maps to its
+    graph by ``<id>.json``. Resumable (graphs that already carry positions are
+    skipped) and parallel. Reports a per-kind tally; mismatches/fails are logged but
+    don't stop the run."""
+    import multiprocessing as mp
+
+    n_workers = (os.cpu_count() or 1) if n_workers is None else max(1, int(n_workers))
+    counters = {k: 0 for k in ("streamed", "ok", "skip", "missing", "mismatch", "fail")}
+    start = time.time()
+
+    def task_gen():
+        for rec in record_iter:
+            if limit and counters["streamed"] >= limit:
+                break
+            counters["streamed"] += 1
+            fid = str(rec["id"])
+            yield (os.path.join(graph_dir, fid + ".json"), rec["structure"], fid)
+
+    def _consume(results):
+        for graph_path, kind, fid, msg in results:
+            counters[kind] = counters.get(kind, 0) + 1
+            if kind in ("mismatch", "fail") and msg:
+                print(f"  [{kind}] {fid}: {msg}", flush=True)
+            done = sum(counters[k] for k in ("ok", "skip", "missing", "mismatch", "fail"))
+            if done % 5000 == 0:
+                rate = done / max(time.time() - start, 1e-9)
+                print(f"  {done} processed ({rate:.0f}/s)  ok={counters['ok']} "
+                      f"skip={counters['skip']} missing={counters['missing']} "
+                      f"mismatch={counters['mismatch']} fail={counters['fail']}", flush=True)
+
+    if n_workers == 1:
+        _consume(map(_augment_one_with_positions, task_gen()))
+    else:
+        with mp.Pool(processes=n_workers) as pool:
+            _consume(pool.imap_unordered(_augment_one_with_positions, task_gen(),
+                                         chunksize=chunksize))
+    print(f"Augment done in {_fmt_dur(time.time() - start)}: {counters}", flush=True)
+    return counters
 
 
 def _write_index_files(index_rows, output_index):
