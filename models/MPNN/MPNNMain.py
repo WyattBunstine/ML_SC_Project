@@ -255,8 +255,9 @@ def main():
         sample_targets = torch.tensor(train_targets, dtype=torch.float32)
         normalizer = Normalizer(sample_targets, transform=args.get("target_transform", "none"))
 
-    # Infer feature dims from first sample
-    (sample_atom, sample_nbr, _, sample_poly, _, _), _, _lab, _ = dataset[0]
+    # Infer feature dims from first sample ([:6] tolerates a sample input tuple that
+    # carries trailing geometry, e.g. a positioned pack shared with the GPS model).
+    sample_atom, sample_nbr, _, sample_poly, _, _ = dataset[0][0][:6]
     orig_atom_fea_len = sample_atom.shape[-1]
     nbr_fea_len = sample_nbr.shape[-1]
     poly_fea_len = sample_poly.shape[-1]

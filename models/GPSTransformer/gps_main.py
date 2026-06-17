@@ -104,7 +104,9 @@ def main():
                                  dtype=torch.float32)
     normalizer = Normalizer(train_targets, transform=args.get("target_transform", "none"))
 
-    (sa, sn, _, sp, _, _), _, _lab, _ = dataset[0]
+    # [:6] tolerates the sample input tuple carrying trailing geometry (frac_coords,
+    # lattice) for the GPS distance bias — we only need the feature dims here.
+    sa, sn, _, sp, _, _ = dataset[0][0][:6]
     orig_atom_fea_len, nbr_fea_len, poly_fea_len = sa.shape[-1], sn.shape[-1], sp.shape[-1]
 
     if args.get("model_seed") is not None:
