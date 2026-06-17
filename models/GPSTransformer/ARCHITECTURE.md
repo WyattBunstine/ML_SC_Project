@@ -201,13 +201,18 @@ their post-attention state becomes the crystal-level summary `g` that (a)
 conditions the next block's local query (§5.1) and (b) is the natural readout
 (§6).
 
-Deliberate scoping: the global channel has **no geometric positional bias** (we
-store no all-pairs geometry and no lattice vectors). It is permutation-invariant
-set mixing over environment-aware tokens — a strictly stronger learned readout
-than the current mean/attention pooling, expected to add global *chemical*
-context. The benchmark cautionary tale (unbiased per-message `attention` ≈
-baseline) applies, so we do not expect the global channel to help *energy*; its
-test is T_c.
+Originally scoped with **no geometric positional bias** (permutation-invariant set
+mixing over environment-aware tokens, global *chemical* context only). **Built
+2026-06-17 (Tier 2): a PBC long-range distance bias** — the symmetric analog of the
+local angle bias. Per crystal, min-image pairwise distances (`df = frac_i − frac_j;
+df −= df.round(); dc = df·lattice; ‖dc‖`) are RBF-expanded and mapped to a per-head
+additive bias on the global-attention logits, folded — with the padding mask — into
+`nn.MultiheadAttention`'s float `attn_mask`. Computed once per forward (positions are
+constant across blocks) and shared. Gated by `use_dist_bias` (default off; needs a
+positioned pack — see §10); rotation/translation-invariant by construction; warns +
+skips on a positionless (zero-lattice) batch. It also turns uniform all-to-all mixing
+into locality-aware attention (an over-smoothing mitigation). Still expected ~neutral
+on *energy* (nearsighted); its test is T_c.
 
 ### 5.4 FFN + norm
 
@@ -225,9 +230,14 @@ tunable option). With `local_transformer=False` only the global FFN is present.
 - **Per-atom output `h^L` (N, D_enc):** the contract deliverable — cached for
   transfer, never pooled when used as a frozen encoder. This is the only thing
   transfer uses; every head below is **discarded after pretraining**.
-- **Energy head (crystal-level):** register token(s) `g^L` ‖ `mean ‖ max` pool of
-  `h^L` → scalar energy (intensive, eV/atom). **Forces = `−∂E/∂x` via autograd**
-  (positions are in the forward pass, §1/§9).
+- **Energy head — BUILT as a per-atom decomposition (default, 2026-06-17):**
+  `E = mean_i head(h_i)` — a shared MLP maps each atom to a scalar energy, then
+  averaged over the crystal (intensive, eV/atom). This is the standard MLIP
+  "energy is a sum of local contributions" readout, and it keeps a high-contribution
+  atom from being washed out by averaging embeddings before the nonlinear head
+  (`per_atom_head=false` restores the older `mean`/`mean_max`-pool-then-head).
+  Register-token / `g^L`-conditioned pooling remains deferred. **Forces = `−∂E/∂x`
+  via autograd** still pending the positions-in-forward increment (§1/§9).
 - **Per-atom magnetic-moment head:** `h^L → scalar |m_i|` (collinear), the MPtrj
   magmom target (§9).
 - **Per-atom electronic head:** `h^L →` site-projected `N_i(E_F)` (and optionally
@@ -404,6 +414,27 @@ from MPNN) so GPS owns its model end-to-end; plus `WithinCrystalAttention`,
   `local_transformer`) reverts to the original fusion for ablation. Smoke-verified
   forward+backward across `local_transformer` × `gps_global` (adds ~265k params at
   d=128/L=4 from the per-block local FFNs).
+  **Update (2026-06-17): Tier 2 / Increment 2 — distance bias, per-atom head,
+  ablation ladder (branch `gps-tier2`).**
+  - **`per_atom_head` (default)**: readout is now `E = mean_i head(h_i)` — each atom
+    gets a scalar energy, then averaged (the standard MLIP energy-is-a-sum-of-local-
+    contributions decomposition), so a high-contribution atom isn't washed out by
+    averaging embeddings before the nonlinear head. `per_atom_head=false` restores
+    pool-then-head (the only path that enables `mean_max`). `_segment_mean` accumulates
+    in fp32 (bf16 autocast would drop low-order terms over many atoms).
+  - **PBC distance bias** on the global attention (§5.3): `use_dist_bias` +
+    `dist_cutoff`/`n_dist_rbf`. Needs a *positioned* pack (see below).
+  - **Ablation gates** (one model, one factor per rung): `use_bond_edges`,
+    `use_angle_bias` (gates the bond shell's angle term), `shell_aggregation ∈
+    {attention, mean}` (a NEW non-attention mean baseline), and `n_conv=0` (raw atoms
+    → head). Drives `configs/gps_ablation_suite/01–08` (raw → +bond → +poly →
+    +attention → +angle → +local-transformer → +global → +distance-bias).
+  - **Stability**: `gps_eform.json` at lr 0.003 diverged (loss spike → constant-
+    predictor collapse); fixed to lr 3e-4 / warmup 3ep / grad-clip 0.5 + bf16 amp +
+    size-grouped batching (`max_atoms_per_batch`) to bound the poly-shell O(N·M²) memory.
+  - Guard: `scripts/smoke_dataset.py` (end-to-end dataset→dims→collate→forward, both
+    backends × both models) — the per-sample tuple grew 6→8 to carry positions; run it
+    before any data-layer change.
 - `gps_main.py` — thin trainer entry: builds the model, drives `common`'s loaders
   + `run_regression`. CLI: `python main.py train-gps configs/gps/gps_eform.json`.
 
@@ -421,8 +452,16 @@ from MPNN) so GPS owns its model end-to-end; plus `WithinCrystalAttention`,
   embeddings for transfer.
 
 **New data work (prerequisite for the multi-task increment, §9.1):**
+- **positions (frac_coords + lattice) — DONE for the distance bias (2026-06-17).**
+  `_compact_v4_graph` had been DROPPING them at build time, so packed_v1 carries no
+  geometry. Regenerated WITHOUT a Voronoi rebuild: `deploy.sh augment-positions`
+  backfills them onto existing graphs from the source MPtrj structures (atom-order
+  verified by Z) → `deploy.sh pack-mptrj <SCRATCH>/MPtrj/packed_v2`. The pack now
+  stores `frac_coords` (atom-aligned) + `lattice` (meta col) + `has_positions`;
+  legacy packs read as zeros. `use_dist_bias`/rung 08 train on `packed_v2`. The same
+  positions are the prerequisite for forces (§7/§9) — bundle that increment with this.
 - extend `database/Extract_MPtrj.py` to keep `force` + `magmom` (+ `bandgap`) —
-  currently dropped — and carry them (+ positions) through the packed store.
+  currently dropped — and carry them through the packed store.
 - a Materials-Project DOS pull (site-projected N(E_F), via pymatgen) joined to the
   pretraining structures; optional JARVIS-DFT/AFLOW fallback (§9.6).
 

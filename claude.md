@@ -364,6 +364,13 @@ attention interleaved per block with within-crystal global attention; global tok
 may condition the local center query; poly channel as second local relation;
 register-token readout) — pretrained on MPtrj energies (+ Phase 3 curriculum), then
 plugged behind the Phase 1 contract. It is NOT trained on SuperCon from scratch.
+**Status (2026-06-17): BUILT and pretraining (branch `gps-tier2`).** Full
+pre-LN-transformer local channel, per-atom energy head, a PBC long-range distance
+bias on the global attention, and an 8-rung complexity ablation ladder
+(`configs/gps_ablation_suite/`, raw→…→+distance-bias) currently running on MPtrj
+formation energy. The positions data the distance bias needs — also the Phase-4
+forces prerequisite — is regenerated without a Voronoi rebuild via
+`deploy.sh augment-positions` → `packed_v2`. Current build state: ARCHITECTURE.md §10.
 SuperCon side: 3DSC family labels (cuprates/Fe-based/heavy-fermion/…) for
 family-resolved evaluation; ordered-compound subsets to control the
 doping-representation problem. Deliverable: the conventional/unconventional
