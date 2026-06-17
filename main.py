@@ -115,6 +115,24 @@ def cmd_build_mptrj(args):
     print("Done.")
 
 
+def cmd_augment_positions(args):
+    # Backfill frac_coords + lattice onto existing MPtrj graphs from the source
+    # structures (NO Voronoi rebuild) so the packed store can carry geometry for the
+    # long-range distance bias. Resumable + parallel; run where the graphs live
+    # (cluster scratch), then re-pack with pack-dataset.
+    if not os.path.exists(args.input):
+        sys.exit(f"error: MPtrj JSON not found: {args.input}")
+    graph_dir = args.graph_dir or "database/datafiles/MPtrj/graphs_v4"
+    if not os.path.isdir(graph_dir):
+        sys.exit(f"error: graph dir not found: {graph_dir}")
+    from database.Extract_MPtrj import iter_mptrj_frames
+    print(f"Augmenting graphs in {graph_dir} with positions from {args.input}")
+    database.augment_graphs_with_positions(
+        iter_mptrj_frames(args.input), graph_dir=graph_dir,
+        n_workers=args.workers, limit=args.limit)
+    print("Done. Re-pack (pack-dataset) to carry positions into the packed store.")
+
+
 def cmd_pack_dataset(args):
     # Pack a cgv4 index (any dataset: MP_Energy, SC, MPtrj) into the columnar
     # binary format that PackedCIFDataV4 trains from: graph JSONs are parsed and
@@ -506,6 +524,25 @@ def build_parser():
     mt.add_argument("--workers", type=int, default=None,
                     help="worker processes (default: os.cpu_count())")
     mt.set_defaults(func=cmd_build_mptrj)
+
+    ap = sub.add_parser(
+        "augment-positions",
+        help="backfill frac_coords + lattice onto existing MPtrj graphs (no rebuild)",
+        description="Stream the MPtrj JSON and attach each frame's fractional coords "
+                    "+ lattice to its already-built compact graph (matched by <id>.json), "
+                    "verifying atom order against the source structure. The cheap "
+                    "alternative to a full Voronoi rebuild for the long-range distance "
+                    "bias. Resumable (graphs already carrying positions are skipped). "
+                    "After this, re-run pack-dataset to carry positions into the pack.",
+    )
+    ap.add_argument("--input", default="database/datafiles/MPtrj/MPtrj_2022.9_full.json",
+                    help="bulk MPtrj JSON (the same source build-mptrj used)")
+    ap.add_argument("--graph-dir", default=None,
+                    help="dir of per-frame graph JSONs to augment (default: database/datafiles/MPtrj/graphs_v4)")
+    ap.add_argument("--limit", type=int, default=None, help="only process the first N frames")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="worker processes (default: os.cpu_count())")
+    ap.set_defaults(func=cmd_augment_positions)
 
     pk = sub.add_parser(
         "pack-dataset",

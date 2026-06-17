@@ -8,6 +8,7 @@ Detects the config type and checks, for whichever it is:
   * the regression target is resolvable, and that log1p is not applied to a target
     with negative values (e.g. formation energies) which would produce NaNs
 
+  - "GPS"      config: has `index_path` + architecture="gps" -> models/GPSTransformer/gps_main.py
   - "MPNN"     config: has `index_path` -> models/MPNN/MPNNMain.py + CIFDataV4
   - "Original" config: has `dataset`   -> models/CGCNNMain.py + CIFData
 
@@ -40,6 +41,17 @@ MPNN_ENUMS = {
 ORIG_ENUMS = {
     "task": {"regression", "classification"},
     "optim": {"SGD", "Adam"},          # CGCNNMain raises on anything else
+}
+# GPS shares the v4-graph data path with MPNN but its trainer is regression-only
+# (gps_main.py exits otherwise) and GPSCrystalNet restricts atom_pooling to
+# mean/mean_max (its _POOLINGS). Stricter than MPNN_ENUMS for the shared keys.
+GPS_ENUMS = {
+    "task": {"regression"},
+    "target_transform": {"none", "log1p"},
+    "optim": {"SGD", "Adam", "AdamW"},
+    "split_by": {"frame", "material"},
+    "atom_pooling": {"mean", "mean_max"},
+    "shell_aggregation": {"attention", "mean"},
 }
 
 
@@ -249,6 +261,37 @@ def validate_mpnn(cfg, err, warn, cpus):
     _check_workers_vs_cpus(cfg, cpus, warn)
 
 
+def validate_gps(cfg, err, warn, cpus):
+    # Reuse every MPNN index/target/file check (GPS reads the same v4-graph store),
+    # then add the GPS-only model constraints that GPSCrystalNet asserts at
+    # construction — caught here so they fail locally, before a queue wait.
+    validate_mpnn(cfg, err, warn, cpus)
+    _check_enums(cfg, GPS_ENUMS, err)
+
+    # atom_feat_len must be divisible by both the local (set_transformer_heads) and
+    # the global (gps_global_heads, default = local) attention head counts.
+    d = cfg.get("atom_feat_len", 128)
+    heads = cfg.get("set_transformer_heads", 8)
+    if isinstance(d, int) and isinstance(heads, int) and heads > 0 and d % heads != 0:
+        err.append(f"atom_feat_len ({d}) must be divisible by set_transformer_heads ({heads})")
+    if cfg.get("gps_global", True):
+        gh = cfg.get("gps_global_heads", heads)
+        if isinstance(d, int) and isinstance(gh, int) and gh > 0 and d % gh != 0:
+            err.append(f"atom_feat_len ({d}) must be divisible by gps_global_heads ({gh})")
+
+    # Size-grouped batching knobs (optional): a max_atoms cap below batch_size's
+    # nominal load just forces tiny batches — warn rather than error.
+    map_ = cfg.get("max_atoms_per_batch")
+    if map_ is not None and (not isinstance(map_, int) or map_ <= 0):
+        err.append(f"max_atoms_per_batch={map_!r} must be a positive integer (or omitted)")
+    spf = cfg.get("size_pool_factor")
+    if spf is not None and (not isinstance(spf, int) or spf < 1):
+        err.append(f"size_pool_factor={spf!r} must be an integer >= 1 (or omitted)")
+    if cfg.get("use_dist_bias") and not cfg.get("gps_global", True):
+        err.append("use_dist_bias=true requires gps_global=true (the distance bias "
+                   "is applied to the global attention)")
+
+
 def validate_orig(cfg, err, warn, cpus):
     _require(cfg, ["dataset_rd", "dataset", "atom_init", "out_file", "epochs",
                    "batch_size", "learning_rate", "val_ratio", "test_ratio"], err)
@@ -326,8 +369,12 @@ def main():
 
     err, warn = [], []
     if "index_path" in cfg:
-        kind = "MPNN"
-        validate_mpnn(cfg, err, warn, a.cpus)
+        if str(cfg.get("architecture", "")).strip().lower() == "gps":
+            kind = "GPS"
+            validate_gps(cfg, err, warn, a.cpus)
+        else:
+            kind = "MPNN"
+            validate_mpnn(cfg, err, warn, a.cpus)
     elif "dataset" in cfg:
         kind = "Original CGCNN"
         validate_orig(cfg, err, warn, a.cpus)
