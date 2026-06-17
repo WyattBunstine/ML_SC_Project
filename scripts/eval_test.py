@@ -123,7 +123,7 @@ class MPNNAdapter(ModelAdapter):
             # evaluating without it would silently change the model's inputs.
             build_angle_bias=(edge_agg == "set_transformer"),
         )
-        (a, n, _, poly, _, _), _, _, _ = self.dataset[0]
+        a, n, _, poly, _, _ = self.dataset[0][0][:6]   # [:6]: tolerate trailing geometry
         self.model = CrystalMPNN(
             orig_atom_fea_len=a.shape[-1], nbr_fea_len=n.shape[-1], poly_fea_len=poly.shape[-1],
             atom_fea_len=c.get("atom_feat_len", 64), edge_hidden_dim=c.get("edge_hidden_dim", 128),
