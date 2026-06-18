@@ -95,6 +95,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
     totals = {name: 0 for name in _FIELDS}   # element rows written per field
     offsets = {col: [] for col in _OFFSET_COLS}
     kept_pos, failures, lattices, dih_any, stresses = [], [], [], [], []
+    phys_any = {"forces": False, "magmom": False, "stress": False}   # any finite -> has_X
     start = time.time()
 
     def _write(name, arr, dtype):
@@ -125,6 +126,9 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
             lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
             stresses.append(np.asarray(r["stress"], dtype=np.float32).reshape(9))
             dih_any.append(bool(np.any(r["dih_node"])))
+            for _k in phys_any:
+                if not phys_any[_k] and np.isfinite(r[_k]).any():
+                    phys_any[_k] = True
             kept_pos.append(pos)
             done = len(kept_pos) + len(failures)
             if done % 5000 == 0:
@@ -165,6 +169,9 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
         "has_angles": totals["ang_cos"] > 0,
         "has_positions": bool(np.abs(lat_stack).sum() > 0),
         "has_dihedrals": bool(any(dih_any)),
+        "has_forces": phys_any["forces"],
+        "has_magmom": phys_any["magmom"],
+        "has_stress": phys_any["stress"],
         "source_index": os.path.abspath(index_path),
         "n_failed": len(failures),
     }
