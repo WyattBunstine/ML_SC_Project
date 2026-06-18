@@ -33,7 +33,7 @@ from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_target
                       _select_target_key, build_data_rows, rows_meanstd,
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN,
-                      DIHEDRAL_FEA_LEN)
+                      DIHEDRAL_FEA_LEN, DOS_N_ENERGY)
 
 PACK_VERSION = 1
 
@@ -94,8 +94,8 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
              for name in _FIELDS}
     totals = {name: 0 for name in _FIELDS}   # element rows written per field
     offsets = {col: [] for col in _OFFSET_COLS}
-    kept_pos, failures, lattices, dih_any, stresses = [], [], [], [], []
-    phys_any = {"forces": False, "magmom": False, "stress": False}   # any finite -> has_X
+    kept_pos, failures, lattices, dih_any, stresses, doses = [], [], [], [], [], []
+    phys_any = {"forces": False, "magmom": False, "stress": False, "dos": False}  # any finite -> has_X
     jimage_any = [False]   # any nonzero bond_jimage -> graphs carry exact PBC images
     start = time.time()
 
@@ -126,6 +126,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
                 _write(name, r[name], dtype)
             lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
             stresses.append(np.asarray(r["stress"], dtype=np.float32).reshape(9))
+            doses.append(np.asarray(r["dos"], dtype=np.float32).reshape(DOS_N_ENERGY))
             dih_any.append(bool(np.any(r["dih_node"])))
             for _k in phys_any:
                 if not phys_any[_k] and np.isfinite(r[_k]).any():
@@ -158,9 +159,12 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
     lat_stack = np.stack(lattices) if lattices else np.zeros((0, 9), dtype=np.float32)
     if lattices:
         meta["lattice"] = list(lat_stack)
-    # Per-sample stress (3x3 -> 9), aligned with kept_pos (NaN where the frame lacked it).
+    # Per-sample stress (3x3 -> 9) + total DOS (DOS_N_ENERGY,), aligned with kept_pos
+    # (NaN where the frame lacked them).
     if stresses:
         meta["stress"] = list(np.stack(stresses))
+    if doses:
+        meta["dos"] = list(np.stack(doses))
     meta.to_pickle(os.path.join(out_dir, "meta.pickle"))
 
     header = {
@@ -175,6 +179,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
         "has_forces": phys_any["forces"],
         "has_magmom": phys_any["magmom"],
         "has_stress": phys_any["stress"],
+        "has_dos": phys_any["dos"],
         # any nonzero per-edge image -> graphs carry EXACT to_jimage (rebuilt). False on a
         # pack of un-rebuilt graphs (all (0,0,0)) -> exact PBC forces would be wrong; verify
         # this is true on packed_v4 before multitask training.
@@ -266,6 +271,8 @@ class PackedCIFDataV4(Dataset):
         # scalar. Absent column -> None -> NaN target -> masked off.
         self._stress = (np.stack(meta["stress"].to_numpy()).astype(np.float32).reshape(-1, 3, 3)
                         if "stress" in meta.columns else None)
+        self._dos = (np.stack(meta["dos"].to_numpy()).astype(np.float32).reshape(-1, DOS_N_ENERGY)
+                     if "dos" in meta.columns else None)
         # Coerce non-numeric cells (e.g. '' for missing) to NaN before float cast.
         self._bandgap = (pd.to_numeric(meta["bandgap"], errors="coerce")
                          .to_numpy().astype(np.float32)
@@ -326,6 +333,8 @@ class PackedCIFDataV4(Dataset):
                   else np.full((n, 1), np.nan, dtype=np.float32))
         stress = (self._stress[pos] if self._stress is not None
                   else np.full((3, 3), np.nan, dtype=np.float32))
+        dos = (self._dos[pos] if self._dos is not None
+               else np.full(DOS_N_ENERGY, np.nan, dtype=np.float32))
         lattice = (self._lattice[pos] if self._lattice is not None
                    else np.zeros((3, 3), dtype=np.float32))
         return {
@@ -337,6 +346,7 @@ class PackedCIFDataV4(Dataset):
             "forces": forces,
             "magmom": magmom,
             "stress": stress,
+            "dos": dos,
             "bond_cnt": mm["bond_cnt"][a0:a0 + n],
             "bond_nbr": mm["bond_nbr"][b0:b0 + nb],
             "bond_fea": mm["bond_fea"][b0:b0 + nb],

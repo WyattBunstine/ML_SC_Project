@@ -72,6 +72,9 @@ ANGLE_FEA_LEN = int(len(ANGLE_RBF_CENTERS))
 # Dihedrals (4-body torsions) are encoded with the SAME cos-RBF basis as angles
 # (cos(dihedral) is in [-1, 1] too). See dihedral_node_features.
 DIHEDRAL_FEA_LEN = ANGLE_FEA_LEN
+# Multitask DOS target: per-structure total density of states sampled on a FIXED energy
+# grid (E_F-aligned). The fetch (Download_MP_dos) and the model's `n_energy` must match this.
+DOS_N_ENERGY = 256
 
 
 def _angle_rbf(cos_vals) -> np.ndarray:
@@ -627,6 +630,13 @@ def _extract_ragged(graph):
     st = graph.get("stress")
     stress = (np.asarray(st, dtype=np.float32).reshape(3, 3)
               if st is not None else np.full((3, 3), np.nan, dtype=np.float32))
+    # Per-structure total DOS target (DOS_N_ENERGY,) on the fixed E_F-aligned grid; absent
+    # (MPtrj frames / non-DOS materials) -> NaN -> masked. The DOS-bearing population is the
+    # relaxed MP graphs (a separate masked-union member of the multitask training set).
+    dv = graph.get("dos")
+    dos = (np.asarray(dv, dtype=np.float32).reshape(DOS_N_ENERGY)
+           if dv is not None and len(dv) == DOS_N_ENERGY
+           else np.full(DOS_N_ENERGY, np.nan, dtype=np.float32))
 
     return {
         "n_atoms": n_atoms,
@@ -636,6 +646,7 @@ def _extract_ragged(graph):
         "dih_node": dih_node,
         "forces": forces,
         "magmom": magmom,
+        "dos": dos,
         "stress": stress,
         "bond_cnt": bond_cnt,
         "bond_nbr": _arr(bond_nbr, np.int32),
@@ -787,11 +798,13 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
     forces, m_f = _t(r["forces"])          # (N,3)
     magmom, m_m = _t(r["magmom"])          # (N,1)
     stress, m_s = _t(r["stress"])          # (3,3)
+    dos, m_dos = _t(r["dos"])              # (DOS_N_ENERGY,) per-structure total DOS
     energy_t, m_e = _scalar(energy)        # (1,)
     bandgap_t, m_bg = _scalar(bandgap)     # (1,)
-    targets = {"forces": forces, "magmom": magmom, "stress": stress,
+    targets = {"forces": forces, "magmom": magmom, "stress": stress, "dos": dos,
                "energy": energy_t, "bandgap": bandgap_t}
-    masks = {"forces": m_f, "magmom": m_m, "stress": m_s, "energy": m_e, "bandgap": m_bg}
+    masks = {"forces": m_f, "magmom": m_m, "stress": m_s, "dos": m_dos,
+             "energy": m_e, "bandgap": m_bg}
     return targets, masks
 
 
@@ -1152,6 +1165,7 @@ def collate_pool_multitask(dataset_list):
         "forces": torch.cat([t["forces"] for t in tds], dim=0),    # (N, 3)
         "magmom": torch.cat([t["magmom"] for t in tds], dim=0),    # (N, 1)
         "stress": torch.stack([t["stress"] for t in tds], dim=0),  # (B, 3, 3)
+        "dos": torch.stack([t["dos"] for t in tds], dim=0),        # (B, DOS_N_ENERGY)
         "energy": torch.cat([t["energy"] for t in tds], dim=0),    # (B,)
         "bandgap": torch.cat([t["bandgap"] for t in tds], dim=0),  # (B,)
     }

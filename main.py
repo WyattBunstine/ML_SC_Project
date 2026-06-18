@@ -155,6 +155,22 @@ def cmd_augment_physics(args):
     print("Done. Re-pack (pack-dataset) into packed_v4 to carry the new fields.")
 
 
+def cmd_fetch_dos(args):
+    # Fetch MP total DOS and attach it (resampled to the fixed E_F-aligned grid) to the
+    # relaxed MP graphs the index points at -> the DOS-bearing population (a separate
+    # masked-union member) for multitask pretraining. Needs MP_API_KEY + network.
+    # Resumable; then pack-dataset on this index -> the DOS pack (has_dos=true).
+    if not os.path.exists(args.index):
+        sys.exit(f"error: index not found: {args.index}")
+    if not os.environ.get("MP_API_KEY"):
+        sys.exit("error: set the MP_API_KEY environment variable before fetching DOS.")
+    from database.Download_MP_dos import fetch_and_attach_dos, N_ENERGY
+    print(f"Fetching MP DOS for {args.index} (E_F-aligned, {N_ENERGY} bins, "
+          f"broaden={args.broaden} eV) -> graph['dos']. DOS covers a SUBSET of MP.")
+    fetch_and_attach_dos(args.index, broaden_ev=args.broaden, limit=args.limit)
+    print("Done. pack-dataset on this index -> the DOS pack; verify has_dos=true.")
+
+
 def cmd_pack_dataset(args):
     # Pack a cgv4 index (any dataset: MP_Energy, SC, MPtrj) into the columnar
     # binary format that PackedCIFDataV4 trains from: graph JSONs are parsed and
@@ -586,6 +602,23 @@ def build_parser():
     aph.add_argument("--workers", type=int, default=None,
                      help="worker processes (default: os.cpu_count())")
     aph.set_defaults(func=cmd_augment_physics)
+
+    fd = sub.add_parser(
+        "fetch-dos",
+        help="fetch MP total DOS + attach to relaxed MP graphs (the multitask DOS target)",
+        description="Stream an MP index, fetch each material's total DOS via the MP-API, "
+                    "resample it onto a fixed E_F-aligned grid (DOS_N_ENERGY bins over "
+                    "[-10,+5] eV, optional Gaussian broadening), and attach it as "
+                    "graph['dos'] (atomic, resumable). DOS exists for a SUBSET of MP (only "
+                    "materials with an electronic-structure calc), so expect many no_dos "
+                    "skips. Needs MP_API_KEY. pack-dataset after -> the DOS pack.",
+    )
+    fd.add_argument("--index", required=True,
+                    help="MP index pickle (id + graph_path) whose graphs get graph['dos']")
+    fd.add_argument("--broaden", type=float, default=0.1,
+                    help="Gaussian broadening sigma in eV (default 0.1; 0 = none)")
+    fd.add_argument("--limit", type=int, default=None, help="only process the first N materials")
+    fd.set_defaults(func=cmd_fetch_dos)
 
     pk = sub.add_parser(
         "pack-dataset",
