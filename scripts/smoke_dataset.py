@@ -31,7 +31,8 @@ for _p in ("models/common", "models/MPNN", "models/GPSTransformer"):
 
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
-from data import load_cif_dataset, collate_pool, collate_pool_geom  # noqa: E402
+from data import (load_cif_dataset, collate_pool, collate_pool_geom,  # noqa: E402
+                  compute_feature_stats, RICH_NODE_FEA_LEN)
 from pack import pack_dataset  # noqa: E402
 from train import _to_input_var  # noqa: E402
 from model import GPSCrystalNet  # noqa: E402
@@ -107,6 +108,27 @@ def _check_backend(name, dataset):
     return ok
 
 
+def _check_rich(pack_dir, kw):
+    # use_rich_node_features: atom_fea widens by RICH_NODE_FEA_LEN at assemble time
+    # AND the (packed) feature-stats path must match it, else set_feature_stats blows
+    # up on a dim mismatch (the exact bug this guards).
+    ds = load_cif_dataset(pack_dir, use_rich_node_features=True, **kw)
+    nd = ds[0][0][0].shape[-1]
+    stats = compute_feature_stats(ds, list(range(len(ds))), max_graphs=10)
+    dims = (nd, ds[0][0][1].shape[-1], ds[0][0][3].shape[-1])
+    m = GPSCrystalNet(dims[0], dims[1], poly_fea_len=dims[2], atom_fea_len=16,
+                      n_conv=1, h_fea_len=16, n_h=1, n_heads=2, gps_global=False)
+    m.set_feature_stats(stats["node"], stats["edge"], stats["poly"])   # dim-match check
+    m.train()
+    out = m(*collate_pool_geom([ds[i] for i in range(4)])[0])
+    base = ds[0][0][0].shape[-1] - RICH_NODE_FEA_LEN
+    ok = (nd == base + RICH_NODE_FEA_LEN and len(stats["node"][0]) == nd
+          and tuple(out.shape) == (4, 1) and torch.isfinite(out).all().item())
+    print(f"  rich    atom_fea={nd} (+{RICH_NODE_FEA_LEN}) stats={len(stats['node'][0])} "
+          f"fwd={tuple(out.shape)} {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
 def main():
     warnings.simplefilter("ignore")
     tmp = tempfile.mkdtemp(prefix="smoke_dataset_")
@@ -116,9 +138,10 @@ def main():
                   use_bond_angles=False, build_angle_bias=False)
         ok_packed = _check_backend("packed", load_cif_dataset(pack_dir, **kw))
         ok_lazy = _check_backend("lazy", load_cif_dataset(index_pickle, **kw))
+        ok_rich = _check_rich(pack_dir, kw)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if ok_packed and ok_lazy:
+    if ok_packed and ok_lazy and ok_rich:
         print("smoke_dataset: PASS")
         return 0
     print("smoke_dataset: FAIL", file=sys.stderr)

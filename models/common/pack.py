@@ -31,7 +31,7 @@ from torch.utils.data import Dataset
 
 from data import (CIFDataV4, _extract_ragged, _assemble_sample,
                       _select_target_key, build_data_rows, rows_meanstd,
-                      accumulate_slot_rbf,
+                      accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN)
 
 PACK_VERSION = 1
@@ -182,7 +182,7 @@ class PackedCIFDataV4(Dataset):
     def __init__(self, pack_dir, max_num_nbr=14, max_num_poly_nbr=16,
                  graph_cache_size=0, random_seed=123, target_column=None,
                  use_bond_angles=False, use_poly_edges=True,
-                 build_angle_bias=False):
+                 build_angle_bias=False, use_rich_node_features=False):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
         if self._header["version"] != PACK_VERSION:
@@ -222,6 +222,7 @@ class PackedCIFDataV4(Dataset):
         self.use_bond_angles = use_bond_angles
         self.use_poly_edges = use_poly_edges
         self.build_angle_bias = build_angle_bias
+        self.use_rich_node_features = use_rich_node_features
 
         meta = pd.read_pickle(os.path.join(pack_dir, "meta.pickle"))
         self.target_column = target_key = _select_target_key(
@@ -307,7 +308,7 @@ class PackedCIFDataV4(Dataset):
         sample = _assemble_sample(self._ragged(pos),
                                   self.max_num_nbr, self.max_num_poly_nbr,
                                   self.use_poly_edges, self.use_bond_angles,
-                                  self.build_angle_bias)
+                                  self.build_angle_bias, self.use_rich_node_features)
         return (sample, torch.FloatTensor([float(target)]),
                 torch.LongTensor([int(label)]), cif_id)
 
@@ -332,7 +333,10 @@ class PackedCIFDataV4(Dataset):
         node_rows, edge_rows, poly_rows = [], [], []
         for i in idx:
             r = self._ragged(self.data[i][2])
-            node_rows.append(np.asarray(r["atom_fea"], dtype=np.float32))
+            node = np.asarray(r["atom_fea"], dtype=np.float32)
+            if self.use_rich_node_features:   # match the assemble-time concat
+                node = np.concatenate([node, rich_node_features(node[:, 0])], axis=1)
+            node_rows.append(node)
             bond = np.asarray(r["bond_fea"], dtype=np.float32)
             if self.use_bond_angles:
                 # Per-slot mean RBF via the shared accumulator (same math as
@@ -360,8 +364,9 @@ class PackedCIFDataV4(Dataset):
             rows = [x for x in rows if len(x)]
             return np.concatenate(rows, axis=0) if rows else np.zeros((0, width), np.float32)
 
+        node_dim = NODE_FEA_LEN + (RICH_NODE_FEA_LEN if self.use_rich_node_features else 0)
         return {
-            "node": rows_meanstd(_cat(node_rows, NODE_FEA_LEN), NODE_FEA_LEN),
+            "node": rows_meanstd(_cat(node_rows, node_dim), node_dim),
             "edge": rows_meanstd(_cat(edge_rows, edge_dim), edge_dim),
             "poly": rows_meanstd(_cat(poly_rows, POLY_FEA_LEN), POLY_FEA_LEN),
         }
