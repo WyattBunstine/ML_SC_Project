@@ -18,12 +18,25 @@ test set. Each rung flips exactly one architectural flag relative to the previou
 | 07_global_attn | within-crystal global attention | `gps_global:true` | Does crystal-global attention help energy? (expected ~neutral; its real test is T_c) |
 | 08_dist_bias | PBC long-range distance bias | `use_dist_bias:true`, `index_path:packed_v2` | Does long-range geometry on the global attention help? (a T_c bet; ~neutral on energy expected) |
 
+Two **off-ladder** rungs probe richer node features (a different axis from the
+local→global ladder — both branch off rung 06, the local-only best, so 06 is the
+baseline for each):
+
+| rung | adds | flags changed | question |
+|---|---|---|---|
+| 09_rich_features | physically-motivated element features (mass, group, row, #unpaired electrons) | `use_rich_node_features:true` | Do per-element physical features move the ~0.035 floor? (runs on `packed_v1`, no re-pack) |
+| 10_dihedrals | per-atom 4-body torsion summary (mean cos-RBF over incident torsions) | `use_dihedrals:true`, `index_path:packed_v3` | Does the 4-body geometry the graph already carries help? |
+
 Rung 07 is the current full GPS encoder (== `configs/gps/gps_eform.json` minus the
 distance bias). **Rung 08 requires `packed_v2`** (the positioned pack, built via
-`deploy.sh augment-positions` + a re-pack) — it's the only rung that needs the data
+`deploy.sh augment-positions` + a re-pack) — it's the only ladder rung that needs the data
 regeneration. `packed_v1` and `packed_v2` share the same frames + `split_seed`, so
 `compare_runs` still pairs 07 vs 08 on an identical test set (the only difference is
 the distance bias; 07 simply ignores the positions v2 carries).
+**Rung 10 requires `packed_v3`** — re-pack with `deploy.sh pack-mptrj packed_v3` (the
+dihedrals are already in the graphs; no Voronoi rebuild). Before relying on it, confirm
+the source graphs carry torsions and the pack picked them up: the new pack's
+`pack_header.json` must report `"has_dihedrals": true`.
 
 Notes / caveats:
 - The 01→02 step changes two things (adds the network *and* bond edges); every later

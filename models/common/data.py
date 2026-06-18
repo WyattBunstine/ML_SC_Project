@@ -69,6 +69,9 @@ POLY_WEIGHT_IDX = 0
 ANGLE_RBF_CENTERS = np.linspace(-1.0, 1.0, 12).astype(np.float32)
 ANGLE_RBF_WIDTH = float(ANGLE_RBF_CENTERS[1] - ANGLE_RBF_CENTERS[0])  # center spacing
 ANGLE_FEA_LEN = int(len(ANGLE_RBF_CENTERS))
+# Dihedrals (4-body torsions) are encoded with the SAME cos-RBF basis as angles
+# (cos(dihedral) is in [-1, 1] too). See dihedral_node_features.
+DIHEDRAL_FEA_LEN = ANGLE_FEA_LEN
 
 
 def _angle_rbf(cos_vals) -> np.ndarray:
@@ -76,6 +79,39 @@ def _angle_rbf(cos_vals) -> np.ndarray:
     c = np.asarray(cos_vals, dtype=np.float32).reshape(-1, 1)
     diff = c - ANGLE_RBF_CENTERS.reshape(1, -1)
     return np.exp(-(diff ** 2) / (2.0 * ANGLE_RBF_WIDTH ** 2)).astype(np.float32)
+
+
+def dihedral_node_features(graph, n_atoms):
+    """Per-atom mean Gaussian-RBF of cos(dihedral) over every 4-body torsion whose
+    CENTRAL bond is incident to the atom (i.e. the atom is a torsion-axis endpoint).
+    Returns (n_atoms, DIHEDRAL_FEA_LEN). A coarse per-NODE summary of the torsional
+    environment -- the per-bond form is the refinement. Legacy graphs without a
+    'dihedrals' field yield zeros. Shared by the packer (_extract_ragged) and the
+    lazy stats path (compute_feature_stats) so the two representations can't drift."""
+    out = np.zeros((n_atoms, DIHEDRAL_FEA_LEN), dtype=np.float32)
+    dihedrals = graph.get("dihedrals", [])
+    if not dihedrals or not n_atoms:
+        return out
+    edges_by_id = {e["id"]: e for e in graph.get("edges", [])}
+    axes, cosv = [], []
+    for d in dihedrals:                        # d = [central_edge, edge_i, edge_l, cos]
+        e = edges_by_id.get(int(d[0]))
+        if e is not None:
+            axes.append((int(e["source"]), int(e["target"])))
+            cosv.append(float(d[3]))
+    if not cosv:
+        return out
+    rbf = _angle_rbf(cosv)                      # (D, DIHEDRAL_FEA_LEN)
+    atoms = np.asarray(axes, dtype=np.int64)    # (D, 2): the torsion-axis endpoints
+    cnt = np.zeros(n_atoms, dtype=np.int64)
+    for col in (0, 1):
+        a = atoms[:, col]
+        ok = (a >= 0) & (a < n_atoms)
+        np.add.at(out, a[ok], rbf[ok])          # scatter-add onto both axis endpoints
+        np.add.at(cnt, a[ok], 1)
+    nz = cnt > 0
+    out[nz] /= cnt[nz, None]                     # mean over incident torsions
+    return out
 
 
 def _build_edge_angle_feats(graph) -> dict:
@@ -377,14 +413,18 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
     edge_dim = NBR_FEA_LEN + (ANGLE_FEA_LEN if use_ang else 0)
 
     use_rich = getattr(dataset, "use_rich_node_features", False)
+    use_dih = getattr(dataset, "use_dihedrals", False)
     node_rows, edge_rows, poly_rows = [], [], []
     zero_ang = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
     for i in idx:
         graph = dataset._read_graph(dataset.data[i][2])
-        for n in graph["nodes"]:
+        dih = dihedral_node_features(graph, len(graph["nodes"])) if use_dih else None
+        for ni, n in enumerate(graph["nodes"]):
             feat = _node_to_fea(n)
-            if use_rich:        # match the assemble-time concat so the rich dims get standardized
+            if use_rich:        # match the assemble-time concat order: [base | rich | dih]
                 feat = np.concatenate([feat, rich_node_features([n["Z"]])[0]])
+            if use_dih:
+                feat = np.concatenate([feat, dih[ni]])
             node_rows.append(feat)
         # Iterate every directed (edge, center) use exactly as __getitem__ does, so
         # the stats reflect the CENTER-relative orientation the model consumes
@@ -406,7 +446,8 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
         poly_rows.extend(_poly_edge_to_fea(pe) for pe in graph.get("poly_edges", []))
 
     # nan-safe mean/std via the shared helper (see rows_meanstd).
-    node_dim = NODE_FEA_LEN + (RICH_NODE_FEA_LEN if use_rich else 0)
+    node_dim = (NODE_FEA_LEN + (RICH_NODE_FEA_LEN if use_rich else 0)
+                + (DIHEDRAL_FEA_LEN if use_dih else 0))
     return {
         "node": rows_meanstd(node_rows, node_dim),
         "edge": rows_meanstd(edge_rows, edge_dim),
@@ -544,11 +585,17 @@ def _extract_ragged(graph):
     lattice = (np.asarray(lat, dtype=np.float32).reshape(3, 3)
                if lat is not None else np.zeros((3, 3), dtype=np.float32))
 
+    # Per-atom 4-body torsion summary (atom-aligned, reuses atom_start/n_atoms in the
+    # pack like frac_coords); concatenated onto the node vector at assemble time when
+    # use_dihedrals. Legacy graphs -> all zeros.
+    dih_node = dihedral_node_features(graph, n_atoms)
+
     return {
         "n_atoms": n_atoms,
         "atom_fea": atom_fea.astype(np.float32),
         "frac_coords": frac_coords,
         "lattice": lattice,
+        "dih_node": dih_node,
         "bond_cnt": bond_cnt,
         "bond_nbr": _arr(bond_nbr, np.int32),
         "bond_fea": _arr(bond_fea, np.float32, NBR_FEA_LEN),
@@ -566,7 +613,7 @@ def _extract_ragged(graph):
 
 def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
                      use_poly_edges, use_bond_angles, build_angle_bias,
-                     use_rich_node_features=False):
+                     use_rich_node_features=False, use_dihedrals=False):
     """Truncate/pad a ragged extraction into the model's padded sample tensors.
 
     Replicates the historical _build_sample behavior exactly: closest-first
@@ -633,6 +680,11 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
         # Concat element features looked up from the stored Z (atom_fea[:, 0]).
         rich = torch.from_numpy(rich_node_features(atom_fea[:, 0].numpy()))
         atom_fea = torch.cat([atom_fea, rich], dim=1)
+    if use_dihedrals:
+        # Concat the per-atom 4-body torsion summary (zeros on a dihedral-less pack).
+        # Order is [base | rich | dihedral] -- the stats paths mirror this exactly.
+        dih = torch.from_numpy(np.ascontiguousarray(r["dih_node"], dtype=np.float32))
+        atom_fea = torch.cat([atom_fea, dih], dim=1)
     nbr_fea_t = torch.from_numpy(nbr_fea)
     nbr_fea_idx = torch.from_numpy(nbr_idx)
     if build_angle_bias:
@@ -668,7 +720,7 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
 
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_poly_edges, use_bond_angles, build_angle_bias=False,
-                  use_rich_node_features=False):
+                  use_rich_node_features=False, use_dihedrals=False):
     """Build one fully-padded crystal sample from its graph JSON on disk.
 
     Module-level (not a method) so it is picklable by a ``spawn`` multiprocessing
@@ -686,7 +738,7 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
     # backend's __getitem__, which also returns the whole _assemble_sample tuple.
     sample = _assemble_sample(ragged, max_num_nbr, max_num_poly_nbr,
                               use_poly_edges, use_bond_angles, build_angle_bias,
-                              use_rich_node_features)
+                              use_rich_node_features, use_dihedrals)
 
     target = torch.FloatTensor([float(target)])
     label = torch.LongTensor([int(label)])
@@ -731,9 +783,11 @@ class CIFDataV4(Dataset):
                  max_num_poly_nbr: int = 16, graph_cache_size: int = 4096,
                  random_seed: int = 123, target_column: str = None,
                  use_bond_angles: bool = False, use_poly_edges: bool = True,
-                 build_angle_bias: bool = False, use_rich_node_features: bool = False):
+                 build_angle_bias: bool = False, use_rich_node_features: bool = False,
+                 use_dihedrals: bool = False):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
+        self.use_dihedrals = use_dihedrals
         # When True, __getitem__ also emits a per-atom (M, M) cos-angle matrix for
         # the set-transformer aggregation's pairwise attention bias (idea A), built
         # from the graph's angle_triplets. Independent of use_bond_angles (which
@@ -843,7 +897,8 @@ class CIFDataV4(Dataset):
         for i, rec in enumerate(self.data):
             sample = _build_sample(rec, self.max_num_nbr, self.max_num_poly_nbr,
                                    self.use_poly_edges, self.use_bond_angles,
-                                   self.build_angle_bias, self.use_rich_node_features)
+                                   self.build_angle_bias, self.use_rich_node_features,
+                                   self.use_dihedrals)
             if dev.type != "cpu":
                 sample = _sample_to_device(sample, dev)
             built.append(sample)
@@ -874,7 +929,7 @@ class CIFDataV4(Dataset):
         result = _build_sample(self.data[idx], self.max_num_nbr,
                                self.max_num_poly_nbr, self.use_poly_edges,
                                self.use_bond_angles, self.build_angle_bias,
-                               self.use_rich_node_features)
+                               self.use_rich_node_features, self.use_dihedrals)
 
         # Store the built sample for reuse on later epochs (LRU-bounded).
         self._item_cache[idx] = result

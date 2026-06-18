@@ -32,7 +32,8 @@ from torch.utils.data import Dataset
 from data import (CIFDataV4, _extract_ragged, _assemble_sample,
                       _select_target_key, build_data_rows, rows_meanstd,
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
-                      NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN)
+                      NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN,
+                      DIHEDRAL_FEA_LEN)
 
 PACK_VERSION = 1
 
@@ -43,6 +44,7 @@ PACK_VERSION = 1
 _FIELDS = {
     "atom_fea":  (np.float32, NODE_FEA_LEN),
     "frac_coords": (np.float32, 3),
+    "dih_node":  (np.float32, DIHEDRAL_FEA_LEN),   # atom-aligned 4-body torsion summary
     "bond_cnt":  (np.int32, None),
     "bond_nbr":  (np.int32, None),
     "bond_fea":  (np.float32, NBR_FEA_LEN),
@@ -89,7 +91,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
              for name in _FIELDS}
     totals = {name: 0 for name in _FIELDS}   # element rows written per field
     offsets = {col: [] for col in _OFFSET_COLS}
-    kept_pos, failures, lattices = [], [], []
+    kept_pos, failures, lattices, dih_any = [], [], [], []
     start = time.time()
 
     def _write(name, arr, dtype):
@@ -118,6 +120,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
             for name, (dtype, _w) in _FIELDS.items():
                 _write(name, r[name], dtype)
             lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
+            dih_any.append(bool(np.any(r["dih_node"])))
             kept_pos.append(pos)
             done = len(kept_pos) + len(failures)
             if done % 5000 == 0:
@@ -154,6 +157,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
                  "poly": POLY_FEA_LEN, "angle_rbf": ANGLE_FEA_LEN},
         "has_angles": totals["ang_cos"] > 0,
         "has_positions": bool(np.abs(lat_stack).sum() > 0),
+        "has_dihedrals": bool(any(dih_any)),
         "source_index": os.path.abspath(index_path),
         "n_failed": len(failures),
     }
@@ -182,7 +186,8 @@ class PackedCIFDataV4(Dataset):
     def __init__(self, pack_dir, max_num_nbr=14, max_num_poly_nbr=16,
                  graph_cache_size=0, random_seed=123, target_column=None,
                  use_bond_angles=False, use_poly_edges=True,
-                 build_angle_bias=False, use_rich_node_features=False):
+                 build_angle_bias=False, use_rich_node_features=False,
+                 use_dihedrals=False):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
         if self._header["version"] != PACK_VERSION:
@@ -223,6 +228,7 @@ class PackedCIFDataV4(Dataset):
         self.use_poly_edges = use_poly_edges
         self.build_angle_bias = build_angle_bias
         self.use_rich_node_features = use_rich_node_features
+        self.use_dihedrals = use_dihedrals
 
         meta = pd.read_pickle(os.path.join(pack_dir, "meta.pickle"))
         self.target_column = target_key = _select_target_key(
@@ -278,12 +284,15 @@ class PackedCIFDataV4(Dataset):
         v0, nv = int(o["angv_start"][pos]), int(o["n_angv"][pos])
         frac = (mm["frac_coords"][a0:a0 + n] if "frac_coords" in mm
                 else np.zeros((n, 3), dtype=np.float32))
+        dih = (mm["dih_node"][a0:a0 + n] if "dih_node" in mm
+               else np.zeros((n, DIHEDRAL_FEA_LEN), dtype=np.float32))
         lattice = (self._lattice[pos] if self._lattice is not None
                    else np.zeros((3, 3), dtype=np.float32))
         return {
             "n_atoms": n,
             "atom_fea": mm["atom_fea"][a0:a0 + n],
             "frac_coords": frac,
+            "dih_node": dih,
             "lattice": lattice,
             "bond_cnt": mm["bond_cnt"][a0:a0 + n],
             "bond_nbr": mm["bond_nbr"][b0:b0 + nb],
@@ -308,7 +317,8 @@ class PackedCIFDataV4(Dataset):
         sample = _assemble_sample(self._ragged(pos),
                                   self.max_num_nbr, self.max_num_poly_nbr,
                                   self.use_poly_edges, self.use_bond_angles,
-                                  self.build_angle_bias, self.use_rich_node_features)
+                                  self.build_angle_bias, self.use_rich_node_features,
+                                  self.use_dihedrals)
         return (sample, torch.FloatTensor([float(target)]),
                 torch.LongTensor([int(label)]), cif_id)
 
@@ -334,8 +344,10 @@ class PackedCIFDataV4(Dataset):
         for i in idx:
             r = self._ragged(self.data[i][2])
             node = np.asarray(r["atom_fea"], dtype=np.float32)
-            if self.use_rich_node_features:   # match the assemble-time concat
+            if self.use_rich_node_features:   # match the assemble-time order: [base | rich | dih]
                 node = np.concatenate([node, rich_node_features(node[:, 0])], axis=1)
+            if self.use_dihedrals:
+                node = np.concatenate([node, np.asarray(r["dih_node"], dtype=np.float32)], axis=1)
             node_rows.append(node)
             bond = np.asarray(r["bond_fea"], dtype=np.float32)
             if self.use_bond_angles:
@@ -364,7 +376,8 @@ class PackedCIFDataV4(Dataset):
             rows = [x for x in rows if len(x)]
             return np.concatenate(rows, axis=0) if rows else np.zeros((0, width), np.float32)
 
-        node_dim = NODE_FEA_LEN + (RICH_NODE_FEA_LEN if self.use_rich_node_features else 0)
+        node_dim = (NODE_FEA_LEN + (RICH_NODE_FEA_LEN if self.use_rich_node_features else 0)
+                    + (DIHEDRAL_FEA_LEN if self.use_dihedrals else 0))
         return {
             "node": rows_meanstd(_cat(node_rows, node_dim), node_dim),
             "edge": rows_meanstd(_cat(edge_rows, edge_dim), edge_dim),

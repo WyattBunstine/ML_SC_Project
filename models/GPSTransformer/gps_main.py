@@ -79,6 +79,9 @@ def main():
         # Physically-motivated element features (mass/group/row/#unpaired) concatenated
         # to the node vector at load time — no re-pack needed.
         use_rich_node_features=args.get("use_rich_node_features", False),
+        # Per-atom 4-body torsion summary concatenated to the node vector. Needs a pack
+        # re-built with dihedrals (has_dihedrals=true, e.g. packed_v3); zeros otherwise.
+        use_dihedrals=args.get("use_dihedrals", False),
     )
 
     split_by = resolve_split_by(args.get("split_by"), dataset)
@@ -162,7 +165,8 @@ def main():
                 "atom_feat_len", "n_conv", "h_feat_len", "n_hidden", "set_transformer_heads",
                 "gps_global", "gps_global_heads", "gps_ffn_mult", "local_transformer",
                 "per_atom_head", "use_bond_edges", "shell_aggregation", "use_angle_bias",
-                "use_dist_bias", "use_rich_node_features", "atom_pooling", "use_poly_edges")},
+                "use_dist_bias", "use_rich_node_features", "use_dihedrals",
+                "atom_pooling", "use_poly_edges")},
             "training": {k: args.get(k) for k in (
                 "optim", "learning_rate", "weight_decay", "lr_milestones",
                 "warmup_epochs", "grad_clip", "epochs", "batch_size", "target_transform",
