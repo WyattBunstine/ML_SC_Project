@@ -28,8 +28,10 @@ from torch.optim.lr_scheduler import MultiStepLR
 # Shared infra (models/common) on path, then GPS model from this dir.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
 from data import (load_cif_dataset, get_sc_nonsc_loaders,  # noqa: E402
-                  compute_feature_stats, resolve_split_by, collate_pool_geom)
-from train import Normalizer, run_regression  # noqa: E402
+                  compute_feature_stats, resolve_split_by, collate_pool_geom,
+                  collate_pool_multitask)
+from train import (Normalizer, run_regression,  # noqa: E402
+                   compute_target_stats, run_multitask, _DEFAULT_LOSS_WEIGHTS)
 from model import GPSCrystalNet  # noqa: E402
 
 
@@ -66,6 +68,12 @@ def main():
     args["run_id"] = run_id
     print(f"Run output dir: {run_dir}")
 
+    # Multitask pretraining mode: config carries a non-empty `tasks` list (e.g.
+    # ["energy","forces","stress","magmom","bandgap"]). Conservative-autograd forces
+    # need amp off and the per-target collate. Single-target GPS path is unchanged.
+    multitask = bool(args.get("tasks"))
+    args["differentiable_geometry"] = multitask   # recorded in metadata
+
     # The GPS local channel always uses the bond-angle bias -> build it.
     dataset = load_cif_dataset(
         args["index_path"],
@@ -82,6 +90,8 @@ def main():
         # Per-atom 4-body torsion summary concatenated to the node vector. Needs a pack
         # re-built with dihedrals (has_dihedrals=true, e.g. packed_v3); zeros otherwise.
         use_dihedrals=args.get("use_dihedrals", False),
+        # Multitask: __getitem__ yields (input, targets_dict, masks_dict, cif_id).
+        multitask=multitask,
     )
 
     split_by = resolve_split_by(args.get("split_by"), dataset)
@@ -101,14 +111,12 @@ def main():
         size_pool_factor=args.get("size_pool_factor", 20),
         prefetch_factor=args.get("prefetch_factor"),
         # GPS batches carry frac_coords + lattice (zeros on a positionless pack) so
-        # the optional long-range distance bias has geometry.
-        collate_fn=collate_pool_geom)
+        # the optional long-range distance bias has geometry. Multitask also batches
+        # the per-target/-mask dicts + nbr_jimage for the autograd-force geometry.
+        collate_fn=(collate_pool_multitask if multitask else collate_pool_geom))
     print(f"split_by={split_by} -> split sizes:", loaders["split_sizes"])
 
     sc_idx = loaders["train_sc_idx"]
-    train_targets = torch.tensor([float(dataset.data[i][1]) for i in sc_idx],
-                                 dtype=torch.float32)
-    normalizer = Normalizer(train_targets, transform=args.get("target_transform", "none"))
 
     # [:6] tolerates the sample input tuple carrying trailing geometry (frac_coords,
     # lattice) for the GPS distance bias — we only need the feature dims here.
@@ -145,6 +153,11 @@ def main():
         use_dist_bias=args.get("use_dist_bias", False),
         dist_cutoff=args.get("dist_cutoff", 8.0),
         n_dist_rbf=args.get("n_dist_rbf", 16),
+        # Multitask: per-atom heads + conservative-autograd forces/stress on the live
+        # Cartesian geometry. None -> single-scalar readout (unchanged).
+        tasks=(set(args["tasks"]) if multitask else None),
+        differentiable_geometry=multitask,
+        n_energy=args.get("n_energy", 256),
     )
 
     if args.get("normalize_features", True):
@@ -166,6 +179,7 @@ def main():
                 "gps_global", "gps_global_heads", "gps_ffn_mult", "local_transformer",
                 "per_atom_head", "use_bond_edges", "shell_aggregation", "use_angle_bias",
                 "use_dist_bias", "use_rich_node_features", "use_dihedrals",
+                "tasks", "differentiable_geometry", "n_energy",
                 "atom_pooling", "use_poly_edges")},
             "training": {k: args.get(k) for k in (
                 "optim", "learning_rate", "weight_decay", "lr_milestones",
@@ -183,10 +197,23 @@ def main():
     if args["cuda"]:
         model.cuda()
 
-    criterion = nn.L1Loss()
     optimizer = _build_optimizer(model, args)
     scheduler = MultiStepLR(optimizer, milestones=args.get("lr_milestones", [100]), gamma=0.1)
-    run_regression(args, model, criterion, optimizer, scheduler, loaders, normalizer)
+    if multitask:
+        if args.get("amp"):
+            warnings.warn("amp (bf16) degrades autograd force gradients; "
+                          "multitask should run with amp=false.", RuntimeWarning)
+        target_stats = compute_target_stats(
+            dataset, list(sc_idx), max_samples=args.get("target_stat_samples", 2000),
+            seed=args.get("split_seed", 123))
+        weights = {**_DEFAULT_LOSS_WEIGHTS, **args.get("loss_weights", {})}
+        run_multitask(args, model, optimizer, scheduler, loaders, target_stats, weights)
+    else:
+        train_targets = torch.tensor([float(dataset.data[i][1]) for i in sc_idx],
+                                     dtype=torch.float32)
+        normalizer = Normalizer(train_targets, transform=args.get("target_transform", "none"))
+        criterion = nn.L1Loss()
+        run_regression(args, model, criterion, optimizer, scheduler, loaders, normalizer)
 
 
 if __name__ == "__main__":
