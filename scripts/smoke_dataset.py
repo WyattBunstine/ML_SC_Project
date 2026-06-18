@@ -32,7 +32,8 @@ for _p in ("models/common", "models/MPNN", "models/GPSTransformer"):
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 from data import (load_cif_dataset, collate_pool, collate_pool_geom,  # noqa: E402
-                  compute_feature_stats, RICH_NODE_FEA_LEN, DIHEDRAL_FEA_LEN)
+                  collate_pool_multitask, compute_feature_stats,
+                  RICH_NODE_FEA_LEN, DIHEDRAL_FEA_LEN)
 from pack import pack_dataset  # noqa: E402
 from train import _to_input_var  # noqa: E402
 from model import GPSCrystalNet  # noqa: E402
@@ -222,6 +223,59 @@ def _check_dih(tmp):
     return ok
 
 
+def _mt_graph(mag=True, stress=True):
+    g = _chain_graph()                          # 4-atom chain w/ bonds, frac_coords, lattice
+    g["forces"] = [[0.1 * i, 0.2, 0.3] for i in range(4)]
+    if mag:
+        g["magmom"] = [0.5 * i for i in range(4)]
+    if stress:
+        g["stress"] = [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]]
+    return g
+
+
+def _check_multitask(tmp):
+    # multitask=True -> (input, targets, masks, cif_id). Absent target = NaN -> mask
+    # False + value zeroed (no NaN survives collate). 4 samples: #2 no magmom, #3 no
+    # stress + NaN bandgap. Both backends; masks keyed by cif_id (data is shuffled).
+    specs = [dict(mag=True, stress=True), dict(mag=True, stress=True),
+             dict(mag=False, stress=True), dict(mag=True, stress=False)]
+    gd = os.path.join(tmp, "mt_graphs")
+    os.makedirs(gd)
+    ids, paths = [], []
+    for i, sp in enumerate(specs):
+        p = os.path.join(gd, f"{i}.json")
+        json.dump(_mt_graph(**sp), open(p, "w"))
+        ids.append(str(i))
+        paths.append(p)
+    idx = pd.DataFrame({"id": ids, "graph_path": paths, "label": [1] * 4,
+                        "formation_energy_per_atom": [-1.0 - 0.1 * i for i in range(4)],
+                        "bandgap": [1.5, 2.0, 0.8, float("nan")]})
+    ip = os.path.join(tmp, "mt_index.pickle")
+    idx.to_pickle(ip)
+    pk = os.path.join(tmp, "mt_pack")
+    from pack import pack_dataset as _pd
+    _pd(ip, pk, n_workers=1)
+    kw = dict(target_column="formation_energy_per_atom", use_poly_edges=True, multitask=True)
+    results = []
+    for src in (pk, ip):
+        ds = load_cif_dataset(src, **kw)
+        by = {ds[i][3]: ds[i] for i in range(len(ds))}        # by cif_id (data shuffled)
+        bi, T, Mk, _cids = collate_pool_multitask([by[c] for c in ["0", "1", "2", "3"]])
+        N = int(bi[0].shape[0])
+        ok = (tuple(T["forces"].shape) == (N, 3) and tuple(T["stress"].shape) == (4, 3, 3)
+              and tuple(T["energy"].shape) == (4,)
+              and Mk["magmom"].tolist() == [True, True, False, True]
+              and Mk["stress"].tolist() == [True, True, True, False]
+              and Mk["bandgap"].tolist() == [True, True, True, False]
+              and Mk["forces"].all().item() and Mk["energy"].all().item()
+              and all(torch.isfinite(v).all().item() for v in T.values()))
+        results.append(ok)
+    ok = all(results)
+    print(f"  mtask   keys={sorted(T)} masks_keyed_by_cif both_backends={ok} "
+          f"{'PASS' if ok else 'FAIL'}")
+    return ok
+
+
 def main():
     warnings.simplefilter("ignore")
     tmp = tempfile.mkdtemp(prefix="smoke_dataset_")
@@ -234,9 +288,10 @@ def main():
         ok_rich = _check_rich(pack_dir, kw)
         ok_dih = _check_dih(tmp)
         ok_jimage = _check_jimage(tmp)
+        ok_mt = _check_multitask(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if ok_packed and ok_lazy and ok_rich and ok_dih and ok_jimage:
+    if ok_packed and ok_lazy and ok_rich and ok_dih and ok_jimage and ok_mt:
         print("smoke_dataset: PASS")
         return 0
     print("smoke_dataset: FAIL", file=sys.stderr)
