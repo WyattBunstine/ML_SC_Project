@@ -342,6 +342,14 @@ class GPSCrystalNet(nn.Module):
         # invariant h, forces/stress via autograd of the EXTENSIVE energy. None ->
         # the single-scalar readout below stays bit-identical (MPNN/run_regression).
         self.tasks = set(tasks) if tasks is not None else None
+        if self.tasks is not None:
+            _known = {"energy", "forces", "stress", "magmom", "bandgap", "dos"}
+            bad = self.tasks - _known
+            if bad:
+                raise ValueError(f"unknown task(s) {sorted(bad)}; valid: {sorted(_known)}")
+            if ("forces" in self.tasks or "stress" in self.tasks) and "energy" not in self.tasks:
+                raise ValueError("conservative forces/stress (F=-dE/dr, stress=dE/dstrain) "
+                                 "require the 'energy' task.")
         self.differentiable_geometry = differentiable_geometry
         pool_out = atom_fea_len * (2 if atom_pooling == "mean_max" else 1)
         head_in = atom_fea_len if per_atom_head else pool_out
@@ -428,8 +436,12 @@ class GPSCrystalNet(nn.Module):
         # the EXTENSIVE energy. Returns a dict of task -> prediction.
         out = {}
         if "energy" in self.tasks:
+            # E_total is EXTENSIVE (sum of per-atom energies) -> its gradient gives the
+            # forces. The energy OUTPUT is INTENSIVE (E_total/N), matching the per-atom
+            # target convention (formation_energy_per_atom) and the legacy readout.
             E_total = self._segment_sum(self.heads["energy"](h), seg, B).squeeze(-1)  # (B,)
-            out["energy"] = E_total
+            counts = torch.bincount(seg, minlength=B).clamp(min=1)
+            out["energy"] = E_total / counts                          # (B,) per-atom
             want_f = "forces" in self.tasks
             want_s = "stress" in self.tasks and strain is not None
             if (want_f or want_s) and cart is not None and cart.requires_grad:

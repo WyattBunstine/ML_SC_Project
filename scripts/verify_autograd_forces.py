@@ -57,9 +57,14 @@ def static_features(cart, lattice, seg, idx, jimg):
     nbr_fea[..., 1] = dist / 2.0                                     # sum_radii = 2
     dn = d / dist.unsqueeze(-1).clamp_min(1e-12)
     cos = torch.einsum("nak,nbk->nab", dn, dn)
-    eye = torch.eye(M, dtype=torch.bool)
-    cos[:, eye] = 2.0                                                # diagonal sentinel
-    return nbr_fea, cos
+    # Production fills the (M,M) matrix from angle_triplets: MOST off-diagonal pairs stay
+    # the 2.0 sentinel, only a subset is real. Mimic PARTIAL coverage so the recompute's
+    # masking path (keep sentinels sentinel, recompute only real pairs) is exercised.
+    keep = torch.full((M, M), 2.0, dtype=DT)
+    for a, b in ((0, 1), (1, 2)):           # only these off-diagonal pairs are "real"
+        keep[a, b] = keep[b, a] = 0.0
+    real = (keep.abs() <= 1.0).unsqueeze(0)
+    return nbr_fea, torch.where(real, cos, torch.full_like(cos, 2.0))
 
 
 def main():
@@ -104,6 +109,20 @@ def main():
 
     ok = True
 
+    # ---- 0. SHIPPED forces/stress correctness (the guard the gradchecks alone miss):
+    # out['forces'] MUST equal -dE_total/dcart and out['stress'] = dE_total/dstrain / V.
+    # The gradchecks only validate dE/dcart, dE/dstrain on an energy-only model; this ties
+    # them to the ACTUAL readout values, catching a sign flip, wrong grad-input, or a
+    # missing/incorrect volume division. (energy is intensive E_total/N, so E_total=energy*N.) ----
+    E_total = (out["energy"] * N).sum()
+    g_cart, g_strain = torch.autograd.grad(E_total, (cart, strain), retain_graph=True)
+    vol = torch.det(lattice).abs().item()
+    f_match = (out["forces"].detach() + g_cart).abs().max().item()      # forces == -dE/dcart
+    s_match = (out["stress"].detach() - g_strain / vol).abs().max().item()  # stress == dE/dstrain/V
+    shipped_ok = f_match < 1e-10 and s_match < 1e-10
+    print(f"  shipped     |F+dE/dcart|={f_match:.2e}  |S-dE/dstrain/V|={s_match:.2e}  (<1e-10) {shipped_ok}")
+    ok &= shipped_ok
+
     # ---- 6. shapes ----
     shapes = {"energy": (1,), "forces": (N, 3), "stress": (1, 3, 3),
               "magmom": (N, 1), "bandgap": (1,), "dos": (1, 8)}
@@ -123,10 +142,12 @@ def main():
     # model's INTERNAL autograd.grad(E, cart) (force computation) doesn't run and tangle
     # gradcheck's own backward. forces = -dE/dcart, so this certifies the reported forces.
     saved_tasks = model.tasks
-    model.tasks = {"energy"}
-    fd_ok = torch.autograd.gradcheck(E_of_cart, cart0.flatten().clone().requires_grad_(True),
-                                     eps=1e-6, atol=1e-5, rtol=1e-3, raise_exception=False)
-    model.tasks = saved_tasks
+    try:
+        model.tasks = {"energy"}           # energy-only: no internal grad to tangle gradcheck
+        fd_ok = torch.autograd.gradcheck(E_of_cart, cart0.flatten().clone().requires_grad_(True),
+                                         eps=1e-6, atol=1e-7, rtol=1e-5, raise_exception=False)
+    finally:
+        model.tasks = saved_tasks
     print(f"  gradcheck-F gradcheck(dE/dcart)={fd_ok}  |F|max={F.abs().max().item():.3f}")
     ok &= bool(fd_ok)
 
@@ -158,11 +179,13 @@ def main():
     def E_of_strain(sf):
         return run(cart0.clone().requires_grad_(True), sf.view(1, 3, 3))["energy"]
 
-    model.tasks = {"energy"}
-    stress_fd_ok = torch.autograd.gradcheck(
-        E_of_strain, torch.zeros(9, dtype=DT).requires_grad_(True),
-        eps=1e-6, atol=1e-5, rtol=1e-3, raise_exception=False)
-    model.tasks = saved_tasks
+    try:
+        model.tasks = {"energy"}
+        stress_fd_ok = torch.autograd.gradcheck(
+            E_of_strain, torch.zeros(9, dtype=DT).requires_grad_(True),
+            eps=1e-6, atol=1e-7, rtol=1e-5, raise_exception=False)
+    finally:
+        model.tasks = saved_tasks
     stress_ok = sym < 1e-9 and bool(stress_fd_ok)
     print(f"  stress      sym={sym:.2e} (<1e-9)  gradcheck(dE/dstrain)={stress_fd_ok} -> {stress_ok}")
     ok &= stress_ok
