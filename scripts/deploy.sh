@@ -517,10 +517,14 @@ EOF
     echo ">>   ./scripts/deploy.sh pack-mptrj ${SCRATCH_MPTRJ_PACK_V2}   (packed_v1 untouched)"
 }
 
-# Augment existing MPtrj graphs IN PLACE with the MULTITASK PHYSICS — per-atom forces/
-# magmom + per-structure stress + positions + a per-edge to_jimage (recomputed by
-# bond-length matching, no Voronoi rebuild) — from the source frames, and add the bandgap
-# index column. Resumable. Then re-pack to packed_v4 for conservative-autograd pretraining.
+# Augment REBUILT MPtrj graphs IN PLACE with the MULTITASK TARGETS — per-atom forces/magmom
+# + per-structure stress + positions — from the source frames, and add the bandgap index
+# column. to_jimage is NOT recomputed here (it's degenerate from bond_length for multi-image
+# bonds in hcp/layered/metallic cells); it comes from the REBUILD (the compactor keeps the
+# builder's exact offset). FULL packed_v4 workflow:
+#   1. ./scripts/deploy.sh build-mptrj        # REBUILD: graphs now carry exact to_jimage
+#   2. ./scripts/deploy.sh augment-physics    # attach forces/magmom/stress + bandgap
+#   3. ./scripts/deploy.sh pack-mptrj $SCRATCH_MPTRJ_PACK_V4
 augment_physics() {
     echo ">> Pushing code..."
     sync_code

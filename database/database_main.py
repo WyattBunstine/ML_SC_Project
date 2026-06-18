@@ -196,6 +196,13 @@ def _compact_v4_graph(graph: dict) -> dict:
                 if edge.get("delta_chi_pauling") is not None else 0.0,
             "coord_sphere": 1 if edge.get("coordination_sphere") == "core" else 0,
         })
+        # Keep the builder's EXACT periodic image (offset of target relative to source)
+        # so the packed store carries correct PBC bond vectors for conservative-autograd
+        # forces. Recomputing it post-hoc from bond_length is degenerate for multi-image
+        # bonds (hcp/layered/metallic cells) — must come from the build. Absent on legacy
+        # full graphs -> omitted (the data layer reads (0,0,0) -> min-image fallback).
+        if edge.get("to_jimage") is not None:
+            compact_edges[-1]["to_jimage"] = [int(x) for x in edge["to_jimage"]]
 
     # Adjacency: node_id -> [(edge_id, neighbor_id), ...].
     # v4 graphs don't expose a top-level "adjacency"; rebuild it from the
@@ -438,32 +445,17 @@ def augment_graphs_with_positions(record_iter, graph_dir, n_workers=None,
     return counters
 
 
-def _recompute_to_jimage(s, t, bond_length, frac, lattice):
-    """The periodic image n of `target` relative to `source` that the Voronoi builder
-    bonded, recovered by matching the stored bond_length (exact for any bond shorter than
-    the cell). Searched in a 3x3x3 window around the minimum image. Returns (n_list, err)."""
-    fs, ft = frac[s], frac[t]
-    base = -np.round(ft - fs).astype(int)                  # minimum image
-    best_n, best_err = base.tolist(), 1e18
-    for da in (-1, 0, 1):
-        for db in (-1, 0, 1):
-            for dc in (-1, 0, 1):
-                n = base + np.array([da, db, dc])
-                d = float(np.linalg.norm((ft + n - fs) @ lattice))
-                e = abs(d - bond_length)
-                if e < best_err:
-                    best_err, best_n = e, [int(x) for x in n]
-    return best_n, best_err
-
-
 def _augment_one_with_physics(task):
-    """Worker: backfill onto an EXISTING compact graph (NO Voronoi rebuild) — frac_coords
-    + lattice, per-atom forces / magmom + per-structure stress from the source frame
-    (Z-verified atom order), and per-edge to_jimage recomputed from the geometry by
-    bond-length matching. task = (graph_path, structure_dict, frame_id, force, magmom,
-    stress). Atomic write; resumable (skips graphs already carrying positions + to_jimage).
-    Forces/magmom/stress are attached only when the frame provides them (absent -> the
-    pack reads NaN -> masked off in training)."""
+    """Worker: backfill the multitask TARGETS onto an existing compact graph — per-atom
+    forces / magmom + per-structure stress from the source frame (Z-verified atom order),
+    plus frac_coords + lattice (idempotent). task = (graph_path, structure_dict, frame_id,
+    force, magmom, stress). Atomic write; resumable (skips graphs already carrying forces).
+
+    NOTE: to_jimage is NOT recomputed here — it is degenerate from bond_length alone for
+    multi-image bonds (hcp/layered/metallic cells). It must come from the build (the
+    compactor keeps the builder's exact offset), so run this AFTER a rebuild that carries
+    to_jimage. Forces/magmom/stress are attached only when the frame provides them (absent
+    -> the pack reads NaN -> masked off in training)."""
     graph_path, structure_dict, frame_id, force, magmom, stress = task
     try:
         from pymatgen.core.structure import Structure
@@ -471,9 +463,8 @@ def _augment_one_with_physics(task):
             return (graph_path, "missing", frame_id, "graph not built")
         with open(graph_path) as f:
             graph = json.load(f)
-        edges = graph.get("edges", [])
-        if "frac_coords" in graph and (not edges or "to_jimage" in edges[0]):
-            return (graph_path, "skip", frame_id, None)            # resumable
+        if "forces" in graph:                                      # already augmented (resumable)
+            return (graph_path, "skip", frame_id, None)
         struct = Structure.from_dict(structure_dict)
         nodes = graph["nodes"]
         n = len(nodes)
@@ -482,10 +473,8 @@ def _augment_one_with_physics(task):
         for i, node in enumerate(nodes):
             if int(node["Z"]) != int(struct[i].specie.Z):
                 return (graph_path, "mismatch", frame_id, f"Z order mismatch at atom {i}")
-        frac = np.asarray([site.frac_coords for site in struct], dtype=float)
-        lattice = np.asarray(struct.lattice.matrix, dtype=float)
-        graph["frac_coords"] = frac.tolist()                       # idempotent w/ augment-positions
-        graph["lattice"] = lattice.tolist()
+        graph["frac_coords"] = [[float(x) for x in s.frac_coords] for s in struct]
+        graph["lattice"] = [[float(x) for x in row] for row in struct.lattice.matrix]
         if force is not None:
             f_arr = np.asarray(force, dtype=float)
             if f_arr.shape != (n, 3):
@@ -497,14 +486,6 @@ def _augment_one_with_physics(task):
                 graph["magmom"] = m_arr.tolist()
         if stress is not None:
             graph["stress"] = np.asarray(stress, dtype=float).reshape(3, 3).tolist()
-        max_err = 0.0
-        for e in edges:
-            njimage, err = _recompute_to_jimage(int(e["source"]), int(e["target"]),
-                                                float(e["bond_length"]), frac, lattice)
-            e["to_jimage"] = njimage
-            max_err = max(max_err, err)
-        if max_err > 0.1:           # Å: no image within +/-1 of min-image matched the bond
-            return (graph_path, "mismatch", frame_id, f"to_jimage match err {max_err:.3f} A")
         tmp = graph_path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(graph, f)
@@ -515,14 +496,20 @@ def _augment_one_with_physics(task):
 
 
 def _add_index_column(index_path, column, value_map):
-    """Add/overwrite a per-id column on an existing index pickle (+ its csv), matched by
-    id. Used to backfill the per-structure bandgap target without rebuilding the index."""
+    """Add/overwrite a per-id column on an existing index pickle (+ its csv twin), matched
+    by id. ATOMIC (tmp + os.replace): the 1.5M-row master index lives on the quota-limited
+    /data, so an in-place rewrite that's killed or hits the quota mid-write would corrupt
+    the only copy that every training + eval run reads."""
     df = pd.read_pickle(index_path)
+    if "id" not in df.columns:
+        raise KeyError(f"index {index_path} has no 'id' column to match '{column}' on")
     df[column] = df["id"].astype(str).map(value_map)
-    df.to_pickle(index_path)
+    df.to_pickle(index_path + ".tmp")
+    os.replace(index_path + ".tmp", index_path)
     csv = index_path[:-len(".pickle")] + ".csv" if index_path.endswith(".pickle") else None
     if csv and os.path.exists(csv):
-        df.to_csv(csv, index=False)
+        df.to_csv(csv + ".tmp", index=False)
+        os.replace(csv + ".tmp", csv)
 
 
 def augment_graphs_with_physics(record_iter, graph_dir, index_path=None,

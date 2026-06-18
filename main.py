@@ -134,10 +134,11 @@ def cmd_augment_positions(args):
 
 
 def cmd_augment_physics(args):
-    # Backfill forces/magmom/stress + positions + per-edge to_jimage onto existing MPtrj
-    # graphs (NO Voronoi rebuild) and add the bandgap column to the index -> the graph
-    # state for packed_v4 (multitask conservative-autograd pretraining). Resumable +
-    # parallel; run where the graphs live (cluster scratch), then pack-dataset to packed_v4.
+    # Backfill the multitask TARGETS (forces/magmom/stress + positions) onto existing MPtrj
+    # graphs and add the bandgap index column -> the graph state for packed_v4 (conservative-
+    # autograd pretraining). to_jimage is NOT recomputed here (degenerate from bond_length);
+    # it comes from a REBUILD (build-mptrj) whose compactor keeps the builder's exact offset.
+    # Run AFTER build-mptrj. Resumable + parallel; run where the graphs live (cluster scratch).
     if not os.path.exists(args.input):
         sys.exit(f"error: MPtrj JSON not found: {args.input}")
     graph_dir = args.graph_dir or "database/datafiles/MPtrj/graphs_v4"
@@ -146,8 +147,8 @@ def cmd_augment_physics(args):
     if args.index and not os.path.exists(args.index):
         sys.exit(f"error: index not found: {args.index}")
     from database.Extract_MPtrj import iter_mptrj_frames
-    print(f"Augmenting graphs in {graph_dir} with physics "
-          f"(forces/magmom/stress/to_jimage) from {args.input}; bandgap -> {args.index}")
+    print(f"Augmenting graphs in {graph_dir} with multitask targets "
+          f"(forces/magmom/stress) from {args.input}; bandgap -> {args.index}")
     database.augment_graphs_with_physics(
         iter_mptrj_frames(args.input), graph_dir=graph_dir, index_path=args.index,
         n_workers=args.workers, limit=args.limit)
@@ -567,13 +568,13 @@ def build_parser():
 
     aph = sub.add_parser(
         "augment-physics",
-        help="backfill forces/magmom/stress + to_jimage + positions onto MPtrj graphs (no rebuild)",
+        help="backfill multitask targets (forces/magmom/stress + positions) onto MPtrj graphs",
         description="Stream the MPtrj JSON and attach each frame's per-atom forces/magmom, "
-                    "per-structure stress, fractional coords + lattice, and a per-edge "
-                    "to_jimage (recomputed by bond-length matching) to its already-built "
-                    "compact graph (Z-verified atom order); also add the bandgap column to "
-                    "the index. The cheap path to packed_v4 for multitask conservative-autograd "
-                    "pretraining — no Voronoi rebuild. Resumable. Re-run pack-dataset after.",
+                    "per-structure stress, and fractional coords + lattice to its compact "
+                    "graph (Z-verified atom order); also add the bandgap index column. Run "
+                    "AFTER build-mptrj — to_jimage (needed for exact PBC forces) is carried by "
+                    "the rebuild's compactor, NOT recomputed here (it's degenerate from "
+                    "bond_length for multi-image bonds). Resumable. pack-dataset -> packed_v4.",
     )
     aph.add_argument("--input", default="database/datafiles/MPtrj/MPtrj_2022.9_full.json",
                      help="bulk MPtrj JSON (the same source build-mptrj used)")
