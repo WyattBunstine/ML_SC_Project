@@ -31,12 +31,31 @@ def load_run(run_dir):
     r["tag"] = meta.get("model_type", r["name"])
     r["params"] = meta.get("model_size", {}).get("total_params")
     # Compact "what varies" descriptor from the architecture block.
-    bits = [arch.get("edge_aggregation", "?")]
-    bits.append("poly" if arch.get("use_poly_edges") else "no-poly")
-    if arch.get("poly_fusion", "sum") != "sum":
-        bits.append(f"fusion={arch['poly_fusion']}")
-    if arch.get("use_coord_magnitude"):
-        bits.append("coordmag")
+    if meta.get("model") == "GPSCrystalNet" or "shell_aggregation" in arch:
+        # GPS ablation-ladder descriptor: edges, shell aggregation, then single-letter
+        # flags +A(ngle) +L(ocal-transformer) +G(lobal) +D(istance bias).
+        if arch.get("n_conv", 1) == 0:
+            bits = ["raw"]                                   # rung 01: embed -> head
+        else:
+            edges = [e for e, on in (("bond", arch.get("use_bond_edges", True)),
+                                     ("poly", arch.get("use_poly_edges"))) if on]
+            agg = "attn" if arch.get("shell_aggregation", "attention") == "attention" else "mean"
+            bits = ["+".join(edges) if edges else "no-edges", agg]
+            flags = "".join(c for c, on in (("A", arch.get("use_angle_bias", True)),
+                                            ("L", arch.get("local_transformer", True)),
+                                            ("G", arch.get("gps_global", True)),
+                                            ("D", arch.get("use_dist_bias"))) if on)
+            if flags:
+                bits.append("+" + flags)
+            if not arch.get("per_atom_head", True):
+                bits.append("pool")
+    else:
+        bits = [arch.get("edge_aggregation", "?")]
+        bits.append("poly" if arch.get("use_poly_edges") else "no-poly")
+        if arch.get("poly_fusion", "sum") != "sum":
+            bits.append(f"fusion={arch['poly_fusion']}")
+        if arch.get("use_coord_magnitude"):
+            bits.append("coordmag")
     r["desc"] = ",".join(bits)
     r["split_by"] = meta.get("dataset", {}).get("split_by", "?")
 
