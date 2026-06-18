@@ -159,6 +159,37 @@ def _node_to_fea(node: dict) -> np.ndarray:
     ], dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
 
+# Physically-motivated per-element features (mass -> phonons; group/row -> electronic
+# structure & size; # unpaired electrons -> magnetic-moment proxy / spin leg). Added
+# at ASSEMBLE time from the stored Z (atom_fea[:, 0]) when use_rich_node_features is
+# on, so no re-pack is needed; standardized via compute_feature_stats like the rest.
+RICH_NODE_FEA_LEN = 4
+_RICH_L = {"s": 0, "p": 1, "d": 2, "f": 3}
+
+
+def _rich_node_features_for_Z(Z):
+    e = PmgElement.from_Z(int(Z))
+    n_unpaired = 0
+    for _n, l, occ in e.full_electronic_structure:        # Hund's rule per subshell
+        g = 2 * _RICH_L[l] + 1
+        n_unpaired += occ if occ <= g else 2 * g - occ
+    return [float(e.atomic_mass), float(e.group or 0), float(e.row or 0), float(n_unpaired)]
+
+
+_RICH_TABLE = np.zeros((119, RICH_NODE_FEA_LEN), dtype=np.float32)
+for _z in range(1, 119):
+    try:
+        _RICH_TABLE[_z] = _rich_node_features_for_Z(_z)
+    except Exception:                                     # noqa: BLE001 -> zeros
+        pass
+
+
+def rich_node_features(z_array):
+    """(N,) atomic numbers -> (N, RICH_NODE_FEA_LEN) element features via a table."""
+    z = np.clip(np.asarray(z_array, dtype=np.int64), 0, 118)
+    return _RICH_TABLE[z]
+
+
 def _center_is_source(edge: dict, center: int, nbr: int = None) -> bool:
     """Is ``center`` the stored source endpoint of ``edge``?
 
@@ -345,11 +376,16 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
     use_ang = getattr(dataset, "use_bond_angles", False)
     edge_dim = NBR_FEA_LEN + (ANGLE_FEA_LEN if use_ang else 0)
 
+    use_rich = getattr(dataset, "use_rich_node_features", False)
     node_rows, edge_rows, poly_rows = [], [], []
     zero_ang = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
     for i in idx:
         graph = dataset._read_graph(dataset.data[i][2])
-        node_rows.extend(_node_to_fea(n) for n in graph["nodes"])
+        for n in graph["nodes"]:
+            feat = _node_to_fea(n)
+            if use_rich:        # match the assemble-time concat so the rich dims get standardized
+                feat = np.concatenate([feat, rich_node_features([n["Z"]])[0]])
+            node_rows.append(feat)
         # Iterate every directed (edge, center) use exactly as __getitem__ does, so
         # the stats reflect the CENTER-relative orientation the model consumes
         # (each undirected edge contributes once per endpoint). With angles on,
@@ -370,8 +406,9 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
         poly_rows.extend(_poly_edge_to_fea(pe) for pe in graph.get("poly_edges", []))
 
     # nan-safe mean/std via the shared helper (see rows_meanstd).
+    node_dim = NODE_FEA_LEN + (RICH_NODE_FEA_LEN if use_rich else 0)
     return {
-        "node": rows_meanstd(node_rows, NODE_FEA_LEN),
+        "node": rows_meanstd(node_rows, node_dim),
         "edge": rows_meanstd(edge_rows, edge_dim),
         "poly": rows_meanstd(poly_rows, POLY_FEA_LEN),
     }
@@ -528,7 +565,8 @@ def _extract_ragged(graph):
 
 
 def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
-                     use_poly_edges, use_bond_angles, build_angle_bias):
+                     use_poly_edges, use_bond_angles, build_angle_bias,
+                     use_rich_node_features=False):
     """Truncate/pad a ragged extraction into the model's padded sample tensors.
 
     Replicates the historical _build_sample behavior exactly: closest-first
@@ -591,6 +629,10 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
     # copy=True: r["atom_fea"] may be a read-only memmap view (packed dataset) —
     # wrapping it directly would emit a non-writable warning and alias pack data.
     atom_fea = torch.from_numpy(np.array(r["atom_fea"], dtype=np.float32, copy=True))
+    if use_rich_node_features:
+        # Concat element features looked up from the stored Z (atom_fea[:, 0]).
+        rich = torch.from_numpy(rich_node_features(atom_fea[:, 0].numpy()))
+        atom_fea = torch.cat([atom_fea, rich], dim=1)
     nbr_fea_t = torch.from_numpy(nbr_fea)
     nbr_fea_idx = torch.from_numpy(nbr_idx)
     if build_angle_bias:
@@ -625,7 +667,8 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
 
 
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
-                  use_poly_edges, use_bond_angles, build_angle_bias=False):
+                  use_poly_edges, use_bond_angles, build_angle_bias=False,
+                  use_rich_node_features=False):
     """Build one fully-padded crystal sample from its graph JSON on disk.
 
     Module-level (not a method) so it is picklable by a ``spawn`` multiprocessing
@@ -642,7 +685,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
     # collate_pool slices [:6], collate_pool_geom uses [6:]. Must match the packed
     # backend's __getitem__, which also returns the whole _assemble_sample tuple.
     sample = _assemble_sample(ragged, max_num_nbr, max_num_poly_nbr,
-                              use_poly_edges, use_bond_angles, build_angle_bias)
+                              use_poly_edges, use_bond_angles, build_angle_bias,
+                              use_rich_node_features)
 
     target = torch.FloatTensor([float(target)])
     label = torch.LongTensor([int(label)])
@@ -687,8 +731,9 @@ class CIFDataV4(Dataset):
                  max_num_poly_nbr: int = 16, graph_cache_size: int = 4096,
                  random_seed: int = 123, target_column: str = None,
                  use_bond_angles: bool = False, use_poly_edges: bool = True,
-                 build_angle_bias: bool = False):
+                 build_angle_bias: bool = False, use_rich_node_features: bool = False):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
+        self.use_rich_node_features = use_rich_node_features
         # When True, __getitem__ also emits a per-atom (M, M) cos-angle matrix for
         # the set-transformer aggregation's pairwise attention bias (idea A), built
         # from the graph's angle_triplets. Independent of use_bond_angles (which
@@ -798,7 +843,7 @@ class CIFDataV4(Dataset):
         for i, rec in enumerate(self.data):
             sample = _build_sample(rec, self.max_num_nbr, self.max_num_poly_nbr,
                                    self.use_poly_edges, self.use_bond_angles,
-                                   self.build_angle_bias)
+                                   self.build_angle_bias, self.use_rich_node_features)
             if dev.type != "cpu":
                 sample = _sample_to_device(sample, dev)
             built.append(sample)
@@ -828,7 +873,8 @@ class CIFDataV4(Dataset):
 
         result = _build_sample(self.data[idx], self.max_num_nbr,
                                self.max_num_poly_nbr, self.use_poly_edges,
-                               self.use_bond_angles, self.build_angle_bias)
+                               self.use_bond_angles, self.build_angle_bias,
+                               self.use_rich_node_features)
 
         # Store the built sample for reuse on later epochs (LRU-bounded).
         self._item_cache[idx] = result
