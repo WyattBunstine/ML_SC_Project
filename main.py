@@ -272,6 +272,20 @@ def cmd_embed_mace(args):
                 device=args.device, only_label=args.only_label, limit=args.limit)
 
 
+def cmd_embed_gps(args):
+    # Export per-structure GPS encoder embeddings from a pretrained multitask checkpoint
+    # for the frozen T_c probe (the twin of embed-mace). Writes <id>.npy of per-atom h.
+    if not os.path.exists(args.checkpoint):
+        sys.exit(f"error: checkpoint not found: {args.checkpoint}")
+    if not os.path.exists(args.index):
+        sys.exit(f"error: index not found: {args.index}")
+    sys.path.insert(0, os.path.join("models", "common"))
+    sys.path.insert(0, os.path.join("models", "GPSTransformer"))
+    from models.head.embed_gps import embed_index
+    embed_index(args.checkpoint, args.index, args.out,
+                device=args.device, batch_size=args.batch_size)
+
+
 def cmd_train_head(args):
     if not os.path.exists(args.config):
         sys.exit(f"error: config not found: {args.config}")
@@ -661,6 +675,23 @@ def build_parser():
                     help="restrict to index rows with this label (1=SC, 0=non-SC)")
     em.add_argument("--limit", type=int, default=None)
     em.set_defaults(func=cmd_embed_mace)
+
+    eg = sub.add_parser(
+        "embed-gps",
+        help="export per-structure GPS encoder embeddings from a pretrained checkpoint",
+        description="Run a PRETRAINED multitask GPSCrystalNet encoder over the transfer "
+                    "structures and save each structure's per-atom h as <id>.npy — the same "
+                    "per-structure layout embed-mace writes, so the frozen TcHead pipeline "
+                    "(train-head) consumes them UNCHANGED. The transfer dataset uses the "
+                    "encoder's training feature flags (read from the checkpoint). Resumable. "
+                    "See models/head/embed_gps.py.",
+    )
+    eg.add_argument("--checkpoint", required=True, help="pretrained GPS checkpoint (.pth.tar)")
+    eg.add_argument("--index", required=True, help="transfer-structure index pickle or pack dir")
+    eg.add_argument("--out", required=True, help="output dir for <id>.npy embeddings")
+    eg.add_argument("--device", default="cpu", help="cpu or cuda (default cpu)")
+    eg.add_argument("--batch-size", type=int, default=64)
+    eg.set_defaults(func=cmd_embed_gps)
 
     th = sub.add_parser(
         "train-head",

@@ -1,9 +1,6 @@
 {
     "architecture": "gps",
-    "index_path": [
-        "/scratch4/tmcquee2/wbunsti1/ML_SC_Proj/MPtrj/packed_v4",
-        "/scratch4/tmcquee2/wbunsti1/ML_SC_Proj/MP/dos_pack"
-    ],
+    "index_path": "/scratch4/tmcquee2/wbunsti1/ML_SC_Proj/MPtrj/packed_v4",
     "target_column": "formation_energy_per_atom",
     "max_num_nbr": 14,
     "max_num_poly_nbr": 64,
@@ -53,22 +50,20 @@
         "mem": "96G",
         "time": "24:00:00"
     },
-    "run_tag": "gps_multitask",
+    "run_tag": "gps_mt_03_magmom_bandgap",
     "tasks": [
         "energy",
         "forces",
         "stress",
         "magmom",
-        "bandgap",
-        "dos"
+        "bandgap"
     ],
     "loss_weights": {
         "energy": 1.0,
         "forces": 10.0,
         "stress": 1.0,
         "magmom": 1.0,
-        "bandgap": 1.0,
-        "dos": 1.0
+        "bandgap": 1.0
     },
     "n_energy": 256
 }

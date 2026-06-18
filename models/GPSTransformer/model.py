@@ -517,9 +517,11 @@ class GPSCrystalNet(nn.Module):
         bias = self.dist_proj(self._dist_rbf(dist))         # (B, Lmax, Lmax, heads)
         return bias.permute(0, 3, 1, 2)                     # (B, heads, Lmax, Lmax)
 
-    def forward(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-                nbr_angle, crystal_seg, n_crystals, frac_coords=None, lattice=None,
-                nbr_jimage=None, cart=None, strain=None):
+    def _encode(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
+                nbr_angle, crystal_seg, n_crystals, frac_coords, lattice,
+                nbr_jimage, cart, strain):
+        """Embedding -> optional differentiable-geometry splice -> GPS blocks -> per-atom
+        h (N, atom_fea_len). Shared by forward (readout) and encode (transfer export)."""
         h = self.embedding((atom_fea - self.node_mean) / self.node_std)
         # Standardize edge features once (constant across blocks); pad masks read
         # the RAW features (real edges have a non-zero feature row).
@@ -588,6 +590,14 @@ class GPSCrystalNet(nn.Module):
             h = block(h, nbr_norm, nbr_fea_idx, bond_pad, nbr_angle,
                       poly_norm, poly_fea_idx, poly_pad, crystal_seg, n_crystals,
                       plan, dist_bias)
+        return h
+
+    def forward(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
+                nbr_angle, crystal_seg, n_crystals, frac_coords=None, lattice=None,
+                nbr_jimage=None, cart=None, strain=None):
+        h = self._encode(atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
+                         nbr_angle, crystal_seg, n_crystals, frac_coords, lattice,
+                         nbr_jimage, cart, strain)
 
         if self.tasks is not None:
             return self._multitask_readout(h, crystal_seg, n_crystals, cart, strain, lattice)
@@ -600,3 +610,15 @@ class GPSCrystalNet(nn.Module):
         else:
             out = self._head(self._pool(h, crystal_seg, n_crystals))
         return self.logsoftmax(out) if self.classification else out
+
+    def encode(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
+               nbr_angle, crystal_seg, n_crystals, frac_coords=None, lattice=None,
+               nbr_jimage=None):
+        """Per-atom encoder output h (N, atom_fea_len) — the frozen transferable
+        representation for the T_c probe (embed-gps). Uses the STATIC pack features (which
+        equal the differentiable recompute at the reference geometry on packed_v4), so no
+        Cartesian leaf / autograd is needed; the loaded model's tasks/heads are irrelevant
+        here — this returns h BEFORE any readout."""
+        return self._encode(atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
+                            nbr_angle, crystal_seg, n_crystals, frac_coords, lattice,
+                            nbr_jimage, cart=None, strain=None)
