@@ -99,7 +99,7 @@ def _check_backend(name, dataset):
     go = gps(*gps_in)
     go.pow(2).mean().backward()
 
-    ok = (dims == (14, 7, 7) and len(mpnn_in) == 8 and len(gps_in) == 10
+    ok = (dims == (14, 7, 7) and len(mpnn_in) == 8 and len(gps_in) == 11
           and tuple(mo.shape) == (4, 1) and tuple(go.shape) == (4, 1)
           and torch.isfinite(mo).all().item() and torch.isfinite(go).all().item())
     print(f"  {name:7} dims={dims} mpnn_batch={len(mpnn_in)} gps_batch={len(gps_in)} "
@@ -129,22 +129,59 @@ def _check_rich(pack_dir, kw):
     return ok
 
 
-def _edge(eid, s, t, bl):
+def _edge(eid, s, t, bl, jimage=(0, 0, 0)):
     return {"id": eid, "source": s, "target": t, "bond_length": bl,
             "bond_length_over_sum_radii": bl / 2.0, "voronoi_weight_src": 0.5,
             "voronoi_weight_tgt": 0.5, "ecn_weight_src": 0.5, "ecn_weight_tgt": 0.5,
-            "delta_chi_pauling": 0.1}
+            "delta_chi_pauling": 0.1, "to_jimage": list(jimage)}
 
 
 def _chain_graph():
     # atoms 0-1-2-3 with bonds e0=(0,1) e1=(1,2) e2=(2,3); one torsion around the
-    # CENTRAL bond e1 -> dih_node nonzero only on its endpoints (atoms 1, 2).
+    # CENTRAL bond e1 -> dih_node nonzero only on its endpoints (atoms 1, 2). e1 is a
+    # PERIODIC bond (to_jimage=[1,0,0]) so we can check the center->neighbor orientation.
     return {"nodes": [dict(_NODE, Z=11 + i) for i in range(4)],
-            "edges": [_edge(0, 0, 1, 2.0), _edge(1, 1, 2, 2.1), _edge(2, 2, 3, 2.2)],
+            "edges": [_edge(0, 0, 1, 2.0), _edge(1, 1, 2, 2.1, jimage=(1, 0, 0)),
+                      _edge(2, 2, 3, 2.2)],
             "adjacency": {"0": [[0, 1]], "1": [[0, 0], [1, 2]],
                           "2": [[1, 1], [2, 3]], "3": [[2, 2]]},
             "poly_edges": [], "poly_adjacency": {str(i): [] for i in range(4)},
             "angle_triplets": [], "dihedrals": [[1, 0, 2, -0.5]]}
+
+
+def _check_jimage(tmp):
+    # nbr_jimage (sample input element 8) must carry the per-edge PBC image oriented
+    # center->neighbor, and NEGATE it on the reverse direction. e1=(1,2) jimage=[1,0,0]:
+    # atom 1 sees neighbor 2 at +[1,0,0]; atom 2 sees neighbor 1 at -[1,0,0]. Slots are
+    # bond-length sorted (e1=2.1 is slot 1 at atom 1, slot 0 at atom 2). Both backends.
+    gd = os.path.join(tmp, "ji_graphs")
+    os.makedirs(gd)
+    ids, paths = [], []
+    for i in range(4):
+        p = os.path.join(gd, f"{i}.json")
+        json.dump(_chain_graph(), open(p, "w"))
+        ids.append(str(i))
+        paths.append(p)
+    idx = pd.DataFrame({"id": ids, "graph_path": paths, "label": [1] * 4,
+                        "formation_energy_per_atom": [-1.0 - 0.1 * i for i in range(4)]})
+    ip = os.path.join(tmp, "ji_index.pickle")
+    idx.to_pickle(ip)
+    pk = os.path.join(tmp, "ji_pack")
+    from pack import pack_dataset as _pd
+    _pd(ip, pk, n_workers=1)
+    kw = dict(target_column="formation_energy_per_atom", use_poly_edges=True,
+              use_bond_angles=False, build_angle_bias=False)
+    results = []
+    for name, src in (("packed", pk), ("lazy", ip)):
+        ds = load_cif_dataset(src, **kw)
+        ji = ds[0][0][8]                          # (n_atoms, M, 3)
+        a1 = ji[1, 1].tolist()                    # atom1 -> neighbor2 via e1 (slot 1)
+        a2 = ji[2, 0].tolist()                    # atom2 -> neighbor1 via e1 (slot 0)
+        results.append(a1 == [1, 0, 0] and a2 == [-1, 0, 0] and ji.shape[-1] == 3)
+    ok = all(results)
+    print(f"  jimage  atom1->2={[1,0,0]} atom2->1={[-1,0,0]} both_backends={ok} "
+          f"{'PASS' if ok else 'FAIL'}")
+    return ok
 
 
 def _check_dih(tmp):
@@ -196,9 +233,10 @@ def main():
         ok_lazy = _check_backend("lazy", load_cif_dataset(index_pickle, **kw))
         ok_rich = _check_rich(pack_dir, kw)
         ok_dih = _check_dih(tmp)
+        ok_jimage = _check_jimage(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if ok_packed and ok_lazy and ok_rich and ok_dih:
+    if ok_packed and ok_lazy and ok_rich and ok_dih and ok_jimage:
         print("smoke_dataset: PASS")
         return 0
     print("smoke_dataset: FAIL", file=sys.stderr)

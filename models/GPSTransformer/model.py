@@ -405,7 +405,8 @@ class GPSCrystalNet(nn.Module):
         return bias.permute(0, 3, 1, 2)                     # (B, heads, Lmax, Lmax)
 
     def forward(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-                nbr_angle, crystal_seg, n_crystals, frac_coords=None, lattice=None):
+                nbr_angle, crystal_seg, n_crystals, frac_coords=None, lattice=None,
+                nbr_jimage=None):
         h = self.embedding((atom_fea - self.node_mean) / self.node_std)
         # Standardize edge features once (constant across blocks); pad masks read
         # the RAW features (real edges have a non-zero feature row).

@@ -48,6 +48,7 @@ _FIELDS = {
     "bond_cnt":  (np.int32, None),
     "bond_nbr":  (np.int32, None),
     "bond_fea":  (np.float32, NBR_FEA_LEN),
+    "bond_jimage": (np.int16, 3),    # per-edge PBC image (center->neighbor) for exact bond vectors
     "poly_cnt":  (np.int32, None),
     "poly_nbr":  (np.int32, None),
     "poly_fea":  (np.float32, POLY_FEA_LEN),
@@ -286,6 +287,8 @@ class PackedCIFDataV4(Dataset):
                 else np.zeros((n, 3), dtype=np.float32))
         dih = (mm["dih_node"][a0:a0 + n] if "dih_node" in mm
                else np.zeros((n, DIHEDRAL_FEA_LEN), dtype=np.float32))
+        bjimage = (mm["bond_jimage"][b0:b0 + nb] if "bond_jimage" in mm
+                   else np.zeros((nb, 3), dtype=np.int16))
         lattice = (self._lattice[pos] if self._lattice is not None
                    else np.zeros((3, 3), dtype=np.float32))
         return {
@@ -297,6 +300,7 @@ class PackedCIFDataV4(Dataset):
             "bond_cnt": mm["bond_cnt"][a0:a0 + n],
             "bond_nbr": mm["bond_nbr"][b0:b0 + nb],
             "bond_fea": mm["bond_fea"][b0:b0 + nb],
+            "bond_jimage": bjimage,
             "poly_cnt": mm["poly_cnt"][a0:a0 + n],
             "poly_nbr": mm["poly_nbr"][p0:p0 + npo],
             "poly_fea": mm["poly_fea"][p0:p0 + npo],
