@@ -96,6 +96,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
     offsets = {col: [] for col in _OFFSET_COLS}
     kept_pos, failures, lattices, dih_any, stresses = [], [], [], [], []
     phys_any = {"forces": False, "magmom": False, "stress": False}   # any finite -> has_X
+    jimage_any = [False]   # any nonzero bond_jimage -> graphs carry exact PBC images
     start = time.time()
 
     def _write(name, arr, dtype):
@@ -129,6 +130,8 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
             for _k in phys_any:
                 if not phys_any[_k] and np.isfinite(r[_k]).any():
                     phys_any[_k] = True
+            if not jimage_any[0] and np.any(r["bond_jimage"]):
+                jimage_any[0] = True
             kept_pos.append(pos)
             done = len(kept_pos) + len(failures)
             if done % 5000 == 0:
@@ -172,6 +175,10 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
         "has_forces": phys_any["forces"],
         "has_magmom": phys_any["magmom"],
         "has_stress": phys_any["stress"],
+        # any nonzero per-edge image -> graphs carry EXACT to_jimage (rebuilt). False on a
+        # pack of un-rebuilt graphs (all (0,0,0)) -> exact PBC forces would be wrong; verify
+        # this is true on packed_v4 before multitask training.
+        "has_to_jimage": jimage_any[0],
         "source_index": os.path.abspath(index_path),
         "n_failed": len(failures),
     }
