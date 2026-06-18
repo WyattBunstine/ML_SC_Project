@@ -468,6 +468,11 @@ EOF
         "
     fi
 
+    echo ">> NOTE: build-mptrj is RESUMABLE — it SKIPS any graph JSON that already exists."
+    echo ">>   To regenerate with NEW graph fields (e.g. to_jimage for packed_v4), CLEAR the"
+    echo ">>   graph dir FIRST, else the old graphs are kept and packed_v4 gets has_to_jimage=false:"
+    echo ">>     ssh ${SSH} 'rm -rf ${SCRATCH_MPTRJ_GRAPHS}/*'   (then re-run this)"
+
     # Payload runs after the shared CPU-job preamble (env + cd, see submit_cpu_job).
     # Force Voro++ (tess): abort if it isn't importable so the build never
     # silently uses the scipy fallback. Graphs -> scratch (bulk, regenerable;
@@ -541,8 +546,8 @@ EOF
 )"
     echo ">> Submitted. When done, re-pack the augmented graphs into v4:"
     echo ">>   ./scripts/deploy.sh pack-mptrj ${SCRATCH_MPTRJ_PACK_V4}   (packed_v1/v2 untouched)"
-    echo ">> Then VERIFY: pack_header.json must show has_positions=true AND has_forces=true,"
-    echo ">> and a sample's recomputed angle should match the stored angle_triplets at reference."
+    echo ">> Then VERIFY pack_header.json: has_to_jimage=true (graphs were truly REBUILT, not"
+    echo ">> skipped-as-existing) AND has_positions=true AND has_forces=true."
 }
 
 # pack-mptrj [out_dir]: default writes packed_v1; pass ${SCRATCH_MPTRJ_PACK_V2}
