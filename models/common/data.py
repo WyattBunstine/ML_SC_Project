@@ -633,10 +633,11 @@ def _extract_ragged(graph):
     # Per-structure total DOS target (DOS_N_ENERGY,) on the fixed E_F-aligned grid; absent
     # (MPtrj frames / non-DOS materials) -> NaN -> masked. The DOS-bearing population is the
     # relaxed MP graphs (a separate masked-union member of the multitask training set).
+    # A PRESENT dos must be exactly DOS_N_ENERGY long (reshape raises otherwise — loud, like
+    # stress; a silent NaN would zero out a dataset's DOS labels on a stale-grid mismatch).
     dv = graph.get("dos")
     dos = (np.asarray(dv, dtype=np.float32).reshape(DOS_N_ENERGY)
-           if dv is not None and len(dv) == DOS_N_ENERGY
-           else np.full(DOS_N_ENERGY, np.nan, dtype=np.float32))
+           if dv is not None else np.full(DOS_N_ENERGY, np.nan, dtype=np.float32))
 
     return {
         "n_atoms": n_atoms,
