@@ -828,11 +828,17 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
 
 def _sample_to_device(sample, device):
     """Move a built sample's tensors onto ``device`` (the cif_id string is left as-is).
-    Arity-agnostic over the input tuple so it handles the geometry-carrying sample."""
+    Arity-agnostic over the input tuple; handles BOTH the single-target sample (target,
+    label are tensors) and the multitask sample (they are targets/masks dicts)."""
     sample_in, target, label, cif_id = sample
+
+    def mv(x):
+        if isinstance(x, dict):
+            return {k: v.to(device) for k, v in x.items()}
+        return x.to(device)
     return (
         tuple(t.to(device) for t in sample_in),
-        target.to(device), label.to(device), cif_id,
+        mv(target), mv(label), cif_id,
     )
 
 

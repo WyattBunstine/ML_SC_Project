@@ -361,3 +361,190 @@ def run_regression(args, model, criterion, optimizer, scheduler, loaders, normal
         print(f" ** Test MAE (realistic): {real_mae:.3f}  (balanced): {bal_test_mae:.3f}")
     else:
         print(f" ** Test MAE: {real_mae:.3f}")
+
+
+# ============================ multitask pretraining ============================
+# Conservative-autograd multi-target pretraining (energy/forces/stress/magmom/bandgap
+# /dos). Entirely separate from run_regression above so the single-target MPNN/GPS path
+# is untouched. The model returns a dict; forces/stress come from autograd of the
+# extensive energy, so each step does a DOUBLE backward (the force/stress loss backprops
+# through the model's internal autograd.grad). Run with amp=false (bf16 ruins force
+# gradients) and the geometry collate (collate_pool_multitask).
+
+_DEFAULT_LOSS_WEIGHTS = {"energy": 1.0, "forces": 10.0, "stress": 1.0,
+                         "magmom": 1.0, "bandgap": 1.0, "dos": 1.0}
+
+
+def compute_target_stats(dataset, indices, max_samples=2000, seed=123):
+    """Per-target scale (std over PRESENT values) for normalizing the multitask loss,
+    from a sample of the MT training set. Only the std is needed (the mean cancels in
+    the prediction-minus-target error). Absent targets are skipped."""
+    import random
+    idx = list(indices)
+    if max_samples and len(idx) > max_samples:
+        idx = random.Random(seed).sample(idx, max_samples)
+    acc = {}
+    for i in idx:
+        _inp, tg, mk, _cid = dataset[i]
+        for k, v in tg.items():
+            if bool(mk[k]):
+                acc.setdefault(k, []).append(v.reshape(-1))
+    return {k: max(float(torch.cat(v).std()), 1e-6) for k, v in acc.items() if v}
+
+
+def _build_cart_strain(input_var):
+    """Leaves the autograd forces/stress differentiate: the Cartesian position
+    cart = frac @ lattice[seg] (forces = -dE/dcart) and a zero strain (stress =
+    dE/dstrain). Built per batch so grads don't accumulate across steps."""
+    seg, n_crystals, frac, lattice = input_var[6], input_var[7], input_var[8], input_var[9]
+    cart = torch.einsum("ni,nij->nj", frac, lattice[seg]).detach().requires_grad_(True)
+    strain = torch.zeros(n_crystals, 3, 3, device=cart.device, dtype=cart.dtype,
+                         requires_grad=True)
+    return cart, strain
+
+
+def _move_target_dicts(targets, masks, cuda):
+    if not cuda:
+        return targets, masks
+    return ({k: v.cuda(non_blocking=True) for k, v in targets.items()},
+            {k: v.cuda(non_blocking=True) for k, v in masks.items()})
+
+
+def _masked_mean(err, mask):
+    """Mean of err over samples where mask is True; denom clamped so a task absent
+    from the whole batch contributes 0 (not NaN)."""
+    m = mask.to(err.dtype)
+    return (err * m).sum() / m.sum().clamp_min(1.0)
+
+
+def _mt_loss(out, targets, masks, stats, weights, seg):
+    """Masked multitask loss (std-normalized, weighted) + per-task PHYSICAL MAE.
+    Per-atom tasks (forces/magmom) broadcast their per-structure mask over atoms via
+    seg. A task is only scored when both the prediction and its target are present."""
+    losses, maes = {}, {}
+
+    def scalar(key, err):                          # per-structure (B,) error
+        s, m = stats.get(key, 1.0), masks[key]
+        losses[key] = _masked_mean(err / s, m)
+        maes[key] = _masked_mean(err.detach(), m)
+
+    def per_atom(key, err):                        # per-atom (N,) error, per-structure mask
+        s, m = stats.get(key, 1.0), masks[key][seg]
+        losses[key] = _masked_mean(err / s, m)
+        maes[key] = _masked_mean(err.detach(), m)
+
+    if "energy" in out and "energy" in targets:
+        scalar("energy", (out["energy"] - targets["energy"]).abs())
+    if "forces" in out and "forces" in targets:
+        per_atom("forces", (out["forces"] - targets["forces"]).abs().sum(-1))
+    if "stress" in out and "stress" in targets:
+        scalar("stress", (out["stress"] - targets["stress"]).abs().flatten(1).mean(1))
+    if "magmom" in out and "magmom" in targets:
+        per_atom("magmom", (out["magmom"] - targets["magmom"]).abs().sum(-1))
+    if "bandgap" in out and "bandgap" in targets:
+        scalar("bandgap", (out["bandgap"] - targets["bandgap"]).abs())
+    if "dos" in out and "dos" in targets:
+        scalar("dos", (out["dos"] - targets["dos"]).abs().mean(1))
+
+    total = sum(weights.get(k, 1.0) * v for k, v in losses.items())
+    return total, maes
+
+
+def _train_mt(loader, model, optimizer, epoch, stats, weights, args):
+    model.train()
+    loss_meter, maes = AverageMeter(), {}
+    steps = len(loader)
+    warmup_steps = _resolve_warmup_steps(args, steps)
+    base_lr = args["learning_rate"]
+    t0 = time.time(); data_t = 0.0; end = time.time()
+    for i, (input_batch, targets, masks, _cids) in enumerate(loader):
+        data_t += time.time() - end
+        input_var = _to_input_var(input_batch, args["cuda"])
+        cart, strain = _build_cart_strain(input_var)
+        out = model(*input_var, cart=cart, strain=strain)
+        targets, masks = _move_target_dicts(targets, masks, args["cuda"])
+        loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6])
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()                            # DOUBLE backward (force/stress terms)
+        _warmup_and_step(optimizer, model, args, base_lr, warmup_steps, epoch * steps + i)
+        loss_meter.update(float(loss.detach()), 1)
+        for k, v in batch_maes.items():
+            maes.setdefault(k, AverageMeter()).update(float(v.detach()), 1)
+        end = time.time()
+        if i % args.get("print_split", 10) == 0:
+            tstr = "  ".join(f"{k} {m.avg:.4f}" for k, m in maes.items())
+            print(f"Epoch [{epoch}][{i}/{steps}]  loss {loss_meter.avg:.4f}  {tstr}")
+    return loss_meter.avg, {k: m.avg for k, m in maes.items()}, data_t, time.time() - t0
+
+
+def _validate_mt(loader, model, stats, weights, args):
+    model.eval()
+    loss_meter, maes = AverageMeter(), {}
+    for input_batch, targets, masks, _cids in loader:
+        input_var = _to_input_var(input_batch, args["cuda"])
+        cart, strain = _build_cart_strain(input_var)
+        with torch.enable_grad():                  # forces need a graph even in eval
+            out = model(*input_var, cart=cart, strain=strain)
+        targets, masks = _move_target_dicts(targets, masks, args["cuda"])
+        loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6])
+        loss_meter.update(float(loss.detach()), 1)
+        for k, v in batch_maes.items():
+            maes.setdefault(k, AverageMeter()).update(float(v.detach()), 1)
+    return loss_meter.avg, {k: m.avg for k, m in maes.items()}
+
+
+def run_multitask(args, model, optimizer, scheduler, loaders, stats, weights):
+    """Multitask pretraining loop. Checkpoints on the val ENERGY MAE (the primary
+    transferable signal); the real evaluation is the downstream T_c transfer, not a
+    held-out pretraining metric, so there's no test-CSV / SWA / balanced-val here."""
+    train_loader, val_loader = loaders["train"], loaders["val_realistic"]
+    best = float("inf")
+    from resmon import ResourceMonitor
+    monitor = ResourceMonitor(interval=2.0).start()
+    print(ResourceMonitor.describe())
+    task_cols = [k for k in ("energy", "forces", "stress", "magmom", "bandgap", "dos")
+                 if k in stats]
+    print(f"Multitask targets (with data): {task_cols}; loss weights: "
+          f"{{ {', '.join(f'{k}:{weights.get(k, 1.0)}' for k in task_cols)} }}")
+    log = open(args["out_file"] + "_epoch_log.csv", "w", newline="")
+    w = csv.writer(log)
+    w.writerow(["epoch", "train_loss", "val_loss"]
+               + [f"train_{k}_mae" for k in task_cols]
+               + [f"val_{k}_mae" for k in task_cols]
+               + ["lr", "epoch_time_sec", "train_time_sec", "data_time_sec",
+                  "gpu_util_pct", "gpu_mem_gb", "is_best"])
+
+    for epoch in range(args["epochs"]):
+        e0 = time.time()
+        lr = optimizer.param_groups[0]["lr"]
+        tr_loss, tr_maes, data_s, tr_s = _train_mt(
+            train_loader, model, optimizer, epoch, stats, weights, args)
+        va_loss, va_maes = _validate_mt(val_loader, model, stats, weights, args)
+        if va_loss != va_loss:
+            print("Exit due to NaN")
+            sys.exit(1)
+        scheduler.step()
+
+        val_metric = va_maes.get("energy", va_loss)   # checkpoint on energy MAE
+        is_best = val_metric < best
+        best = min(val_metric, best)
+        _save_checkpoint({
+            "epoch": epoch + 1, "state_dict": model.state_dict(), "best": best,
+            "optimizer": optimizer.state_dict(), "target_stats": stats,
+            "loss_weights": weights, "args": args,
+        }, is_best, args["out_file"])
+
+        res = monitor.epoch_stats()
+        w.writerow([epoch, float(tr_loss), float(va_loss)]
+                   + [tr_maes.get(k, "") for k in task_cols]
+                   + [va_maes.get(k, "") for k in task_cols]
+                   + [lr, time.time() - e0, round(tr_s, 2), round(data_s, 2),
+                      res["gpu_util_pct"], res["gpu_mem_gb"], int(is_best)])
+        log.flush()
+        tstr = "  ".join(f"{k}={va_maes[k]:.4f}" for k in task_cols if k in va_maes)
+        print(f">> epoch {epoch}: train_loss {tr_loss:.4f}  val_loss {va_loss:.4f}  "
+              f"val[{tstr}]  ({time.time() - e0:.1f}s, data-wait {data_s:.1f}s)")
+
+    monitor.stop()
+    log.close()
+    print(f"Multitask pretraining done. Best val energy MAE: {best:.4f}")
