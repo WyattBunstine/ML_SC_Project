@@ -179,9 +179,19 @@ def _check_jimage(tmp):
         a1 = ji[1, 1].tolist()                    # atom1 -> neighbor2 via e1 (slot 1)
         a2 = ji[2, 0].tolist()                    # atom2 -> neighbor1 via e1 (slot 0)
         results.append(a1 == [1, 0, 0] and a2 == [-1, 0, 0] and ji.shape[-1] == 3)
-    ok = all(results)
-    print(f"  jimage  atom1->2={[1,0,0]} atom2->1={[-1,0,0]} both_backends={ok} "
-          f"{'PASS' if ok else 'FAIL'}")
+    # self-image edge: an atom bonded to its OWN periodic image occupies two slots
+    # with the same edge id; they must carry the +image and -image (opposite signs),
+    # else the model double-counts one image and drops the other.
+    from data import _extract_ragged
+    si = {"nodes": [_NODE], "edges": [_edge(0, 0, 0, 2.0, jimage=(1, 0, 0))],
+          "adjacency": {"0": [[0, 0], [0, 0]]}, "poly_edges": [], "poly_adjacency": {"0": []},
+          "angle_triplets": [], "dihedrals": [], "frac_coords": [[0.0, 0, 0]],
+          "lattice": [[4.0, 0, 0], [0, 4.0, 0], [0, 0, 4.0]]}
+    bj = _extract_ragged(si)["bond_jimage"]
+    si_ok = sorted(tuple(int(v) for v in row) for row in bj.tolist()) == [(-1, 0, 0), (1, 0, 0)]
+    ok = all(results) and si_ok
+    print(f"  jimage  atom1->2={[1,0,0]} atom2->1={[-1,0,0]} self_image_signs={si_ok} "
+          f"both_backends={all(results)} {'PASS' if ok else 'FAIL'}")
     return ok
 
 
@@ -249,7 +259,8 @@ def _check_multitask(tmp):
         paths.append(p)
     idx = pd.DataFrame({"id": ids, "graph_path": paths, "label": [1] * 4,
                         "formation_energy_per_atom": [-1.0 - 0.1 * i for i in range(4)],
-                        "bandgap": [1.5, 2.0, 0.8, float("nan")]})
+                        # string column incl. '' (missing) -> exercises numeric coercion
+                        "bandgap": ["1.5", "2.0", "0.8", ""]})
     ip = os.path.join(tmp, "mt_index.pickle")
     idx.to_pickle(ip)
     pk = os.path.join(tmp, "mt_pack")

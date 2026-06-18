@@ -498,6 +498,7 @@ def _extract_ragged(graph):
             return e["bond_length"] if e is not None else 1e9
 
         eids = []
+        seen_eid = {}
         for eid, nbr_id in sorted(neighbors, key=_bond_len):
             edge = edges_by_id.get(eid)
             if edge is None:
@@ -513,7 +514,18 @@ def _extract_ragged(graph):
             ji = edge.get("to_jimage")
             ji = (np.zeros(3, dtype=np.int16) if ji is None
                   else np.asarray(ji, dtype=np.int16))
-            bond_jimage.append(ji if cis else (-ji).astype(np.int16))
+            ji = ji if cis else (-ji).astype(np.int16)
+            # A self-image edge (source==target) occupies TWO slots of this center's
+            # list with the SAME edge id (both have cis=True). They are the +image and
+            # -image of the same bond, so the 2nd occurrence must flip sign — else both
+            # point the same way, double-counting one image and dropping the other
+            # (wrong PBC bond vector / forces). Only self-image edges duplicate an eid
+            # within one center's list, so the occurrence count is a sufficient test.
+            occ = seen_eid.get(eid, 0)
+            seen_eid[eid] = occ + 1
+            if occ:
+                ji = (-ji).astype(np.int16)
+            bond_jimage.append(ji)
             eids.append(eid)
         bond_cnt[atom_i] = len(eids)
         slot_eids_all.append(eids)
@@ -628,7 +640,7 @@ def _extract_ragged(graph):
         "bond_cnt": bond_cnt,
         "bond_nbr": _arr(bond_nbr, np.int32),
         "bond_fea": _arr(bond_fea, np.float32, NBR_FEA_LEN),
-        "bond_jimage": _arr(bond_jimage, np.int16, 3).reshape(-1, 3),
+        "bond_jimage": _arr(bond_jimage, np.int16, 3),
         "poly_cnt": poly_cnt,
         "poly_nbr": _arr(poly_nbr, np.int32),
         "poly_fea": _arr(poly_fea, np.float32, POLY_FEA_LEN),
@@ -884,9 +896,12 @@ class CIFDataV4(Dataset):
         self.target_column = target_key = _select_target_key(
             index_df, target_column, index_path)
         # Per-id bandgap lookup (multitask target; order-independent so it survives
-        # build_data_rows' shuffle/drop). Absent column -> NaN -> masked off.
-        self._bandgap_by_id = (dict(zip(index_df["id"].astype(str), index_df["bandgap"]))
-                               if "bandgap" in index_df.columns else {})
+        # build_data_rows' shuffle/drop). Absent column -> NaN -> masked off. Coerce
+        # non-numeric cells (e.g. '' for missing, a repo convention) to NaN.
+        self._bandgap_by_id = (
+            dict(zip(index_df["id"].astype(str),
+                     pd.to_numeric(index_df["bandgap"], errors="coerce")))
+            if "bandgap" in index_df.columns else {})
 
         # `label` (1 = SC, 0 = non-SC) defaults to 1 for older indexes without the
         # column, leaving the regression path unaffected. Rows whose chosen target

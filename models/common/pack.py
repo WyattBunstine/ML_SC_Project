@@ -252,7 +252,9 @@ class PackedCIFDataV4(Dataset):
         # scalar. Absent column -> None -> NaN target -> masked off.
         self._stress = (np.stack(meta["stress"].to_numpy()).astype(np.float32).reshape(-1, 3, 3)
                         if "stress" in meta.columns else None)
-        self._bandgap = (meta["bandgap"].to_numpy().astype(np.float32)
+        # Coerce non-numeric cells (e.g. '' for missing) to NaN before float cast.
+        self._bandgap = (pd.to_numeric(meta["bandgap"], errors="coerce")
+                         .to_numpy().astype(np.float32)
                          if "bandgap" in meta.columns else None)
 
         # Shared row construction (MPNNData.build_data_rows — bit-identical to
