@@ -389,7 +389,11 @@ def compute_target_stats(dataset, indices, max_samples=2000, seed=123):
         for k, v in tg.items():
             if bool(mk[k]):
                 acc.setdefault(k, []).append(v.reshape(-1))
-    return {k: max(float(torch.cat(v).std()), 1e-6) for k, v in acc.items() if v}
+    stats = {}
+    for k, v in acc.items():
+        s = float(torch.cat(v).std())          # std of a single present value is NaN
+        stats[k] = max(s, 1e-6) if s == s else 1.0
+    return stats
 
 
 def _build_cart_strain(input_var):
@@ -446,6 +450,10 @@ def _mt_loss(out, targets, masks, stats, weights, seg):
     if "dos" in out and "dos" in targets:
         scalar("dos", (out["dos"] - targets["dos"]).abs().mean(1))
 
+    if not losses:
+        raise ValueError("multitask loss has no terms: the model's tasks and the batch's "
+                         "target keys don't overlap (e.g. a 'dos' task with no dos target "
+                         "in the collate). Align the config's tasks with the available targets.")
     total = sum(weights.get(k, 1.0) * v for k, v in losses.items())
     return total, maes
 
@@ -464,6 +472,13 @@ def _train_mt(loader, model, optimizer, epoch, stats, weights, args):
         out = model(*input_var, cart=cart, strain=strain)
         targets, masks = _move_target_dicts(targets, masks, args["cuda"])
         loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6])
+        if not torch.isfinite(loss):
+            # Per-step guard: double-backward through 1/|d| reciprocals is more
+            # explosion-prone than single-backward, and an NaN here would step + be
+            # checkpointed before the per-epoch guard fires.
+            print(f"Exit: non-finite multitask loss at epoch {epoch} step {i} "
+                  "(lower learning_rate / raise grad_clip).")
+            sys.exit(1)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()                            # DOUBLE backward (force/stress terms)
         _warmup_and_step(optimizer, model, args, base_lr, warmup_steps, epoch * steps + i)

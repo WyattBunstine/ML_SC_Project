@@ -203,6 +203,18 @@ def main():
         if args.get("amp"):
             warnings.warn("amp (bf16) degrades autograd force gradients; "
                           "multitask should run with amp=false.", RuntimeWarning)
+        if args.get("gps_global"):
+            warnings.warn("gps_global=True with multitask: the double backward retains the "
+                          "(B, Lmax, Lmax) global-attention graph and can OOM. Prefer "
+                          "gps_global=False (local encoder), or size_grouped_batches with a "
+                          "small max_atoms_per_batch.", RuntimeWarning)
+        # Conservative forces need REAL geometry: a positionless pack (all-zero lattice,
+        # e.g. packed_v1) would silently train on degenerate zero bond vectors. Fail fast
+        # before a multi-hour run (mirrors the distance-bias zero-lattice guard).
+        if float(dataset[sc_idx[0]][0][7].abs().sum()) == 0.0:
+            sys.exit("multitask training requires a POSITIONED pack (real frac_coords / "
+                     "lattice); this pack's lattice is all-zero (e.g. packed_v1). Re-pack "
+                     "with positions + forces (packed_v4).")
         target_stats = compute_target_stats(
             dataset, list(sc_idx), max_samples=args.get("target_stat_samples", 2000),
             seed=args.get("split_seed", 123))

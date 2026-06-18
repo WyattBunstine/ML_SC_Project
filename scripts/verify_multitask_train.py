@@ -28,7 +28,8 @@ from torch.utils.data import DataLoader  # noqa: E402
 from data import load_cif_dataset, collate_pool_multitask, compute_feature_stats  # noqa: E402
 from pack import pack_dataset  # noqa: E402
 from model import GPSCrystalNet  # noqa: E402
-from train import compute_target_stats, _train_mt, _validate_mt, _DEFAULT_LOSS_WEIGHTS  # noqa: E402
+from train import (compute_target_stats, _train_mt, _validate_mt,  # noqa: E402
+                   _DEFAULT_LOSS_WEIGHTS, _build_cart_strain, _to_input_var)
 
 _NODE = {"Z": 11, "oxidation_state": 1.0, "ion_role": 1, "chi_pauling": 0.93,
          "chi_allen": 0.87, "ecn_value": 6.0, "shannon_radius": 1.0, "cn_core": 6,
@@ -101,14 +102,33 @@ def main():
         _vl, vm = _validate_mt(loader, model, stats, _DEFAULT_LOSS_WEIGHTS, args)
         gnorm = sum(p.grad.abs().sum().item() for p in model.parameters() if p.grad is not None)
 
+        # CRITICAL: forces/stress must ACTUALLY contribute — a force-only (and stress-only)
+        # objective must produce nonzero PARAMETER gradients through the double backward.
+        # Without this, energy+bandgap alone drive the loss descent and a silently
+        # zeroed/detached force head would still "pass" descends + finite + gnorm>0.
+        model.train()
+        iv = _to_input_var(next(iter(loader))[0], False)
+        cart, strain = _build_cart_strain(iv)
+        o = model(*iv, cart=cart, strain=strain)
+
+        def _param_gnorm(objective):
+            model.zero_grad(set_to_none=True)
+            objective.backward(retain_graph=True)
+            return sum(p.grad.abs().sum().item() for p in model.parameters() if p.grad is not None)
+
+        f_g = _param_gnorm(o["forces"].abs().sum())     # double backward through the force path
+        s_g = _param_gnorm(o["stress"].abs().sum())
+        contribute = f_g > 0 and s_g > 0
+
         descends = losses[-1] < losses[0] * 0.9
         finite = all(math.isfinite(v) for v in losses) and all(math.isfinite(v) for v in vm.values())
         tasks_ok = set(vm) == TASKS
-        ok = descends and finite and tasks_ok and gnorm > 0
+        ok = descends and finite and tasks_ok and gnorm > 0 and contribute
         print(f"  target std: {{{', '.join(f'{k}:{v:.3f}' for k, v in stats.items())}}}")
         print(f"  train loss {losses[0]:.2f} -> {losses[-1]:.2f} (descends={descends})")
         print(f"  val MAE: {{{', '.join(f'{k}:{vm[k]:.4f}' for k in sorted(vm))}}}")
         print(f"  double-backward param-grad-norm={gnorm:.2e}  tasks={tasks_ok}")
+        print(f"  force/stress contribute to params: F={f_g:.2e} S={s_g:.2e}  ({contribute})")
         print("verify_multitask_train: " + ("PASS" if ok else "FAIL"))
         return 0 if ok else 1
     finally:
