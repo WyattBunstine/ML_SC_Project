@@ -29,7 +29,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
 from data import (load_cif_dataset, get_sc_nonsc_loaders,  # noqa: E402
                   compute_feature_stats, resolve_split_by, collate_pool_geom,
-                  collate_pool_multitask, DOS_N_ENERGY)
+                  collate_pool_multitask, DOS_N_ENERGY, ConcatMTDataset)
 from train import (Normalizer, run_regression,  # noqa: E402
                    compute_target_stats, run_multitask, _DEFAULT_LOSS_WEIGHTS)
 from model import GPSCrystalNet  # noqa: E402
@@ -78,9 +78,10 @@ def main():
                  f"({DOS_N_ENERGY}) when the 'dos' task is active: the dos head width must "
                  "match the per-structure DOS target grid.")
 
-    # The GPS local channel always uses the bond-angle bias -> build it.
-    dataset = load_cif_dataset(
-        args["index_path"],
+    # The GPS local channel always uses the bond-angle bias -> build it. index_path may be
+    # a LIST for a multitask masked-union (e.g. packed_v4 + the DOS pack): each pack supplies
+    # the targets it has, the rest NaN-masked. Packs MUST share the feature flags below.
+    _ds_kw = dict(
         max_num_nbr=args.get("max_num_nbr", 14),
         max_num_poly_nbr=args.get("max_num_poly_nbr", 16),
         graph_cache_size=args.get("graph_cache_size", 4096),
@@ -97,6 +98,12 @@ def main():
         # Multitask: __getitem__ yields (input, targets_dict, masks_dict, cif_id).
         multitask=multitask,
     )
+    index_paths = (args["index_path"] if isinstance(args["index_path"], list)
+                   else [args["index_path"]])
+    if len(index_paths) > 1 and not multitask:
+        sys.exit("multiple index_path entries (a masked-union) require a multitask `tasks` config.")
+    _subsets = [load_cif_dataset(ip, **_ds_kw) for ip in index_paths]
+    dataset = _subsets[0] if len(_subsets) == 1 else ConcatMTDataset(_subsets)
 
     split_by = resolve_split_by(args.get("split_by"), dataset)
     args["split_by"] = split_by

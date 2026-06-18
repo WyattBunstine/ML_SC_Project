@@ -211,6 +211,24 @@ def validate_mpnn(cfg, err, warn, cpus):
     index_path = cfg.get("index_path")
     if not index_path:
         return
+    # Masked-union (gps_main): a LIST of packs trained together. Each pack is
+    # validated independently; >1 pack requires multitask (mirrors gps_main's
+    # "masked-union requires multitask" exit).
+    if isinstance(index_path, list):
+        # gps_main infers multitask from a non-empty `tasks` list (there is no
+        # separate `multitask` key); a >1-pack union requires it.
+        if len(index_path) > 1 and not cfg.get("tasks"):
+            err.append("index_path is a list (masked-union) but `tasks` is empty; "
+                       "a multi-pack union requires a multitask `tasks` config")
+        for ip in index_path:
+            _validate_one_index(ip, cfg, err, warn)
+        _check_workers_vs_cpus(cfg, cpus, warn)
+        return
+    _validate_one_index(index_path, cfg, err, warn)
+    _check_workers_vs_cpus(cfg, cpus, warn)
+
+
+def _validate_one_index(index_path, cfg, err, warn):
     if not os.path.exists(index_path):
         # Cluster-built datasets (e.g. MPtrj via `deploy.sh build-mptrj` /
         # `pack-mptrj`) exist ONLY on the cluster, so a locally-missing index is
@@ -257,8 +275,6 @@ def validate_mpnn(cfg, err, warn, cpus):
     if "graph_path" in df.columns and len(df):
         sample = df["graph_path"].dropna().head(5).tolist()
         _sample_files_exist(sample, err, "graph files")
-
-    _check_workers_vs_cpus(cfg, cpus, warn)
 
 
 def validate_gps(cfg, err, warn, cpus):

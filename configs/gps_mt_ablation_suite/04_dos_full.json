@@ -53,7 +53,7 @@
         "mem": "96G",
         "time": "24:00:00"
     },
-    "run_tag": "gps_multitask",
+    "run_tag": "gps_mt_04_dos_full",
     "tasks": [
         "energy",
         "forces",

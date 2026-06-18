@@ -1066,6 +1066,46 @@ def resolve_split_by(configured, dataset):
     return "material" if getattr(dataset, "groups", None) is not None else "frame"
 
 
+class ConcatMTDataset:
+    """A masked-union of multiple multitask packs (e.g. packed_v4 [MPtrj: E/F/stress/magmom/
+    bandgap] + the DOS pack [relaxed MP: dos]) for multitask pretraining. Each pack supplies
+    the targets it has; the others are NaN-masked, so the model trains every head over the
+    union. Concatenates .data/.labels/.groups so the shared splitter (get_sc_nonsc_loaders,
+    resolve_split_by) works unchanged; __getitem__ delegates to the pack owning the global
+    index. feature_stats delegates to the first pack (all packs share the cgv4 feature space,
+    so they MUST be built with the same feature flags). NOTE: size_grouped_batches must be OFF
+    (it reads a single pack's _off for atom counts); fine for the local encoder (gps_global=
+    False), which is the multitask config anyway."""
+
+    def __init__(self, datasets):
+        assert datasets, "ConcatMTDataset needs >= 1 dataset"
+        assert all(getattr(d, "multitask", False) for d in datasets), \
+            "ConcatMTDataset members must be opened with multitask=True"
+        self.datasets = list(datasets)
+        self._offsets = np.cumsum([0] + [len(d) for d in self.datasets])
+        self.multitask = True
+        self.is_packed = all(getattr(d, "is_packed", False) for d in self.datasets)
+        self.target_column = self.datasets[0].target_column
+        self.data = [rec for d in self.datasets for rec in d.data]
+        self.labels = [lab for d in self.datasets for lab in d.labels]
+        self.groups = ([g for d in self.datasets for g in d.groups]
+                       if all(getattr(d, "groups", None) is not None for d in self.datasets)
+                       else None)
+
+    def __len__(self):
+        return int(self._offsets[-1])
+
+    def __getitem__(self, i):
+        d = int(np.searchsorted(self._offsets, i, side="right") - 1)
+        return self.datasets[d][i - int(self._offsets[d])]
+
+    def feature_stats(self, indices, max_graphs=4000, seed=123):
+        # Packs share the feature space -> compute from the first over ITS OWN indices
+        # (the passed global indices don't map to one pack).
+        d0 = self.datasets[0]
+        return d0.feature_stats(list(range(len(d0))), max_graphs=max_graphs, seed=seed)
+
+
 def load_cif_dataset(index_path, **kwargs):
     """Open a training dataset from either backend, keyed on what the path is:
 
