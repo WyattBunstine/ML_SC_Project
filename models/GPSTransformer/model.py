@@ -278,7 +278,8 @@ class GPSCrystalNet(nn.Module):
                  local_transformer=True, per_atom_head=True,
                  use_bond_edges=True, shell_aggregation="attention", use_angle_bias=True,
                  use_dist_bias=False, dist_cutoff=8.0, n_dist_rbf=16,
-                 classification=False):
+                 classification=False, tasks=None, n_energy=256,
+                 differentiable_geometry=False):
         super().__init__()
         if atom_pooling not in self._POOLINGS:
             raise ValueError(f"GPS atom_pooling must be one of {self._POOLINGS}")
@@ -334,17 +335,39 @@ class GPSCrystalNet(nn.Module):
         # local contributions), so a high-contribution atom isn't washed out by
         # averaging embeddings before the nonlinear head. per_atom_head=False
         # restores the pool-then-head readout (which also enables mean_max pooling).
+        self.atom_fea_len = atom_fea_len
+        self.h_fea_len = h_fea_len
+        self.n_energy = n_energy
+        # Conservative-autograd multi-task mode: a set of per-atom heads on the
+        # invariant h, forces/stress via autograd of the EXTENSIVE energy. None ->
+        # the single-scalar readout below stays bit-identical (MPNN/run_regression).
+        self.tasks = set(tasks) if tasks is not None else None
+        self.differentiable_geometry = differentiable_geometry
         pool_out = atom_fea_len * (2 if atom_pooling == "mean_max" else 1)
         head_in = atom_fea_len if per_atom_head else pool_out
-        self.conv_to_fc = nn.Linear(head_in, h_fea_len)
-        self.conv_to_fc_act = nn.Softplus()
-        if n_h > 1:
-            self.fcs = nn.ModuleList([nn.Linear(h_fea_len, h_fea_len) for _ in range(n_h - 1)])
-            self.fc_acts = nn.ModuleList([nn.Softplus() for _ in range(n_h - 1)])
-        self.dropout = nn.Dropout(dropout)
-        self.fc_out = nn.Linear(h_fea_len, 2 if classification else 1)
-        if classification:
-            self.logsoftmax = nn.LogSoftmax(dim=1)
+        if self.tasks is None:
+            self.conv_to_fc = nn.Linear(head_in, h_fea_len)
+            self.conv_to_fc_act = nn.Softplus()
+            if n_h > 1:
+                self.fcs = nn.ModuleList([nn.Linear(h_fea_len, h_fea_len) for _ in range(n_h - 1)])
+                self.fc_acts = nn.ModuleList([nn.Softplus() for _ in range(n_h - 1)])
+            self.dropout = nn.Dropout(dropout)
+            self.fc_out = nn.Linear(h_fea_len, 2 if classification else 1)
+            if classification:
+                self.logsoftmax = nn.LogSoftmax(dim=1)
+        else:
+            # One per-atom MLP per active task. energy -> extensive sum; bandgap ->
+            # intensive segment-mean; magmom -> per-atom; dos -> per-atom Softplus
+            # spectral vector summed to an extensive structure DOS.
+            self.heads = nn.ModuleDict()
+            if "energy" in self.tasks:
+                self.heads["energy"] = self._build_head(1)
+            if "magmom" in self.tasks:
+                self.heads["magmom"] = self._build_head(1)
+            if "bandgap" in self.tasks:
+                self.heads["bandgap"] = self._build_head(1)
+            if "dos" in self.tasks:
+                self.heads["dos"] = self._build_head(n_energy, softplus_out=True)
 
     def set_feature_stats(self, node, nbr, poly=None):
         self.node_mean.copy_(torch.as_tensor(node[0], dtype=self.node_mean.dtype))
@@ -355,13 +378,91 @@ class GPSCrystalNet(nn.Module):
             self.poly_mean.copy_(torch.as_tensor(poly[0], dtype=self.poly_mean.dtype))
             self.poly_std.copy_(torch.as_tensor(poly[1], dtype=self.poly_std.dtype))
 
+    def _build_head(self, out_dim, softplus_out=False):
+        # A per-atom MLP head matching the legacy head's depth/width (n_h Softplus
+        # layers). softplus_out clamps the output >= 0 (DOS spectral density).
+        layers = [nn.Linear(self.atom_fea_len, self.h_fea_len), nn.Softplus()]
+        for _ in range(self.n_h - 1):
+            layers += [nn.Linear(self.h_fea_len, self.h_fea_len), nn.Softplus()]
+        layers.append(nn.Linear(self.h_fea_len, out_dim))
+        if softplus_out:
+            layers.append(nn.Softplus())
+        return nn.Sequential(*layers)
+
+    @staticmethod
+    def _acc_dtype(x):
+        # Accumulate segment reductions in >= fp32: bf16/fp16 index_add_ over many atoms
+        # drops low-order contributions and biases the pooled value. fp32/fp64 inputs
+        # accumulate in their OWN dtype — forcing fp32 would cap fp64 precision (and
+        # silently zero the tiny energy changes a finite-difference force check needs).
+        return torch.float32 if x.dtype in (torch.float16, torch.bfloat16) else x.dtype
+
     def _segment_mean(self, x, seg, B):
-        # Mean over the atoms of each crystal: (N, F) -> (B, F). Accumulate in fp32:
-        # under bf16 autocast a many-atom index_add_ drops low-order contributions
-        # and biases the pooled value (notably the per-atom-energy readout).
+        # Mean over the atoms of each crystal: (N, F) -> (B, F).
         counts = torch.bincount(seg, minlength=B).clamp(min=1).unsqueeze(1)
-        acc = x.new_zeros(B, x.shape[1], dtype=torch.float32).index_add_(0, seg, x.float())
+        dt = self._acc_dtype(x)
+        acc = x.new_zeros(B, x.shape[1], dtype=dt).index_add_(0, seg, x.to(dt))
         return (acc / counts).to(x.dtype)
+
+    def _segment_sum(self, x, seg, B):
+        # SUM over each crystal's atoms: (N, F) -> (B, F). Extensive readout (total
+        # energy / total DOS), whose gradient w.r.t. positions gives the forces.
+        dt = self._acc_dtype(x)
+        return (x.new_zeros(B, x.shape[1], dtype=dt)
+                .index_add_(0, seg, x.to(dt)).to(x.dtype))
+
+    def _bond_vectors(self, cart, lattice, nbr_fea_idx, nbr_jimage, seg, strain=None):
+        # Exact PBC bond vectors d_ij = cart_j + jimage@lattice - cart_i, differentiable
+        # in cart (-> forces) and the symmetric strain (-> stress). nbr_jimage (N,M,3)
+        # aligns with nbr_fea_idx. No min-image round(): to_jimage makes the image exact,
+        # and round() has zero-gradient jumps at cell boundaries that corrupt forces.
+        img = torch.einsum("nmk,nkc->nmc", nbr_jimage.to(cart.dtype), lattice[seg])
+        d = cart[nbr_fea_idx] + img - cart.unsqueeze(1)          # (N, M, 3)
+        if strain is not None:
+            eye = torch.eye(3, device=cart.device, dtype=cart.dtype)
+            d = torch.einsum("nmk,nkc->nmc", d, eye + strain[seg])
+        return d
+
+    def _multitask_readout(self, h, seg, B, cart, strain, lattice):
+        # Per-atom heads on the invariant h; conservative forces/stress via autograd of
+        # the EXTENSIVE energy. Returns a dict of task -> prediction.
+        out = {}
+        if "energy" in self.tasks:
+            E_total = self._segment_sum(self.heads["energy"](h), seg, B).squeeze(-1)  # (B,)
+            out["energy"] = E_total
+            want_f = "forces" in self.tasks
+            want_s = "stress" in self.tasks and strain is not None
+            if (want_f or want_s) and cart is not None and cart.requires_grad:
+                inputs = ([cart] if want_f else []) + ([strain] if want_s else [])
+                # create_graph in training so the force/stress LOSS can backprop through
+                # this gradient (double backward); retain so the energy/other-head losses
+                # can still backprop through h afterwards.
+                grads = torch.autograd.grad(E_total.sum(), inputs,
+                                            create_graph=self.training, retain_graph=True)
+                gi = 0
+                if want_f:
+                    out["forces"] = -grads[gi]; gi += 1                      # -dE/dcart (N,3)
+                if want_s:
+                    vol = torch.det(lattice).abs().view(B, 1, 1).clamp_min(1e-6)
+                    out["stress"] = grads[gi] / vol                         # dE/dstrain / V
+        if "magmom" in self.tasks:
+            out["magmom"] = self.heads["magmom"](h)                         # (N,1) per-atom
+        if "bandgap" in self.tasks:
+            out["bandgap"] = self._segment_mean(self.heads["bandgap"](h), seg, B).squeeze(-1)
+        if "dos" in self.tasks:
+            out["dos"] = self._segment_sum(self.heads["dos"](h), seg, B)    # (B, n_energy)
+        return out
+
+    def _recompute_angle(self, d, static_angle):
+        # Differentiable cos(angle) between neighbor slot pairs from bond vectors d.
+        # Keep the STATIC matrix's coverage (only pairs it marks real, |cos|<=1) so the
+        # recompute reproduces the stored angle bias at the reference geometry and the
+        # 2.0 sentinel / ShellAttention gate are preserved; just make the real entries
+        # smooth functions of position.
+        dn = d / d.norm(dim=-1, keepdim=True).clamp_min(1e-8)         # (N, M, 3) unit
+        cos = torch.einsum("nak,nbk->nab", dn, dn).clamp(-1.0, 1.0)   # (N, M, M)
+        real = static_angle.abs() <= 1.0
+        return torch.where(real, cos, torch.full_like(cos, 2.0))
 
     def _head(self, x):
         # Shared MLP head; applied per-atom (N, d) in the per-atom-energy readout,
@@ -406,14 +507,38 @@ class GPSCrystalNet(nn.Module):
 
     def forward(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
                 nbr_angle, crystal_seg, n_crystals, frac_coords=None, lattice=None,
-                nbr_jimage=None):
+                nbr_jimage=None, cart=None, strain=None):
         h = self.embedding((atom_fea - self.node_mean) / self.node_std)
         # Standardize edge features once (constant across blocks); pad masks read
         # the RAW features (real edges have a non-zero feature row).
-        nbr_norm = (nbr_fea - self.bond_mean) / self.bond_std
         bond_pad = (nbr_fea.abs().sum(dim=2) > 0)
         poly_norm = (poly_fea - self.poly_mean) / self.poly_std
         poly_pad = (poly_fea.abs().sum(dim=2) > 0)
+
+        # Differentiable geometry (conservative-autograd forces/stress): recompute ONLY
+        # the geometric feature columns (bond length col 0, length/sum-radii col 1, and
+        # the angle-cos matrix) from the live Cartesian leaf `cart`; hold topology,
+        # Voronoi/ECN weights, chemistry, poly/dihedral features FIXED. Forces then flow
+        # as -dE/dcart through the distance+angle channels only (the fixed-graph
+        # conservative force). Off -> the static pack features are used unchanged.
+        if (self.differentiable_geometry and cart is not None and nbr_jimage is not None
+                and lattice is not None):
+            # Symmetrize the strain leaf for the geometry so dE/d(strain leaf) — the
+            # stress — comes out symmetric, while autograd still differentiates the leaf.
+            strain_sym = (0.5 * (strain + strain.transpose(-1, -2))
+                          if strain is not None else None)
+            d = self._bond_vectors(cart, lattice, nbr_fea_idx, nbr_jimage,
+                                   crystal_seg, strain_sym)
+            dist = d.norm(dim=-1).clamp_min(1e-8)                # (N, M) differentiable |d_ij|
+            raw0, raw1 = nbr_fea[..., 0], nbr_fea[..., 1]        # static bond_length, length/sumR
+            inv_sumR = torch.where(raw0 > 0, raw1 / raw0.clamp_min(1e-8),
+                                   torch.zeros_like(raw0))       # 1/sum_radii (geometry-free)
+            pad = bond_pad.to(dist.dtype)
+            nbr_fea = torch.cat([(dist * pad).unsqueeze(-1),
+                                 (dist * inv_sumR * pad).unsqueeze(-1),
+                                 nbr_fea[..., 2:]], dim=-1)
+            nbr_angle = self._recompute_angle(d, nbr_angle)
+        nbr_norm = (nbr_fea - self.bond_mean) / self.bond_std
 
         # Padding layout for the global channel: computed ONCE (one host sync) and
         # shared across blocks. None when global attention is disabled or there are
@@ -451,6 +576,9 @@ class GPSCrystalNet(nn.Module):
             h = block(h, nbr_norm, nbr_fea_idx, bond_pad, nbr_angle,
                       poly_norm, poly_fea_idx, poly_pad, crystal_seg, n_crystals,
                       plan, dist_bias)
+
+        if self.tasks is not None:
+            return self._multitask_readout(h, crystal_seg, n_crystals, cart, strain, lattice)
 
         if self.per_atom_head:
             # E = mean_i head(h_i): per-atom energy, then averaged over the crystal's
