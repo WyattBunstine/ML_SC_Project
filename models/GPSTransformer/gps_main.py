@@ -137,39 +137,12 @@ def main():
     if args.get("model_seed") is not None:
         torch.manual_seed(int(args["model_seed"]))
 
-    model = GPSCrystalNet(
-        orig_atom_fea_len=orig_atom_fea_len, nbr_fea_len=nbr_fea_len,
-        poly_fea_len=poly_fea_len,
-        atom_fea_len=args.get("atom_feat_len", 128),
-        n_conv=args.get("n_conv", 4),
-        h_fea_len=args.get("h_feat_len", 128),
-        n_h=args.get("n_hidden", 2),
-        use_poly_edges=args.get("use_poly_edges", True),
-        atom_pooling=args.get("atom_pooling", "mean"),
-        dropout=args.get("dropout", 0.0),
-        n_heads=args.get("set_transformer_heads", 8),
-        gps_global=args.get("gps_global", True),
-        # Default the global heads to the local-attention head count so a single
-        # `set_transformer_heads` drives both unless `gps_global_heads` is set.
-        gps_global_heads=args.get("gps_global_heads", args.get("set_transformer_heads", 8)),
-        gps_ffn_mult=args.get("gps_ffn_mult", 2),
-        local_transformer=args.get("local_transformer", True),
-        per_atom_head=args.get("per_atom_head", True),
-        # Ablation-ladder knobs (default to the full model).
-        use_bond_edges=args.get("use_bond_edges", True),
-        shell_aggregation=args.get("shell_aggregation", "attention"),
-        use_angle_bias=args.get("use_angle_bias", True),
-        # Long-range PBC distance bias on the global attention (needs a positioned
-        # pack, e.g. packed_v2). Off by default.
-        use_dist_bias=args.get("use_dist_bias", False),
-        dist_cutoff=args.get("dist_cutoff", 8.0),
-        n_dist_rbf=args.get("n_dist_rbf", 16),
-        # Multitask: per-atom heads + conservative-autograd forces/stress on the live
-        # Cartesian geometry. None -> single-scalar readout (unchanged).
-        tasks=(set(args["tasks"]) if multitask else None),
-        differentiable_geometry=multitask,
-        n_energy=args.get("n_energy", 256),
-    )
+    # Single source of the architecture spec (shared with embed_gps's transfer
+    # rebuild via GPSCrystalNet.from_args) so the two construction sites can't drift.
+    # tasks -> multitask per-atom heads + conservative-autograd forces/stress; None
+    # -> single-scalar readout (unchanged). use_dist_bias needs a positioned pack.
+    model = GPSCrystalNet.from_args(
+        args, (orig_atom_fea_len, nbr_fea_len, poly_fea_len))
 
     if args.get("normalize_features", True):
         stats = compute_feature_stats(dataset, list(sc_idx),

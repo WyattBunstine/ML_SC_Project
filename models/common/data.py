@@ -290,7 +290,7 @@ def _poly_edge_to_fea(pe: dict) -> np.ndarray:
     ], dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
 
-def _select_target_key(index_df, target_column, index_path):
+def _select_target_key(index_df, target_column, index_path, required=True):
     """Pick which column supplies the regression target. A multi-target index
     (e.g. the MP energy dataset) carries several named target columns;
     `target_column` (from the config) selects one. With it unset we fall back to
@@ -299,12 +299,20 @@ def _select_target_key(index_df, target_column, index_path):
     — a tc-less index has an all-empty `value`, so this raises and tells the user
     to set `target_column` instead of silently regressing on the wrong target.
     Shared by CIFDataV4 (index pickle) and PackedCIFDataV4 (pack meta).
-    mp_id is the grouping key for material splits, NOT a target."""
+    mp_id is the grouping key for material splits, NOT a target.
+
+    `required=False` (multitask masked-union members): an absent target_column
+    returns None instead of raising — the scalar energy target is then NaN-masked
+    for that pack (its other targets, e.g. dos, still train). A union member that
+    genuinely lacks the configured scalar target (the DOS pack has no formation
+    energy) must NOT crash the whole run, and must NOT have all its rows dropped."""
     structural_cols = {"id", "value", "graph_path", "label", "mp_id"}
     named_targets = [c for c in index_df.columns
                      if c not in structural_cols and not index_df[c].isna().all()]
     if target_column is not None:
         if target_column not in index_df.columns:
+            if not required:
+                return None
             raise ValueError(
                 f"target_column '{target_column}' not found in index "
                 f"{index_path}; available columns: {list(index_df.columns)}")
@@ -314,6 +322,8 @@ def _select_target_key(index_df, target_column, index_path):
          if c in index_df.columns and not index_df[c].isna().all()),
         None)
     if target_key is None:
+        if not required:
+            return None
         raise ValueError(
             f"No usable default target ('value'/'tc' absent or all-empty) "
             f"in index {index_path}. Set 'target_column' in the config to "
@@ -321,7 +331,7 @@ def _select_target_key(index_df, target_column, index_path):
     return target_key
 
 
-def build_data_rows(index_df, target_key, third_full, random_seed):
+def build_data_rows(index_df, target_key, third_full, random_seed, keep_all=False):
     """Shared row construction for both dataset backends (CIFDataV4 and
     PackedCIFDataV4): drop target-NaN rows, attach label/mp_id, seed-shuffle.
 
@@ -331,6 +341,13 @@ def build_data_rows(index_df, target_key, third_full, random_seed):
     of each row tuple (graph paths for the lazy loader, meta row positions for
     the packed one), aligned with the FULL index_df.
 
+    `keep_all=True` (multitask masked-union members): KEEP every row even when its
+    scalar target is NaN/absent — the masked multitask loss zeroes a missing target
+    instead of training on it, so a row with no scalar energy but a real dos label
+    must survive (dropping it would silently empty a DOS-only pack). The scalar
+    target is numeric-coerced ('' -> NaN -> masked); target_key=None -> all-NaN
+    scalar. keep_all=False is the legacy single-target path, bit-identical to before.
+
     Returns (data, groups, labels, dropped):
       data   : [(id, target_value, third, label), ...] shuffled
       groups : parallel mp_id list, or None unless EVERY row has one
@@ -338,17 +355,28 @@ def build_data_rows(index_df, target_key, third_full, random_seed):
                a leakage-free material split)
       labels : [label, ...] aligned with data
     """
-    valid = index_df[target_key].notna()
+    if target_key is None:
+        # Multitask member without the configured scalar target column: all-NaN
+        # scalar (energy masked), keep every row. (keep_all is implied.)
+        target_vals = pd.Series([float("nan")] * len(index_df), index=index_df.index)
+        valid = pd.Series(True, index=index_df.index)
+    elif keep_all:
+        target_vals = pd.to_numeric(index_df[target_key], errors="coerce")
+        valid = pd.Series(True, index=index_df.index)
+    else:
+        target_vals = index_df[target_key]
+        valid = target_vals.notna()
     dropped = int((~valid).sum())
+    keep = valid.tolist()
     sub = index_df.loc[valid]
-    third = [t for t, v in zip(third_full, valid.tolist()) if v]
+    third = [t for t, v in zip(third_full, keep) if v]
     labels = (sub["label"].astype(int).tolist()
               if "label" in sub.columns else [1] * len(sub))
     if "mp_id" in index_df.columns:
         mp_ids = [None if pd.isna(g) else g for g in sub["mp_id"].tolist()]
     else:
         mp_ids = [None] * len(sub)
-    rows = list(zip(sub["id"].tolist(), sub[target_key].tolist(), third,
+    rows = list(zip(sub["id"].tolist(), target_vals.loc[valid].tolist(), third,
                     labels, mp_ids))
     random.seed(random_seed)
     random.shuffle(rows)
@@ -913,8 +941,11 @@ class CIFDataV4(Dataset):
         self.use_bond_angles = use_bond_angles
 
         index_df = pd.read_pickle(index_path)
+        # Multitask union members may legitimately lack the configured scalar
+        # target (the DOS pack has no formation energy) -> tolerate its absence
+        # and keep all rows (the missing scalar is masked, other targets train).
         self.target_column = target_key = _select_target_key(
-            index_df, target_column, index_path)
+            index_df, target_column, index_path, required=not multitask)
         # Per-id bandgap lookup (multitask target; order-independent so it survives
         # build_data_rows' shuffle/drop). Absent column -> NaN -> masked off. Coerce
         # non-numeric cells (e.g. '' for missing, a repo convention) to NaN.
@@ -932,7 +963,8 @@ class CIFDataV4(Dataset):
         # tuple is this backend's graph path; `groups` (parallel mp_id list)
         # enables material-level splits for trajectory datasets.
         self.data, self.groups, self.labels, dropped = build_data_rows(
-            index_df, target_key, index_df["graph_path"].tolist(), random_seed)
+            index_df, target_key, index_df["graph_path"].tolist(), random_seed,
+            keep_all=multitask)
         if dropped:
             print(f"CIFDataV4: dropped {dropped} rows with no '{target_key}' value")
 
@@ -1100,10 +1132,16 @@ class ConcatMTDataset:
         return self.datasets[d][i - int(self._offsets[d])]
 
     def feature_stats(self, indices, max_graphs=4000, seed=123):
-        # Packs share the feature space -> compute from the first over ITS OWN indices
-        # (the passed global indices don't map to one pack).
+        # Respect the passed TRAIN indices (no val/test leakage, unlike using all of
+        # pack 0): keep the global-union indices that fall in pack 0 and map them to
+        # pack-0-local indices. Packs share the cgv4 feature space (same feature
+        # flags), so the dominant first pack is a representative, leakage-free sample.
         d0 = self.datasets[0]
-        return d0.feature_stats(list(range(len(d0))), max_graphs=max_graphs, seed=seed)
+        n0 = len(d0)
+        local0 = [i for i in indices if 0 <= i < n0]
+        if not local0:                      # no pack-0 rows in this split (pathological)
+            local0 = list(range(n0))
+        return d0.feature_stats(local0, max_graphs=max_graphs, seed=seed)
 
 
 def load_cif_dataset(index_path, **kwargs):

@@ -517,6 +517,42 @@ class GPSCrystalNet(nn.Module):
         bias = self.dist_proj(self._dist_rbf(dist))         # (B, Lmax, Lmax, heads)
         return bias.permute(0, 3, 1, 2)                     # (B, heads, Lmax, Lmax)
 
+    @classmethod
+    def from_args(cls, args, dims):
+        """Build a GPSCrystalNet from a config/checkpoint `args` dict and the feature
+        dims (orig_atom_fea_len, nbr_fea_len, poly_fea_len). The SINGLE source of the
+        architecture spec: gps_main (training) and embed_gps (frozen transfer export)
+        both construct through here, so the rebuilt encoder can't drift from the trained
+        one when a new arch knob is added (the ablation ladder keeps adding them)."""
+        orig_atom_fea_len, nbr_fea_len, poly_fea_len = dims
+        multitask = bool(args.get("tasks"))
+        return cls(
+            orig_atom_fea_len=orig_atom_fea_len, nbr_fea_len=nbr_fea_len,
+            poly_fea_len=poly_fea_len,
+            atom_fea_len=args.get("atom_feat_len", 128),
+            n_conv=args.get("n_conv", 4),
+            h_fea_len=args.get("h_feat_len", 128),
+            n_h=args.get("n_hidden", 2),
+            use_poly_edges=args.get("use_poly_edges", True),
+            atom_pooling=args.get("atom_pooling", "mean"),
+            dropout=args.get("dropout", 0.0),
+            n_heads=args.get("set_transformer_heads", 8),
+            gps_global=args.get("gps_global", True),
+            gps_global_heads=args.get("gps_global_heads", args.get("set_transformer_heads", 8)),
+            gps_ffn_mult=args.get("gps_ffn_mult", 2),
+            local_transformer=args.get("local_transformer", True),
+            per_atom_head=args.get("per_atom_head", True),
+            use_bond_edges=args.get("use_bond_edges", True),
+            shell_aggregation=args.get("shell_aggregation", "attention"),
+            use_angle_bias=args.get("use_angle_bias", True),
+            use_dist_bias=args.get("use_dist_bias", False),
+            dist_cutoff=args.get("dist_cutoff", 8.0),
+            n_dist_rbf=args.get("n_dist_rbf", 16),
+            tasks=(set(args["tasks"]) if multitask else None),
+            differentiable_geometry=multitask,
+            n_energy=args.get("n_energy", 256),
+        )
+
     def _encode(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
                 nbr_angle, crystal_seg, n_crystals, frac_coords, lattice,
                 nbr_jimage, cart, strain):

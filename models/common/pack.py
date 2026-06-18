@@ -258,8 +258,11 @@ class PackedCIFDataV4(Dataset):
         self.multitask = multitask
 
         meta = pd.read_pickle(os.path.join(pack_dir, "meta.pickle"))
+        # Multitask union members may lack the configured scalar target (the DOS
+        # pack carries no formation energy) -> tolerate its absence and keep all
+        # rows (the missing scalar is masked off; the pack's own targets train).
         self.target_column = target_key = _select_target_key(
-            meta, target_column, pack_dir)
+            meta, target_column, pack_dir, required=not multitask)
 
         # Offset arrays in META ORDER; rows reference them by position so the
         # row shuffle below never reorders the arrays themselves.
@@ -282,7 +285,7 @@ class PackedCIFDataV4(Dataset):
         # CIFDataV4 so the same seed yields the same splits across backends);
         # element 2 of each data tuple is the meta row position here.
         self.data, self.groups, self.labels, dropped = build_data_rows(
-            meta, target_key, list(range(len(meta))), random_seed)
+            meta, target_key, list(range(len(meta))), random_seed, keep_all=multitask)
         if dropped:
             print(f"PackedCIFDataV4: dropped {dropped} rows with no '{target_key}' value")
 
