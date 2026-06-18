@@ -19,7 +19,8 @@ def customwarn(message, category, filename, lineno, file=None, line=None):
 # preserves every one that is present so the MPNN can pick which to train on via
 # the config's `target_column` key (see models/MPNN/MPNNData.py). `tc` stays the
 # default/legacy target; extend this tuple to add new targets.
-KNOWN_TARGET_COLUMNS = ("tc", "e_above_hull", "formation_energy_per_atom", "energy_per_atom")
+KNOWN_TARGET_COLUMNS = ("tc", "e_above_hull", "formation_energy_per_atom",
+                        "energy_per_atom", "bandgap")
 
 
 def _load_id_prop(csv_path, has_header=True):
@@ -434,6 +435,141 @@ def augment_graphs_with_positions(record_iter, graph_dir, n_workers=None,
             _consume(pool.imap_unordered(_augment_one_with_positions, task_gen(),
                                          chunksize=chunksize))
     print(f"Augment done in {_fmt_dur(time.time() - start)}: {counters}", flush=True)
+    return counters
+
+
+def _recompute_to_jimage(s, t, bond_length, frac, lattice):
+    """The periodic image n of `target` relative to `source` that the Voronoi builder
+    bonded, recovered by matching the stored bond_length (exact for any bond shorter than
+    the cell). Searched in a 3x3x3 window around the minimum image. Returns (n_list, err)."""
+    fs, ft = frac[s], frac[t]
+    base = -np.round(ft - fs).astype(int)                  # minimum image
+    best_n, best_err = base.tolist(), 1e18
+    for da in (-1, 0, 1):
+        for db in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                n = base + np.array([da, db, dc])
+                d = float(np.linalg.norm((ft + n - fs) @ lattice))
+                e = abs(d - bond_length)
+                if e < best_err:
+                    best_err, best_n = e, [int(x) for x in n]
+    return best_n, best_err
+
+
+def _augment_one_with_physics(task):
+    """Worker: backfill onto an EXISTING compact graph (NO Voronoi rebuild) — frac_coords
+    + lattice, per-atom forces / magmom + per-structure stress from the source frame
+    (Z-verified atom order), and per-edge to_jimage recomputed from the geometry by
+    bond-length matching. task = (graph_path, structure_dict, frame_id, force, magmom,
+    stress). Atomic write; resumable (skips graphs already carrying positions + to_jimage).
+    Forces/magmom/stress are attached only when the frame provides them (absent -> the
+    pack reads NaN -> masked off in training)."""
+    graph_path, structure_dict, frame_id, force, magmom, stress = task
+    try:
+        from pymatgen.core.structure import Structure
+        if not os.path.exists(graph_path):
+            return (graph_path, "missing", frame_id, "graph not built")
+        with open(graph_path) as f:
+            graph = json.load(f)
+        edges = graph.get("edges", [])
+        if "frac_coords" in graph and (not edges or "to_jimage" in edges[0]):
+            return (graph_path, "skip", frame_id, None)            # resumable
+        struct = Structure.from_dict(structure_dict)
+        nodes = graph["nodes"]
+        n = len(nodes)
+        if n != len(struct):
+            return (graph_path, "mismatch", frame_id, f"n_atoms {n} != structure {len(struct)}")
+        for i, node in enumerate(nodes):
+            if int(node["Z"]) != int(struct[i].specie.Z):
+                return (graph_path, "mismatch", frame_id, f"Z order mismatch at atom {i}")
+        frac = np.asarray([site.frac_coords for site in struct], dtype=float)
+        lattice = np.asarray(struct.lattice.matrix, dtype=float)
+        graph["frac_coords"] = frac.tolist()                       # idempotent w/ augment-positions
+        graph["lattice"] = lattice.tolist()
+        if force is not None:
+            f_arr = np.asarray(force, dtype=float)
+            if f_arr.shape != (n, 3):
+                return (graph_path, "mismatch", frame_id, f"force shape {f_arr.shape} != ({n},3)")
+            graph["forces"] = f_arr.tolist()
+        if magmom is not None:
+            m_arr = np.asarray(magmom, dtype=float).reshape(-1)
+            if m_arr.shape[0] == n:
+                graph["magmom"] = m_arr.tolist()
+        if stress is not None:
+            graph["stress"] = np.asarray(stress, dtype=float).reshape(3, 3).tolist()
+        max_err = 0.0
+        for e in edges:
+            njimage, err = _recompute_to_jimage(int(e["source"]), int(e["target"]),
+                                                float(e["bond_length"]), frac, lattice)
+            e["to_jimage"] = njimage
+            max_err = max(max_err, err)
+        if max_err > 0.1:           # Å: no image within +/-1 of min-image matched the bond
+            return (graph_path, "mismatch", frame_id, f"to_jimage match err {max_err:.3f} A")
+        tmp = graph_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(graph, f)
+        os.replace(tmp, graph_path)
+        return (graph_path, "ok", frame_id, None)
+    except Exception as exc:  # noqa: BLE001 — recorded per sample, run continues
+        return (graph_path, "fail", frame_id, f"{type(exc).__name__}: {exc}")
+
+
+def _add_index_column(index_path, column, value_map):
+    """Add/overwrite a per-id column on an existing index pickle (+ its csv), matched by
+    id. Used to backfill the per-structure bandgap target without rebuilding the index."""
+    df = pd.read_pickle(index_path)
+    df[column] = df["id"].astype(str).map(value_map)
+    df.to_pickle(index_path)
+    csv = index_path[:-len(".pickle")] + ".csv" if index_path.endswith(".pickle") else None
+    if csv and os.path.exists(csv):
+        df.to_csv(csv, index=False)
+
+
+def augment_graphs_with_physics(record_iter, graph_dir, index_path=None,
+                                n_workers=None, limit=None, chunksize=8):
+    """Backfill forces/magmom/stress + positions + per-edge to_jimage onto already-built
+    compact graphs (the cheap path to packed_v4 — NO Voronoi rebuild), and add the
+    per-structure bandgap column to the index. Mirrors augment_graphs_with_positions:
+    streams the same record iterator, maps frame->graph by <id>.json, resumable, parallel."""
+    import multiprocessing as mp
+
+    n_workers = (os.cpu_count() or 1) if n_workers is None else max(1, int(n_workers))
+    counters = {k: 0 for k in ("streamed", "ok", "skip", "missing", "mismatch", "fail")}
+    bandgap_map = {}
+    start = time.time()
+
+    def task_gen():
+        for rec in record_iter:
+            if limit and counters["streamed"] >= limit:
+                break
+            counters["streamed"] += 1
+            fid = str(rec["id"])
+            if rec.get("bandgap") is not None:
+                bandgap_map[fid] = float(rec["bandgap"])
+            yield (os.path.join(graph_dir, fid + ".json"), rec["structure"], fid,
+                   rec.get("force"), rec.get("magmom"), rec.get("stress"))
+
+    def _consume(results):
+        for graph_path, kind, fid, msg in results:
+            counters[kind] = counters.get(kind, 0) + 1
+            if kind in ("mismatch", "fail") and msg:
+                print(f"  [{kind}] {fid}: {msg}", flush=True)
+            done = sum(counters[k] for k in ("ok", "skip", "missing", "mismatch", "fail"))
+            if done % 5000 == 0:
+                rate = done / max(time.time() - start, 1e-9)
+                print(f"  {done} processed ({rate:.0f}/s)  {counters}", flush=True)
+
+    if n_workers == 1:
+        _consume(map(_augment_one_with_physics, task_gen()))
+    else:
+        with mp.Pool(processes=n_workers) as pool:
+            _consume(pool.imap_unordered(_augment_one_with_physics, task_gen(),
+                                         chunksize=chunksize))
+    print(f"Augment-physics done in {_fmt_dur(time.time() - start)}: {counters}", flush=True)
+
+    if index_path and bandgap_map:                          # task_gen is exhausted by now
+        _add_index_column(index_path, "bandgap", bandgap_map)
+        print(f"Added bandgap to index for {len(bandgap_map)} frames -> {index_path}", flush=True)
     return counters
 
 

@@ -10,8 +10,9 @@ energy targets and map MPtrj's names onto the project's KNOWN_TARGET_COLUMNS:
     ef_per_atom      -> formation_energy_per_atom   (per-frame formation energy)
     energy_per_atom  -> energy_per_atom             (corrected total energy / atom)
 
-Forces / stress / magmom are present in the source but ignored here (the static
-graph + scalar MPNN can't consume them yet — that's the forces project).
+force (N,3) / stress (3,3) / magmom (N,) / bandgap are also yielded when present, for
+the multitask augment-physics backfill (augment_graphs_with_physics). The energy-only
+build path ignores them; only the augment pass + packed_v4 consume them.
 
 ``use_float=True`` makes ijson emit plain floats instead of Decimal, so the
 structure dict feeds straight into ``pymatgen Structure.from_dict`` and the label
@@ -57,4 +58,19 @@ def iter_mptrj_frames(json_path=DEFAULT_MPTRJ_JSON):
                     rec["formation_energy_per_atom"] = float(ef)
                 if epa is not None:
                     rec["energy_per_atom"] = float(epa)
+                # Multitask physics targets (kept for the augment-physics backfill; the
+                # energy-only build ignores them). force ~100%, stress per-frame, magmom
+                # ~14% (spin-polarized only), bandgap ~19% — absent ones stay absent.
+                force = frame.get("force")
+                if force is not None:
+                    rec["force"] = force                  # (N, 3) nested list
+                magmom = frame.get("magmom")
+                if magmom is not None:
+                    rec["magmom"] = magmom                 # (N,) list
+                stress = frame.get("stress")
+                if stress is not None:
+                    rec["stress"] = stress                 # (3, 3) nested list
+                bandgap = frame.get("bandgap")
+                if bandgap is not None:
+                    rec["bandgap"] = float(bandgap)        # per-structure scalar
                 yield rec

@@ -133,6 +133,27 @@ def cmd_augment_positions(args):
     print("Done. Re-pack (pack-dataset) to carry positions into the packed store.")
 
 
+def cmd_augment_physics(args):
+    # Backfill forces/magmom/stress + positions + per-edge to_jimage onto existing MPtrj
+    # graphs (NO Voronoi rebuild) and add the bandgap column to the index -> the graph
+    # state for packed_v4 (multitask conservative-autograd pretraining). Resumable +
+    # parallel; run where the graphs live (cluster scratch), then pack-dataset to packed_v4.
+    if not os.path.exists(args.input):
+        sys.exit(f"error: MPtrj JSON not found: {args.input}")
+    graph_dir = args.graph_dir or "database/datafiles/MPtrj/graphs_v4"
+    if not os.path.isdir(graph_dir):
+        sys.exit(f"error: graph dir not found: {graph_dir}")
+    if args.index and not os.path.exists(args.index):
+        sys.exit(f"error: index not found: {args.index}")
+    from database.Extract_MPtrj import iter_mptrj_frames
+    print(f"Augmenting graphs in {graph_dir} with physics "
+          f"(forces/magmom/stress/to_jimage) from {args.input}; bandgap -> {args.index}")
+    database.augment_graphs_with_physics(
+        iter_mptrj_frames(args.input), graph_dir=graph_dir, index_path=args.index,
+        n_workers=args.workers, limit=args.limit)
+    print("Done. Re-pack (pack-dataset) into packed_v4 to carry the new fields.")
+
+
 def cmd_pack_dataset(args):
     # Pack a cgv4 index (any dataset: MP_Energy, SC, MPtrj) into the columnar
     # binary format that PackedCIFDataV4 trains from: graph JSONs are parsed and
@@ -543,6 +564,27 @@ def build_parser():
     ap.add_argument("--workers", type=int, default=None,
                     help="worker processes (default: os.cpu_count())")
     ap.set_defaults(func=cmd_augment_positions)
+
+    aph = sub.add_parser(
+        "augment-physics",
+        help="backfill forces/magmom/stress + to_jimage + positions onto MPtrj graphs (no rebuild)",
+        description="Stream the MPtrj JSON and attach each frame's per-atom forces/magmom, "
+                    "per-structure stress, fractional coords + lattice, and a per-edge "
+                    "to_jimage (recomputed by bond-length matching) to its already-built "
+                    "compact graph (Z-verified atom order); also add the bandgap column to "
+                    "the index. The cheap path to packed_v4 for multitask conservative-autograd "
+                    "pretraining — no Voronoi rebuild. Resumable. Re-run pack-dataset after.",
+    )
+    aph.add_argument("--input", default="database/datafiles/MPtrj/MPtrj_2022.9_full.json",
+                     help="bulk MPtrj JSON (the same source build-mptrj used)")
+    aph.add_argument("--graph-dir", default=None,
+                     help="dir of per-frame graph JSONs to augment (default: database/datafiles/MPtrj/graphs_v4)")
+    aph.add_argument("--index", default=None,
+                     help="index pickle to add the bandgap column to (matched by id)")
+    aph.add_argument("--limit", type=int, default=None, help="only process the first N frames")
+    aph.add_argument("--workers", type=int, default=None,
+                     help="worker processes (default: os.cpu_count())")
+    aph.set_defaults(func=cmd_augment_physics)
 
     pk = sub.add_parser(
         "pack-dataset",

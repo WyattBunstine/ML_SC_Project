@@ -44,6 +44,10 @@ SCRATCH_MPTRJ_PACK="${SCRATCH_PATH}/ML_SC_Proj/MPtrj/packed_v1"
 # bias; built after `deploy.sh augment-positions` + a re-pack. Kept separate so
 # packed_v1 (positionless) stays valid for MPNN + the non-distance-bias GPS rungs.
 SCRATCH_MPTRJ_PACK_V2="${SCRATCH_PATH}/ML_SC_Proj/MPtrj/packed_v2"
+# packed_v4: positions + per-edge to_jimage + per-atom forces/magmom + per-structure
+# stress + bandgap index column — for multitask conservative-autograd pretraining. Built
+# after `deploy.sh augment-physics` + a re-pack. v1/v2 stay valid for older runs.
+SCRATCH_MPTRJ_PACK_V4="${SCRATCH_PATH}/ML_SC_Proj/MPtrj/packed_v4"
 
 # --- SLURM resource request (Rockfish-specific — verify against your allocation) ---
 SLURM_PARTITION="a100"                   # Rockfish GPU partition (a100 nodes)
@@ -513,6 +517,30 @@ EOF
     echo ">>   ./scripts/deploy.sh pack-mptrj ${SCRATCH_MPTRJ_PACK_V2}   (packed_v1 untouched)"
 }
 
+# Augment existing MPtrj graphs IN PLACE with the MULTITASK PHYSICS — per-atom forces/
+# magmom + per-structure stress + positions + a per-edge to_jimage (recomputed by
+# bond-length matching, no Voronoi rebuild) — from the source frames, and add the bandgap
+# index column. Resumable. Then re-pack to packed_v4 for conservative-autograd pretraining.
+augment_physics() {
+    echo ">> Pushing code..."
+    sync_code
+    rsync -a main.py       "${SSH}:${REMOTE_PATH}/"
+    rsync -a database/*.py "${SSH}:${REMOTE_PATH}/database/"
+
+    submit_cpu_job "augment_physics" "24:00:00" "$(cat <<EOF
+python main.py augment-physics \\
+    --graph-dir "${SCRATCH_MPTRJ_GRAPHS}" \\
+    --index database/datafiles/MPtrj/MPtrj_V4.pickle \\
+    --input database/datafiles/MPtrj/MPtrj_2022.9_full.json \\
+    --workers ${SLURM_CPU_CPUS}
+EOF
+)"
+    echo ">> Submitted. When done, re-pack the augmented graphs into v4:"
+    echo ">>   ./scripts/deploy.sh pack-mptrj ${SCRATCH_MPTRJ_PACK_V4}   (packed_v1/v2 untouched)"
+    echo ">> Then VERIFY: pack_header.json must show has_positions=true AND has_forces=true,"
+    echo ">> and a sample's recomputed angle should match the stored angle_triplets at reference."
+}
+
 # pack-mptrj [out_dir]: default writes packed_v1; pass ${SCRATCH_MPTRJ_PACK_V2}
 # after augment-positions to build the positioned v2 pack without clobbering v1.
 pack_mptrj() {
@@ -682,6 +710,7 @@ case "${cmd}" in
     run)         run "$@" ;;
     build-mptrj) build_mptrj ;;
     augment-positions) augment_positions ;;
+    augment-physics) augment_physics ;;
     pack-mptrj)  pack_mptrj "$@" ;;
     status)    status ;;
     logs)      logs "$@" ;;
