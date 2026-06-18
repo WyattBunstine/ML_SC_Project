@@ -489,7 +489,7 @@ def _extract_ragged(graph):
     adjacency = graph.get("adjacency", {})
 
     bond_cnt = np.zeros(n_atoms, dtype=np.int32)
-    bond_nbr, bond_fea, slot_eids_all = [], [], []
+    bond_nbr, bond_fea, slot_eids_all, bond_jimage = [], [], [], []
     for atom_i in range(n_atoms):
         neighbors = adjacency.get(str(atom_i), [])
 
@@ -502,8 +502,18 @@ def _extract_ragged(graph):
             edge = edges_by_id.get(eid)
             if edge is None:
                 continue
-            bond_fea.append(_edge_to_fea(edge, _center_is_source(edge, atom_i, nbr_id)))
+            cis = _center_is_source(edge, atom_i, nbr_id)
+            bond_fea.append(_edge_to_fea(edge, cis))
             bond_nbr.append(nbr_id)
+            # Per-edge periodic image of the NEIGHBOR relative to the CENTER, oriented
+            # center->neighbor (negate the stored to_jimage when the center is the
+            # target). Lets the model reconstruct the EXACT PBC bond vector
+            # r_j + jimage@lattice - r_i for differentiable/conservative forces.
+            # Absent (legacy graphs) -> (0,0,0) -> min-image fallback in the model.
+            ji = edge.get("to_jimage")
+            ji = (np.zeros(3, dtype=np.int16) if ji is None
+                  else np.asarray(ji, dtype=np.int16))
+            bond_jimage.append(ji if cis else (-ji).astype(np.int16))
             eids.append(eid)
         bond_cnt[atom_i] = len(eids)
         slot_eids_all.append(eids)
@@ -599,6 +609,7 @@ def _extract_ragged(graph):
         "bond_cnt": bond_cnt,
         "bond_nbr": _arr(bond_nbr, np.int32),
         "bond_fea": _arr(bond_fea, np.float32, NBR_FEA_LEN),
+        "bond_jimage": _arr(bond_jimage, np.int16, 3).reshape(-1, 3),
         "poly_cnt": poly_cnt,
         "poly_nbr": _arr(poly_nbr, np.int32),
         "poly_fea": _arr(poly_fea, np.float32, POLY_FEA_LEN),
@@ -628,6 +639,10 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
 
     nbr_fea = np.zeros((n_atoms, M, edge_width), dtype=np.float32)
     nbr_idx = np.repeat(np.arange(n_atoms, dtype=np.int64)[:, None], M, axis=1)
+    # Per-slot periodic image of the neighbor (center->neighbor), aligned with nbr_idx.
+    # Pad slots stay (0,0,0): they self-loop (nbr_idx defaults to i) so the bond vector
+    # is exactly 0 and is masked out by bond_pad in the model.
+    nbr_jimage = np.zeros((n_atoms, M, 3), dtype=np.int64)
 
     b0 = v0 = 0
     for i in range(n_atoms):
@@ -635,6 +650,7 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
         k = min(c, M)
         nbr_fea[i, :k, :NBR_FEA_LEN] = r["bond_fea"][b0:b0 + k]
         nbr_idx[i, :k] = r["bond_nbr"][b0:b0 + k]
+        nbr_jimage[i, :k] = r["bond_jimage"][b0:b0 + k]
 
         v = int(r["ang_vcnt"][i])
         if use_bond_angles and v:
@@ -714,8 +730,9 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
     # (GPS) batches them. copy=True: r["frac_coords"] may be a read-only memmap view.
     frac_coords = torch.from_numpy(np.array(r["frac_coords"], dtype=np.float32, copy=True))
     lattice = torch.from_numpy(np.array(r["lattice"], dtype=np.float32, copy=True))
+    nbr_jimage_t = torch.from_numpy(nbr_jimage)
     return (atom_fea, nbr_fea_t, nbr_fea_idx, poly_fea_t, poly_fea_idx, nbr_angle,
-            frac_coords, lattice)
+            frac_coords, lattice, nbr_jimage_t)
 
 
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
@@ -1030,9 +1047,11 @@ def collate_pool_geom(dataset_list):
     base_input, targets, labels, cif_ids = collate_pool(dataset_list)
     fracs = [sample[6] for (sample, *_rest) in dataset_list]    # each (n_i, 3)
     lats = [sample[7] for (sample, *_rest) in dataset_list]     # each (3, 3)
+    jimages = [sample[8] for (sample, *_rest) in dataset_list]  # each (n_i, M, 3)
     frac_coords = torch.cat(fracs, dim=0)                       # (N, 3)
     lattice = torch.stack(lats, dim=0)                          # (B, 3, 3)
-    return base_input + (frac_coords, lattice), targets, labels, cif_ids
+    nbr_jimage = torch.cat(jimages, dim=0)                      # (N, M, 3), aligned w/ nbr_fea_idx
+    return base_input + (frac_coords, lattice, nbr_jimage), targets, labels, cif_ids
 
 
 def get_train_val_test_loader(dataset, collate_fn=default_collate,
