@@ -21,28 +21,12 @@ import torch
 
 
 def _build_model_from_args(args, dims):
+    """Rebuild the pretrained encoder from its checkpoint args through the SAME
+    GPSCrystalNet.from_args factory gps_main trains with — so the transfer encoder
+    is guaranteed identical to the trained one (no silent architecture drift when a
+    new ctor knob is added) and load_state_dict matches key-for-key."""
     from model import GPSCrystalNet
-    oa, nb, po = dims
-    return GPSCrystalNet(
-        oa, nb, poly_fea_len=po,
-        atom_fea_len=args.get("atom_feat_len", 128), n_conv=args.get("n_conv", 4),
-        h_fea_len=args.get("h_feat_len", 128), n_h=args.get("n_hidden", 2),
-        use_poly_edges=args.get("use_poly_edges", True),
-        atom_pooling=args.get("atom_pooling", "mean"),
-        n_heads=args.get("set_transformer_heads", 8),
-        gps_global=args.get("gps_global", True),
-        gps_global_heads=args.get("gps_global_heads", args.get("set_transformer_heads", 8)),
-        gps_ffn_mult=args.get("gps_ffn_mult", 2),
-        local_transformer=args.get("local_transformer", True),
-        per_atom_head=args.get("per_atom_head", True),
-        use_bond_edges=args.get("use_bond_edges", True),
-        shell_aggregation=args.get("shell_aggregation", "attention"),
-        use_angle_bias=args.get("use_angle_bias", True),
-        use_dist_bias=args.get("use_dist_bias", False),
-        dist_cutoff=args.get("dist_cutoff", 8.0), n_dist_rbf=args.get("n_dist_rbf", 16),
-        tasks=(set(args["tasks"]) if args.get("tasks") else None),
-        differentiable_geometry=bool(args.get("differentiable_geometry")),
-        n_energy=args.get("n_energy", 256))
+    return GPSCrystalNet.from_args(args, dims)
 
 
 def embed_index(checkpoint_path, index_path, out_dir, device="cpu", batch_size=64,
@@ -56,12 +40,16 @@ def embed_index(checkpoint_path, index_path, out_dir, device="cpu", batch_size=6
     ckpt = torch.load(checkpoint_path, map_location=device)
     args = ckpt.get("args", {})
 
-    # The transfer dataset must produce the SAME feature space the encoder was trained on.
+    # The transfer dataset must produce the SAME feature space the encoder was trained
+    # on (the feature flags below come from the checkpoint). target_column is NOT
+    # inherited: the pretraining target (e.g. formation_energy_per_atom) is irrelevant
+    # to an encoder-only embedding pass and is absent from the transfer index — let the
+    # transfer index resolve its own natural target (value/tc) so this never crashes.
     dataset = load_cif_dataset(
         index_path,
         max_num_nbr=args.get("max_num_nbr", 14),
         max_num_poly_nbr=args.get("max_num_poly_nbr", 16),
-        target_column=args.get("target_column"),
+        target_column=None,
         use_poly_edges=args.get("use_poly_edges", True),
         use_bond_angles=args.get("use_bond_angles", False),
         build_angle_bias=True,
@@ -76,12 +64,16 @@ def embed_index(checkpoint_path, index_path, out_dir, device="cpu", batch_size=6
     loader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_pool_geom)
     done = 0
     for input_batch, _t, _l, cif_ids in loader:
+        out_paths = [os.path.join(out_dir, str(cid) + ".npy") for cid in cif_ids]
+        # Skip the (expensive) encoder forward entirely when every structure in this
+        # batch is already embedded — a resumed run shouldn't recompute done batches.
+        if resume and all(os.path.exists(p) for p in out_paths):
+            continue
         inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in input_batch)
         seg = inp[6].cpu().numpy()
         with torch.no_grad():
             h = model.encode(*inp).float().cpu().numpy()          # (N, atom_fea_len)
-        for c, cid in enumerate(cif_ids):
-            out_path = os.path.join(out_dir, str(cid) + ".npy")
+        for c, out_path in enumerate(out_paths):
             if resume and os.path.exists(out_path):
                 continue
             np.save(out_path, h[seg == c])                        # (n_atoms_c, atom_fea_len)
