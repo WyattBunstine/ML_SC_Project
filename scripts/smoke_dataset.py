@@ -32,7 +32,7 @@ for _p in ("models/common", "models/MPNN", "models/GPSTransformer"):
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 from data import (load_cif_dataset, collate_pool, collate_pool_geom,  # noqa: E402
-                  compute_feature_stats, RICH_NODE_FEA_LEN)
+                  compute_feature_stats, RICH_NODE_FEA_LEN, DIHEDRAL_FEA_LEN)
 from pack import pack_dataset  # noqa: E402
 from train import _to_input_var  # noqa: E402
 from model import GPSCrystalNet  # noqa: E402
@@ -129,6 +129,62 @@ def _check_rich(pack_dir, kw):
     return ok
 
 
+def _edge(eid, s, t, bl):
+    return {"id": eid, "source": s, "target": t, "bond_length": bl,
+            "bond_length_over_sum_radii": bl / 2.0, "voronoi_weight_src": 0.5,
+            "voronoi_weight_tgt": 0.5, "ecn_weight_src": 0.5, "ecn_weight_tgt": 0.5,
+            "delta_chi_pauling": 0.1}
+
+
+def _chain_graph():
+    # atoms 0-1-2-3 with bonds e0=(0,1) e1=(1,2) e2=(2,3); one torsion around the
+    # CENTRAL bond e1 -> dih_node nonzero only on its endpoints (atoms 1, 2).
+    return {"nodes": [dict(_NODE, Z=11 + i) for i in range(4)],
+            "edges": [_edge(0, 0, 1, 2.0), _edge(1, 1, 2, 2.1), _edge(2, 2, 3, 2.2)],
+            "adjacency": {"0": [[0, 1]], "1": [[0, 0], [1, 2]],
+                          "2": [[1, 1], [2, 3]], "3": [[2, 2]]},
+            "poly_edges": [], "poly_adjacency": {str(i): [] for i in range(4)},
+            "angle_triplets": [], "dihedrals": [[1, 0, 2, -0.5]]}
+
+
+def _check_dih(tmp):
+    # use_dihedrals: a re-packed (has_dihedrals) pack widens atom_fea by
+    # DIHEDRAL_FEA_LEN, the stats path must match, and both backends must agree.
+    gd = os.path.join(tmp, "dih_graphs")
+    os.makedirs(gd)
+    ids, paths = [], []
+    for i in range(4):
+        p = os.path.join(gd, f"{i}.json")
+        json.dump(_chain_graph(), open(p, "w"))
+        ids.append(str(i))
+        paths.append(p)
+    idx = pd.DataFrame({"id": ids, "graph_path": paths, "label": [1] * 4,
+                        "formation_energy_per_atom": [-1.0 - 0.1 * i for i in range(4)]})
+    ip = os.path.join(tmp, "dih_index.pickle")
+    idx.to_pickle(ip)
+    pk = os.path.join(tmp, "dih_pack")
+    from pack import pack_dataset as _pd
+    _pd(ip, pk, n_workers=1)
+    has_dih = json.load(open(os.path.join(pk, "pack_header.json"))).get("has_dihedrals")
+    kw = dict(target_column="formation_energy_per_atom", use_poly_edges=True,
+              use_bond_angles=False, build_angle_bias=False)
+    ds = load_cif_dataset(pk, use_dihedrals=True, **kw)
+    nd = ds[0][0][0].shape[-1]
+    stats = compute_feature_stats(ds, list(range(len(ds))), max_graphs=10)
+    nd_lazy = load_cif_dataset(ip, use_dihedrals=True, **kw)[0][0][0].shape[-1]
+    dims = (nd, ds[0][0][1].shape[-1], ds[0][0][3].shape[-1])
+    m = GPSCrystalNet(dims[0], dims[1], poly_fea_len=dims[2], atom_fea_len=16,
+                      n_conv=1, h_fea_len=16, n_h=1, n_heads=2, gps_global=False)
+    m.set_feature_stats(stats["node"], stats["edge"], stats["poly"])
+    m.train()
+    out = m(*collate_pool_geom([ds[i] for i in range(4)])[0])
+    ok = (has_dih is True and nd == 14 + DIHEDRAL_FEA_LEN and len(stats["node"][0]) == nd
+          and nd_lazy == nd and tuple(out.shape) == (4, 1) and torch.isfinite(out).all().item())
+    print(f"  dih     atom_fea={nd} (+{DIHEDRAL_FEA_LEN}) stats={len(stats['node'][0])} "
+          f"lazy={nd_lazy} has_dihedrals={has_dih} fwd={tuple(out.shape)} {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
 def main():
     warnings.simplefilter("ignore")
     tmp = tempfile.mkdtemp(prefix="smoke_dataset_")
@@ -139,9 +195,10 @@ def main():
         ok_packed = _check_backend("packed", load_cif_dataset(pack_dir, **kw))
         ok_lazy = _check_backend("lazy", load_cif_dataset(index_pickle, **kw))
         ok_rich = _check_rich(pack_dir, kw)
+        ok_dih = _check_dih(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if ok_packed and ok_lazy and ok_rich:
+    if ok_packed and ok_lazy and ok_rich and ok_dih:
         print("smoke_dataset: PASS")
         return 0
     print("smoke_dataset: FAIL", file=sys.stderr)
