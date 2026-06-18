@@ -29,7 +29,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from data import (CIFDataV4, _extract_ragged, _assemble_sample,
+from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_targets,
                       _select_target_key, build_data_rows, rows_meanstd,
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN,
@@ -45,6 +45,8 @@ _FIELDS = {
     "atom_fea":  (np.float32, NODE_FEA_LEN),
     "frac_coords": (np.float32, 3),
     "dih_node":  (np.float32, DIHEDRAL_FEA_LEN),   # atom-aligned 4-body torsion summary
+    "forces":    (np.float32, 3),    # atom-aligned multitask TARGET (NaN where absent)
+    "magmom":    (np.float32, 1),    # atom-aligned multitask TARGET (NaN where absent)
     "bond_cnt":  (np.int32, None),
     "bond_nbr":  (np.int32, None),
     "bond_fea":  (np.float32, NBR_FEA_LEN),
@@ -92,7 +94,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
              for name in _FIELDS}
     totals = {name: 0 for name in _FIELDS}   # element rows written per field
     offsets = {col: [] for col in _OFFSET_COLS}
-    kept_pos, failures, lattices, dih_any = [], [], [], []
+    kept_pos, failures, lattices, dih_any, stresses = [], [], [], [], []
     start = time.time()
 
     def _write(name, arr, dtype):
@@ -121,6 +123,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
             for name, (dtype, _w) in _FIELDS.items():
                 _write(name, r[name], dtype)
             lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
+            stresses.append(np.asarray(r["stress"], dtype=np.float32).reshape(9))
             dih_any.append(bool(np.any(r["dih_node"])))
             kept_pos.append(pos)
             done = len(kept_pos) + len(failures)
@@ -148,6 +151,9 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
     lat_stack = np.stack(lattices) if lattices else np.zeros((0, 9), dtype=np.float32)
     if lattices:
         meta["lattice"] = list(lat_stack)
+    # Per-sample stress (3x3 -> 9), aligned with kept_pos (NaN where the frame lacked it).
+    if stresses:
+        meta["stress"] = list(np.stack(stresses))
     meta.to_pickle(os.path.join(out_dir, "meta.pickle"))
 
     header = {
@@ -188,7 +194,7 @@ class PackedCIFDataV4(Dataset):
                  graph_cache_size=0, random_seed=123, target_column=None,
                  use_bond_angles=False, use_poly_edges=True,
                  build_angle_bias=False, use_rich_node_features=False,
-                 use_dihedrals=False):
+                 use_dihedrals=False, multitask=False):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
         if self._header["version"] != PACK_VERSION:
@@ -230,6 +236,7 @@ class PackedCIFDataV4(Dataset):
         self.build_angle_bias = build_angle_bias
         self.use_rich_node_features = use_rich_node_features
         self.use_dihedrals = use_dihedrals
+        self.multitask = multitask
 
         meta = pd.read_pickle(os.path.join(pack_dir, "meta.pickle"))
         self.target_column = target_key = _select_target_key(
@@ -241,6 +248,12 @@ class PackedCIFDataV4(Dataset):
         # Per-sample lattice (3x3), meta-order; None for legacy packs without it.
         self._lattice = (np.stack(meta["lattice"].to_numpy()).astype(np.float32).reshape(-1, 3, 3)
                          if "lattice" in meta.columns else None)
+        # Multitask per-sample meta (meta-order, indexed by pos): stress (3x3) + bandgap
+        # scalar. Absent column -> None -> NaN target -> masked off.
+        self._stress = (np.stack(meta["stress"].to_numpy()).astype(np.float32).reshape(-1, 3, 3)
+                        if "stress" in meta.columns else None)
+        self._bandgap = (meta["bandgap"].to_numpy().astype(np.float32)
+                         if "bandgap" in meta.columns else None)
 
         # Shared row construction (MPNNData.build_data_rows — bit-identical to
         # CIFDataV4 so the same seed yields the same splits across backends);
@@ -289,6 +302,14 @@ class PackedCIFDataV4(Dataset):
                else np.zeros((n, DIHEDRAL_FEA_LEN), dtype=np.float32))
         bjimage = (mm["bond_jimage"][b0:b0 + nb] if "bond_jimage" in mm
                    else np.zeros((nb, 3), dtype=np.int16))
+        # Multitask targets: atom-aligned forces/magmom + per-sample stress. Absent
+        # (legacy pack / no label) -> NaN so the masked loss skips them.
+        forces = (mm["forces"][a0:a0 + n] if "forces" in mm
+                  else np.full((n, 3), np.nan, dtype=np.float32))
+        magmom = (mm["magmom"][a0:a0 + n] if "magmom" in mm
+                  else np.full((n, 1), np.nan, dtype=np.float32))
+        stress = (self._stress[pos] if self._stress is not None
+                  else np.full((3, 3), np.nan, dtype=np.float32))
         lattice = (self._lattice[pos] if self._lattice is not None
                    else np.zeros((3, 3), dtype=np.float32))
         return {
@@ -297,6 +318,9 @@ class PackedCIFDataV4(Dataset):
             "frac_coords": frac,
             "dih_node": dih,
             "lattice": lattice,
+            "forces": forces,
+            "magmom": magmom,
+            "stress": stress,
             "bond_cnt": mm["bond_cnt"][a0:a0 + n],
             "bond_nbr": mm["bond_nbr"][b0:b0 + nb],
             "bond_fea": mm["bond_fea"][b0:b0 + nb],
@@ -318,11 +342,15 @@ class PackedCIFDataV4(Dataset):
 
     def __getitem__(self, idx):
         cif_id, target, pos, label = self.data[idx]
-        sample = _assemble_sample(self._ragged(pos),
-                                  self.max_num_nbr, self.max_num_poly_nbr,
+        r = self._ragged(pos)
+        sample = _assemble_sample(r, self.max_num_nbr, self.max_num_poly_nbr,
                                   self.use_poly_edges, self.use_bond_angles,
                                   self.build_angle_bias, self.use_rich_node_features,
                                   self.use_dihedrals)
+        if self.multitask:
+            bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
+            targets, masks = _assemble_targets(r, energy=target, bandgap=bg)
+            return (sample, targets, masks, cif_id)
         return (sample, torch.FloatTensor([float(target)]),
                 torch.LongTensor([int(label)]), cif_id)
 

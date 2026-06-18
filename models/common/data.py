@@ -600,12 +600,31 @@ def _extract_ragged(graph):
     # use_dihedrals. Legacy graphs -> all zeros.
     dih_node = dihedral_node_features(graph, n_atoms)
 
+    # Multi-task TARGET tensors carried alongside the inputs: per-atom forces (N,3) +
+    # magmom (N,1), per-structure stress (3,3). Absent in a graph -> NaN sentinel, so
+    # the masked multi-task loss reads presence via isfinite and trains only real labels
+    # (NaN round-trips through the float32 pack; never seen by the model, only the loss).
+    def _atom_target(key, width):
+        v = graph.get(key)
+        if v is None:
+            return np.full((n_atoms, width), np.nan, dtype=np.float32)
+        a = np.asarray(v, dtype=np.float32).reshape(-1, width)
+        return a if a.shape[0] == n_atoms else np.full((n_atoms, width), np.nan, dtype=np.float32)
+    forces = _atom_target("forces", 3)
+    magmom = _atom_target("magmom", 1)
+    st = graph.get("stress")
+    stress = (np.asarray(st, dtype=np.float32).reshape(3, 3)
+              if st is not None else np.full((3, 3), np.nan, dtype=np.float32))
+
     return {
         "n_atoms": n_atoms,
         "atom_fea": atom_fea.astype(np.float32),
         "frac_coords": frac_coords,
         "lattice": lattice,
         "dih_node": dih_node,
+        "forces": forces,
+        "magmom": magmom,
+        "stress": stress,
         "bond_cnt": bond_cnt,
         "bond_nbr": _arr(bond_nbr, np.int32),
         "bond_fea": _arr(bond_fea, np.float32, NBR_FEA_LEN),
@@ -735,9 +754,39 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
             frac_coords, lattice, nbr_jimage_t)
 
 
+def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
+    """Build the (targets, masks) dicts for masked multitask training.
+
+    Per-atom: forces (N,3), magmom (N,1) (from the ragged extraction). Per-structure:
+    stress (3,3) (ragged) + scalar energy/bandgap (from the index). An absent target is
+    a NaN sentinel -> its mask is False and its value is zeroed, so a masked loss never
+    propagates NaN. Masks are per-STRUCTURE bools (a structure carries a given label for
+    every atom or none of them -> per-atom force/magmom losses broadcast the structure mask).
+    """
+    def _t(arr):
+        t = torch.from_numpy(np.array(arr, dtype=np.float32, copy=True))
+        present = torch.tensor(bool(torch.isfinite(t).all()))
+        return torch.nan_to_num(t, nan=0.0), present
+
+    def _scalar(x):
+        t = torch.tensor([float(x)], dtype=torch.float32)
+        return torch.nan_to_num(t, nan=0.0), torch.tensor(bool(torch.isfinite(t).all()))
+
+    forces, m_f = _t(r["forces"])          # (N,3)
+    magmom, m_m = _t(r["magmom"])          # (N,1)
+    stress, m_s = _t(r["stress"])          # (3,3)
+    energy_t, m_e = _scalar(energy)        # (1,)
+    bandgap_t, m_bg = _scalar(bandgap)     # (1,)
+    targets = {"forces": forces, "magmom": magmom, "stress": stress,
+               "energy": energy_t, "bandgap": bandgap_t}
+    masks = {"forces": m_f, "magmom": m_m, "stress": m_s, "energy": m_e, "bandgap": m_bg}
+    return targets, masks
+
+
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_poly_edges, use_bond_angles, build_angle_bias=False,
-                  use_rich_node_features=False, use_dihedrals=False):
+                  use_rich_node_features=False, use_dihedrals=False,
+                  multitask=False, bandgap=float("nan")):
     """Build one fully-padded crystal sample from its graph JSON on disk.
 
     Module-level (not a method) so it is picklable by a ``spawn`` multiprocessing
@@ -757,6 +806,9 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                               use_poly_edges, use_bond_angles, build_angle_bias,
                               use_rich_node_features, use_dihedrals)
 
+    if multitask:
+        targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap)
+        return (sample, targets, masks, cif_id)
     target = torch.FloatTensor([float(target)])
     label = torch.LongTensor([int(label)])
     return (sample, target, label, cif_id)
@@ -801,10 +853,13 @@ class CIFDataV4(Dataset):
                  random_seed: int = 123, target_column: str = None,
                  use_bond_angles: bool = False, use_poly_edges: bool = True,
                  build_angle_bias: bool = False, use_rich_node_features: bool = False,
-                 use_dihedrals: bool = False):
+                 use_dihedrals: bool = False, multitask: bool = False):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
         self.use_dihedrals = use_dihedrals
+        # When True, __getitem__ returns (input, targets_dict, masks_dict, cif_id) for
+        # the masked multitask trainer instead of (input, target_scalar, label, cif_id).
+        self.multitask = multitask
         # When True, __getitem__ also emits a per-atom (M, M) cos-angle matrix for
         # the set-transformer aggregation's pairwise attention bias (idea A), built
         # from the graph's angle_triplets. Independent of use_bond_angles (which
@@ -828,6 +883,10 @@ class CIFDataV4(Dataset):
         index_df = pd.read_pickle(index_path)
         self.target_column = target_key = _select_target_key(
             index_df, target_column, index_path)
+        # Per-id bandgap lookup (multitask target; order-independent so it survives
+        # build_data_rows' shuffle/drop). Absent column -> NaN -> masked off.
+        self._bandgap_by_id = (dict(zip(index_df["id"].astype(str), index_df["bandgap"]))
+                               if "bandgap" in index_df.columns else {})
 
         # `label` (1 = SC, 0 = non-SC) defaults to 1 for older indexes without the
         # column, leaving the regression path unaffected. Rows whose chosen target
@@ -915,7 +974,8 @@ class CIFDataV4(Dataset):
             sample = _build_sample(rec, self.max_num_nbr, self.max_num_poly_nbr,
                                    self.use_poly_edges, self.use_bond_angles,
                                    self.build_angle_bias, self.use_rich_node_features,
-                                   self.use_dihedrals)
+                                   self.use_dihedrals, self.multitask,
+                                   self._bandgap_by_id.get(str(rec[0]), float("nan")))
             if dev.type != "cpu":
                 sample = _sample_to_device(sample, dev)
             built.append(sample)
@@ -946,7 +1006,9 @@ class CIFDataV4(Dataset):
         result = _build_sample(self.data[idx], self.max_num_nbr,
                                self.max_num_poly_nbr, self.use_poly_edges,
                                self.use_bond_angles, self.build_angle_bias,
-                               self.use_rich_node_features, self.use_dihedrals)
+                               self.use_rich_node_features, self.use_dihedrals,
+                               self.multitask,
+                               self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")))
 
         # Store the built sample for reuse on later epochs (LRU-bounded).
         self._item_cache[idx] = result
@@ -1052,6 +1114,28 @@ def collate_pool_geom(dataset_list):
     lattice = torch.stack(lats, dim=0)                          # (B, 3, 3)
     nbr_jimage = torch.cat(jimages, dim=0)                      # (N, M, 3), aligned w/ nbr_fea_idx
     return base_input + (frac_coords, lattice, nbr_jimage), targets, labels, cif_ids
+
+
+def collate_pool_multitask(dataset_list):
+    """Collate for masked multitask training. Samples are (input_tuple, targets, masks,
+    cif_id). Reuses collate_pool_geom for the input batching (placeholder scalar targets),
+    then batches the dicts: per-atom targets (forces N,3 / magmom N,1) concat over atoms
+    in the SAME order as the batched atom features; per-structure (stress B,3,3 / energy B
+    / bandgap B) and ALL masks stack to (B,)."""
+    placeholder = [(s[0], torch.zeros(1), torch.zeros(1, dtype=torch.long), s[3])
+                   for s in dataset_list]
+    base_input, _t, _l, cif_ids = collate_pool_geom(placeholder)
+    tds = [s[1] for s in dataset_list]
+    mds = [s[2] for s in dataset_list]
+    targets = {
+        "forces": torch.cat([t["forces"] for t in tds], dim=0),    # (N, 3)
+        "magmom": torch.cat([t["magmom"] for t in tds], dim=0),    # (N, 1)
+        "stress": torch.stack([t["stress"] for t in tds], dim=0),  # (B, 3, 3)
+        "energy": torch.cat([t["energy"] for t in tds], dim=0),    # (B,)
+        "bandgap": torch.cat([t["bandgap"] for t in tds], dim=0),  # (B,)
+    }
+    masks = {k: torch.stack([m[k] for m in mds], dim=0) for k in mds[0]}  # each (B,)
+    return base_input, targets, masks, cif_ids
 
 
 def get_train_val_test_loader(dataset, collate_fn=default_collate,
