@@ -38,8 +38,15 @@ def dos_to_grid(energies, total_density, efermi, broaden_ev=0.1):
     """Resample a total DOS onto DOS_GRID (E_F-aligned), with optional Gaussian broadening.
 
     energies/total_density: 1D arrays (raw MP grid); efermi: float. Returns a (N_ENERGY,)
-    float32 vector, clamped >= 0 (a density). Outside the source range -> 0."""
-    e_rel = np.asarray(energies, dtype=float) - float(efermi)
+    float32 density vector (clamped >= 0), or None when the DOS is DEGENERATE/unusable:
+    fewer than 2 points (np.interp can't sample / a 1-point grid would fabricate a flat
+    nonzero spectrum), a non-finite E_F, or no density inside [-10,+5] eV after alignment
+    (an all-zero target would actively train the head toward zero). None -> the caller
+    records a no_dos miss, so it isn't silently written as a covered-but-useless label."""
+    e = np.asarray(energies, dtype=float)
+    if e.size < 2 or efermi is None or not np.isfinite(efermi):
+        return None
+    e_rel = e - float(efermi)
     d = np.asarray(total_density, dtype=float)
     order = np.argsort(e_rel)
     g = np.interp(DOS_GRID, e_rel[order], d[order], left=0.0, right=0.0)
@@ -50,22 +57,46 @@ def dos_to_grid(energies, total_density, efermi, broaden_ev=0.1):
         x = np.arange(-half, half + 1)
         kern = np.exp(-(x ** 2) / (2.0 * sigma ** 2))
         kern /= kern.sum()
-        g = np.convolve(g, kern, mode="same")
-    return np.clip(g, 0.0, None).astype(np.float32)
+        # Edge-normalize: divide by the kernel mass that landed IN-grid so boundary bins
+        # don't leak density into the implicit zero-padding (a ~13% edge underestimate).
+        norm = np.convolve(np.ones_like(g), kern, mode="same")
+        g = np.convolve(g, kern, mode="same") / np.clip(norm, 1e-12, None)
+    g = np.clip(g, 0.0, None).astype(np.float32)
+    if not g.sum() > 0:                          # no density in-window -> unusable
+        return None
+    return g
 
 
 def complete_dos_total(cdos):
-    """(energies, total density summed over spins, efermi) from a pymatgen CompleteDos."""
+    """(energies, total density summed over spins, efermi) from a pymatgen CompleteDos.
+    A None E_F is returned as NaN (dos_to_grid treats it as unusable) rather than raising."""
     energies = np.asarray(cdos.energies, dtype=float)
     total = np.zeros_like(energies)
     for spin_density in cdos.densities.values():
         total = total + np.asarray(spin_density, dtype=float)
-    return energies, total, float(cdos.efermi)
+    ef = cdos.efermi
+    return energies, total, (float(ef) if ef is not None else float("nan"))
 
 
-def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None):
+def _write_graph(graph, gp):
+    tmp = gp + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(graph, f)
+    os.replace(tmp, gp)
+
+
+def _looks_missing(exc):
+    """A terminal 'this material has no DOS' API error vs a transient (retryable) one."""
+    msg = str(exc).lower()
+    return any(s in msg for s in ("404", "not found", "no electronic", "no dos", "no data"))
+
+
+def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3):
     """Attach graph["dos"] (resampled total DOS) to each relaxed MP graph the index points
-    at, by material id. Resumable (skips graphs already carrying dos); per-kind tally."""
+    at, by material id. Resumable on BOTH a written dos AND a no_dos sentinel
+    (graph["dos_missing"]) — so a re-run doesn't re-query the ~majority of MP materials that
+    have no DOS. Transient API errors are retried with backoff and left un-marked (retried
+    next run); terminal-missing / degenerate DOS is recorded as no_dos. Per-kind tally."""
     import time
     import pandas as pd
     from mp_api.client import MPRester
@@ -83,30 +114,37 @@ def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None):
             if not os.path.exists(gp):
                 counters["no_graph"] += 1
                 continue
-            try:
-                with open(gp) as f:
-                    graph = json.load(f)
-                if "dos" in graph:                          # resumable
-                    counters["skip"] += 1
-                    continue
-                cdos = mpr.get_dos_by_material_id(mid)
-                if cdos is None:
-                    counters["no_dos"] += 1
-                    continue
-                en, total, ef = complete_dos_total(cdos)
-                graph["dos"] = dos_to_grid(en, total, ef, broaden_ev).tolist()
-                tmp = gp + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(graph, f)
-                os.replace(tmp, gp)
+            with open(gp) as f:
+                graph = json.load(f)
+            if "dos" in graph or graph.get("dos_missing"):  # resumable: hit OR known miss
+                counters["skip"] += 1
+                continue
+            grid, failed = None, False
+            for attempt in range(retries):
+                try:
+                    cdos = mpr.get_dos_by_material_id(mid)
+                    grid = (None if cdos is None
+                            else dos_to_grid(*complete_dos_total(cdos), broaden_ev=broaden_ev))
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    if _looks_missing(exc):
+                        break                               # terminal: no DOS -> grid stays None
+                    if attempt == retries - 1:
+                        failed = True
+                        counters["fail"] += 1
+                        print(f"  [fail] {mid}: {type(exc).__name__}: {str(exc)[:120]}", flush=True)
+                        break
+                    time.sleep(2 ** attempt)                 # transient: backoff + retry
+            if failed:
+                continue                                    # un-marked -> retried next run
+            if grid is None:                                # missing / degenerate -> sentinel
+                graph["dos_missing"] = True
+                _write_graph(graph, gp)
+                counters["no_dos"] += 1
+            else:
+                graph["dos"] = grid.tolist()
+                _write_graph(graph, gp)
                 counters["ok"] += 1
-            except Exception as exc:  # noqa: BLE001 — DOS missing/odd is common; keep going
-                msg = str(exc)
-                if "404" in msg or "not found" in msg.lower() or "No electronic" in msg:
-                    counters["no_dos"] += 1
-                else:
-                    counters["fail"] += 1
-                    print(f"  [fail] {mid}: {type(exc).__name__}: {msg[:120]}", flush=True)
             if counters["streamed"] % 500 == 0:
                 rate = counters["streamed"] / max(time.time() - start, 1e-9)
                 print(f"  {counters['streamed']} processed ({rate:.1f}/s)  {counters}", flush=True)
