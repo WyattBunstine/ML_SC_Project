@@ -25,7 +25,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 from torch.utils.data import DataLoader  # noqa: E402
-from data import load_cif_dataset, collate_pool_multitask, compute_feature_stats  # noqa: E402
+from data import (load_cif_dataset, collate_pool_multitask,  # noqa: E402
+                  compute_feature_stats, DOS_N_ENERGY)
 from pack import pack_dataset  # noqa: E402
 from model import GPSCrystalNet  # noqa: E402
 from train import (compute_target_stats, _train_mt, _validate_mt,  # noqa: E402
@@ -35,7 +36,7 @@ _NODE = {"Z": 11, "oxidation_state": 1.0, "ion_role": 1, "chi_pauling": 0.93,
          "chi_allen": 0.87, "ecn_value": 6.0, "shannon_radius": 1.0, "cn_core": 6,
          "hist_corner": 1, "hist_edge": 0, "hist_face": 0, "hist_other": 0,
          "ionization_energy": 5.0, "electron_affinity": 0.5}
-TASKS = {"energy", "forces", "stress", "magmom", "bandgap"}
+TASKS = {"energy", "forces", "stress", "magmom", "bandgap", "dos"}
 
 
 def _edge(eid, s, t, bl, ji=(0, 0, 0)):
@@ -58,7 +59,8 @@ def _graph(seed):
             "frac_coords": [[0.1 * i + 0.02 * seed, 0.2 * i, 0.3 * i] for i in range(n)],
             "lattice": [[5.0, 0, 0], [0, 5.0, 0], [0, 0, 5.0]],
             "forces": (rng.rand(n, 3) - 0.5).tolist(), "magmom": rng.rand(n).tolist(),
-            "stress": (rng.rand(3, 3) * 0.1).tolist()}
+            "stress": (rng.rand(3, 3) * 0.1).tolist(),
+            "dos": rng.rand(DOS_N_ENERGY).tolist()}     # per-structure total DOS target
 
 
 def main():
@@ -89,7 +91,7 @@ def main():
         model = GPSCrystalNet(sa.shape[-1], sn.shape[-1], poly_fea_len=sp.shape[-1],
                               atom_fea_len=16, n_conv=2, h_fea_len=16, n_h=2, n_heads=2,
                               use_poly_edges=True, gps_global=False, use_angle_bias=True,
-                              tasks=TASKS, differentiable_geometry=True, n_energy=8)
+                              tasks=TASKS, differentiable_geometry=True, n_energy=DOS_N_ENERGY)
         model.set_feature_stats(fs["node"], fs["edge"], fs["poly"])
         loader = DataLoader(ds, batch_size=4, collate_fn=collate_pool_multitask)
         args = {"cuda": False, "learning_rate": 0.01, "print_split": 1000,
