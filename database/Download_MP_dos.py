@@ -145,11 +145,26 @@ def diagnose_dos(api_key, mid):
     import json as _json
     from mp_api.client import MPRester
     with MPRester(api_key, use_document_model=False) as mpr:
-        docs = mpr.materials.electronic_structure_dos.es_rester.search(
-            material_ids=mid, fields=["dos"])
+        dr = mpr.materials.electronic_structure_dos
+        docs = dr.es_rester.search(material_ids=mid, fields=["dos"])
         summary = (docs[0].get("dos") if docs and isinstance(docs[0], dict) else None)
-    print(f"  {mid}: raw dos summary =\n{_json.dumps(summary, indent=2, default=str)[:2000]}")
-    print(f"  recovered task_id: {_first_task_id(summary)}")
+        print(f"  {mid}: raw dos summary =\n{_json.dumps(summary, indent=2, default=str)[:1500]}")
+        tid = _first_task_id(summary)
+        print(f"  recovered task_id: {tid}")
+        if not tid:
+            print("  -> no task_id anywhere; unrecoverable for us (settles no_dos).")
+            return
+        # End-to-end: download + resample exactly as the real fetch does, so a green
+        # diagnose means the full run will attach this material's DOS.
+        try:
+            grid = dos_to_grid(*complete_dos_total(dr.get_dos_from_task_id(tid)))
+            if grid is None:
+                print("  -> DOS downloaded but degenerate/out-of-window (would settle no_dos).")
+            else:
+                print(f"  -> OK end-to-end: resampled to grid[{len(grid)}], "
+                      f"sum={float(grid.sum()):.3f}. The full fetch will attach this DOS.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  -> download/resample FAILED: {type(exc).__name__}: {str(exc)[:160]}")
 
 
 def _has_dos_props(doc):
