@@ -254,23 +254,30 @@ def _materials_with_dos(api_key, mids, chunk=1000):
 
 
 def _fetch_dos_grid(client_factory, mid, broaden_ev, retries):
-    """Fetch + resample ONE material's total DOS. Returns (grid_or_None, exc_or_None):
-    grid=None with exc=None means a terminal 'no DOS' (record the miss); exc set means it
-    exhausted retries on a transient error (leave un-marked, retried next run). Pure of any
-    file I/O so it is safe to run in a thread pool — the caller serializes the writes."""
+    """Fetch + resample ONE material's total DOS. Returns (grid, outcome, exc):
+      grid set, outcome None          -> success
+      None, "no_dos",   None          -> no DOS doc / no task_id / degenerate spectrum
+      None, "no_object", exc          -> DOS calc exists but its object is purged from MP's
+                                         store ('No object found' for every candidate id —
+                                         common for old calcs); deterministic, settle + flag
+      None, "fail",     exc           -> transient (retries exhausted) or unexpected; un-marked
+    Pure of file I/O so it is safe in a thread pool — the caller serializes the writes."""
     import time
     for attempt in range(retries):
         try:
             cdos = _dos_object(client_factory(), mid)
-            grid = (None if cdos is None
-                    else dos_to_grid(*complete_dos_total(cdos), broaden_ev=broaden_ev))
-            return grid, None
+            if cdos is None:
+                return None, "no_dos", None
+            grid = dos_to_grid(*complete_dos_total(cdos), broaden_ev=broaden_ev)
+            return (grid, None, None) if grid is not None else (None, "no_dos", None)
         except Exception as exc:  # noqa: BLE001
             if _looks_missing(exc):
-                return None, None                           # terminal: no DOS -> no_dos
-            if _is_terminal_fail(exc) or attempt == retries - 1:
-                return None, exc                            # deterministic / transient exhausted -> fail
-            time.sleep(2 ** attempt)                        # backoff + retry
+                return None, "no_dos", None                 # genuinely no DOS
+            if "no object found" in str(exc).lower():
+                return None, "no_object", exc               # object purged -> settle + flag
+            if _is_validation_error(exc) or attempt == retries - 1:
+                return None, "fail", exc                    # un-marked, retried next run
+            time.sleep(2 ** attempt)                        # transient: backoff + retry
 
 
 def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3, workers=8):
@@ -291,7 +298,8 @@ def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3, work
     from mp_api.client import MPRester
 
     df = pd.read_pickle(index_path)
-    counters = {k: 0 for k in ("streamed", "ok", "skip", "no_graph", "no_dos", "fail")}
+    counters = {k: 0 for k in ("streamed", "ok", "skip", "no_graph",
+                               "no_dos", "no_object", "fail")}
     start = time.time()
 
     # 1) Worklist: the rows that still need a fetch (resumable skips + missing graphs).
@@ -349,31 +357,36 @@ def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3, work
 
     def task(item):
         mid, gp = item
-        grid, exc = _fetch_dos_grid(client_factory, mid, broaden_ev, retries)
-        return gp, mid, grid, exc
+        grid, outcome, exc = _fetch_dos_grid(client_factory, mid, broaden_ev, retries)
+        return gp, mid, grid, outcome, exc
 
     done = 0
     with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        for gp, mid, grid, exc in ex.map(task, to_fetch):
+        for gp, mid, grid, outcome, exc in ex.map(task, to_fetch):
             done += 1
-            if exc is not None:
+            if outcome == "fail":                           # transient/unexpected -> un-marked
                 counters["fail"] += 1
                 print(f"  [fail] {mid}: {type(exc).__name__}: {str(exc)[:120]}", flush=True)
                 continue
             with open(gp) as f:
                 graph = json.load(f)
-            if grid is None:                                # missing / degenerate -> sentinel
-                graph["dos_missing"] = True
-                counters["no_dos"] += 1
-            else:
+            if grid is not None:
                 graph["dos"] = grid.tolist()
                 counters["ok"] += 1
+            else:                                           # settle (resumable skip) + flag why
+                graph["dos_missing"] = True
+                if outcome == "no_object":                  # DOS calc exists but object purged
+                    graph["dos_skip_reason"] = "no_object"
+                    counters["no_object"] += 1
+                else:
+                    counters["no_dos"] += 1
             _write_graph(graph, gp)
             if done % 500 == 0:
                 rate = done / max(time.time() - start, 1e-9)
                 print(f"  {done}/{len(to_fetch)} fetched ({rate:.1f}/s)  {counters}", flush=True)
 
     print(f"DOS attach done in {time.time() - start:.0f}s: {counters}", flush=True)
-    print(f"  coverage: {counters['ok']} graphs gained DOS; {counters['no_dos']} had none "
-          f"(electronic-structure calc absent — a SUBSET of MP, as expected).")
+    print(f"  coverage: {counters['ok']} graphs gained DOS; {counters['no_dos']} have no DOS "
+          f"calc; {counters['no_object']} have a DOS calc whose object is PURGED from MP's "
+          f"store (often pre-2021 calcs) — unrecoverable, settled + flagged dos_skip_reason.")
     return counters

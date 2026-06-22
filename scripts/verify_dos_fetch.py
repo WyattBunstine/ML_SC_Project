@@ -32,10 +32,10 @@ PREFILTER_BREAKS = {"value": False}
 
 
 def _summary_for(mid):
-    """Raw ES 'dos' summary per material, modelling the schema drift:
+    """Raw ES 'dos' summary per material, modelling the real failure modes:
       mp-1: task_id in total.1 (the happy path)
       mp-3: total.1 MISSING task_id, but total.-1 has it -> the walk must recover it
-      mp-5: task_id absent everywhere -> unrecoverable (no usable DOS)"""
+      mp-5: task_id present but its DOS OBJECT is purged from the store -> no_object"""
     if mid == "mp-1":
         return {"total": {"1": {"band_gap": 1.0, "task_id": "mp-1-dos"}}}
     if mid == "mp-3":
@@ -43,8 +43,11 @@ def _summary_for(mid):
                           "-1": {"band_gap": 2.0, "task_id": "mp-3-dos"}},
                 "elemental": {"Fe": {"s": {"1": {"band_gap": 2.0}}}}}
     if mid == "mp-5":
-        return {"total": {"1": {"band_gap": 3.0}, "-1": {"band_gap": 3.0}}}
+        return {"task_id": "mp-5-purged", "total": {"1": {"band_gap": 3.0}}}
     return None
+
+
+_STORED = {"mp-1-dos", "mp-3-dos"}             # which task_ids have a real object in the store
 
 
 class _CDos:
@@ -79,13 +82,15 @@ class _DosRester:
     def _query_open_data(self, bucket=None, key=None, decoder=None):
         tid = key.split("/")[-1].replace(".json.gz", "")      # raw-key download path
         FakeMPRester.dos_obj_calls.append(tid)
-        if tid in {"mp-1-dos", "mp-3-dos"}:
+        if tid in _STORED:
             return ([{"data": _CDos()}], 1)
         raise RuntimeError(f"No object found: s3://materialsproject-parsed/dos/{tid}.json.gz")
 
     def get_dos_from_task_id(self, tid):                       # validated fallback
         FakeMPRester.dos_obj_calls.append("validated:" + tid)
-        return _CDos()
+        if tid in _STORED:
+            return _CDos()
+        raise RuntimeError(f"No object found: s3://materialsproject-parsed/dos/{tid}.json.gz")
 
 
 class _Materials:
@@ -125,7 +130,7 @@ def _make_index(tmp, n=6):
 
 
 def _states(paths):
-    dos, miss = set(), set()
+    dos, miss, purged = set(), set(), set()
     for p in paths:
         g = json.load(open(p))
         mid = os.path.basename(p).replace(".json", "")
@@ -134,7 +139,9 @@ def _states(paths):
             assert len(g["dos"]) == D.N_ENERGY, f"bad dos len for {mid}"
         if g.get("dos_missing"):
             miss.add(mid)
-    return dos, miss
+        if g.get("dos_skip_reason") == "no_object":
+            purged.add(mid)
+    return dos, miss, purged
 
 
 def main():
@@ -142,16 +149,18 @@ def main():
     try:
         ALL = {f"mp-{i}" for i in range(6)}
         # prefilter path: only HAS materials hit the ES endpoint; task_id walk recovers
-        # mp-3 (task_id only in total.-1); mp-5 has none -> no_dos.
+        # mp-3 (task_id only in total.-1); mp-5's object is purged -> no_object (settled+flagged).
         FakeMPRester.es_search_calls = []
         FakeMPRester.dos_obj_calls = []
         ip, paths = _make_index(tmp)
         c = D.fetch_and_attach_dos(ip, workers=4)
-        dos, miss = _states(paths)
+        dos, miss, purged = _states(paths)
         prefilter = set(FakeMPRester.es_search_calls) == HAS         # no ES call for no-DOS majority
-        recover = set(FakeMPRester.dos_obj_calls) == {"mp-1-dos", "mp-3-dos"}  # drift recovered
-        coverage = dos == {"mp-1", "mp-3"} and miss == (ALL - {"mp-1", "mp-3"})
-        counters = c["ok"] == 2 and c["no_dos"] == 4 and c["fail"] == 0
+        recover = {"mp-1-dos", "mp-3-dos"} <= set(FakeMPRester.dos_obj_calls)  # drift recovered
+        coverage = (dos == {"mp-1", "mp-3"} and miss == (ALL - {"mp-1", "mp-3"})
+                    and purged == {"mp-5"})                           # object-purged flagged
+        counters = (c["ok"] == 2 and c["no_dos"] == 3 and c["no_object"] == 1
+                    and c["fail"] == 0)
 
         # resumability: a second run hits the ES endpoint zero times, all skip.
         FakeMPRester.es_search_calls = []
@@ -165,9 +174,9 @@ def main():
         try:
             ip2, paths2 = _make_index(tmp2)
             c3 = D.fetch_and_attach_dos(ip2, workers=4)
-            dos2, _ = _states(paths2)
-            fallback = (set(FakeMPRester.es_search_calls) == ALL
-                        and dos2 == {"mp-1", "mp-3"} and c3["ok"] == 2 and c3["no_dos"] == 4)
+            dos2, _, purged2 = _states(paths2)
+            fallback = (set(FakeMPRester.es_search_calls) == ALL and dos2 == {"mp-1", "mp-3"}
+                        and c3["ok"] == 2 and c3["no_object"] == 1)
         finally:
             shutil.rmtree(tmp2)
         PREFILTER_BREAKS["value"] = False
