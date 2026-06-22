@@ -146,9 +146,21 @@ def main():
             shutil.rmtree(tmp2)
         PREFILTER_BREAKS["value"] = False
 
-        ok = all([prefilter, byid, coverage, counters, resume, fallback])
+        # retry_no_object: after a fix makes a prior-no_object material's object retrievable,
+        # --retry-no-object clears that sentinel and re-attempts ONLY it (mp-0/2/4 stay no_dos).
+        _STORED.add("mp-5")
+        try:
+            FakeMPRester.dos_obj_calls = []
+            c4 = D.fetch_and_attach_dos(ip, workers=4, retry_no_object=True)
+            dos4, _, _ = _states(paths)
+            retry = ("mp-5" in dos4 and FakeMPRester.dos_obj_calls == ["mp-5"]
+                     and c4["ok"] == 1)
+        finally:
+            _STORED.discard("mp-5")
+
+        ok = all([prefilter, byid, coverage, counters, resume, fallback, retry])
         print(f"prefilter_skips={prefilter} keyed_by_material_id={byid} coverage={coverage} "
-              f"counters={counters} resumable={resume} fallback={fallback}")
+              f"counters={counters} resumable={resume} fallback={fallback} retry_no_object={retry}")
         print("verify_dos_fetch: " + ("PASS" if ok else "FAIL"))
         return 0 if ok else 1
     finally:
