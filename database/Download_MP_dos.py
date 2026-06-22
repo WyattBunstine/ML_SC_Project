@@ -97,6 +97,14 @@ def _is_validation_error(exc):
     return "validationerror" in type(exc).__name__.lower()
 
 
+def _is_terminal_fail(exc):
+    """A deterministic, non-retryable failure that is NOT 'no DOS': a schema ValidationError,
+    or a 'No object found' from the DOS object store (the task_id we resolved doesn't key a
+    stored DOS — an mp-api/emmet-core vs MP-layout lag). Terminal so we don't retry 3x, but
+    counted as a FAIL (left un-marked) rather than no_dos, so a future client fix re-tries it."""
+    return _is_validation_error(exc) or "no object found" in str(exc).lower()
+
+
 def _first_task_id(obj):
     """First non-empty `task_id` anywhere in a (raw) DOS summary dict. The summary nests
     task_id under total/elemental/orbital per spin; ALL entries reference the SAME DOS calc,
@@ -119,13 +127,33 @@ def _first_task_id(obj):
     return None
 
 
+def _download_dos(dr, task_id):
+    """Download a DOS CompleteDos by task_id, RAW S3 key first. The stock
+    get_dos_from_task_id runs the id through validate_ids, which currently normalizes a
+    'blessed' AlphaID (e.g. 'aaadtbme') to a legacy numeric id ('1705864') whose object
+    isn't stored -> 'No object found'. The object lives under the AlphaID key, so we fetch
+    `dos/<raw id>.json.gz` directly (same bucket/decoder as the stock method) and only fall
+    back to the validated path if the raw key is genuinely absent (covers already-numeric ids)."""
+    from mp_api.client.core.utils import load_json
+    try:
+        res = dr._query_open_data(
+            bucket="materialsproject-parsed",
+            key=f"dos/{task_id}.json.gz",
+            decoder=lambda x: load_json(x, deser=True))
+        return res[0][0]["data"]
+    except Exception as exc:  # noqa: BLE001
+        if "no object found" not in str(exc).lower():
+            raise
+        return dr.get_dos_from_task_id(task_id)          # fallback: validated/normalized id
+
+
 def _dos_object(mpr, mid):
-    """CompleteDos for one material, ROBUST to the emmet-core 0.86.x / server mismatch where
-    the ES 'dos' summary omits the (required) task_id and the stock get_dos_by_material_id
-    raises a ValidationError. The client is built in RAW mode (use_document_model=False), so
-    the dos-summary query returns plain dicts with NO validation; we pull the DOS calc's
-    task_id from anywhere in the summary and download the object by id. Returns None when the
-    material has no DOS doc or no recoverable task_id."""
+    """CompleteDos for one material, ROBUST to the emmet-core 0.86.x / server mismatch: the ES
+    'dos' summary omits the (required) per-entry task_id (so the stock get_dos_by_material_id
+    raises a ValidationError) AND moved the id to an AlphaID that validate_ids mis-normalizes.
+    The client is RAW mode (use_document_model=False) so the dos-summary query skips
+    validation; we take the DOS task_id from anywhere in the summary and download by its RAW
+    key. Returns None when the material has no DOS doc or no recoverable task_id."""
     dr = mpr.materials.electronic_structure_dos          # DosRester (raw mode -> raw es_rester)
     docs = dr.es_rester.search(material_ids=mid, fields=["dos"])
     if not docs:
@@ -135,7 +163,7 @@ def _dos_object(mpr, mid):
     task_id = _first_task_id(summary)
     if not task_id:
         return None
-    return dr.get_dos_from_task_id(task_id)
+    return _download_dos(dr, task_id)
 
 
 def diagnose_dos(api_key, mid):
@@ -146,25 +174,45 @@ def diagnose_dos(api_key, mid):
     from mp_api.client import MPRester
     with MPRester(api_key, use_document_model=False) as mpr:
         dr = mpr.materials.electronic_structure_dos
+        # Collect every candidate DOS task_id we can reach, then test each against the
+        # object store — to find which (if any) source yields a real DOS for this material.
+        candidates = []                                  # [(source_label, task_id)]
         docs = dr.es_rester.search(material_ids=mid, fields=["dos"])
         summary = (docs[0].get("dos") if docs and isinstance(docs[0], dict) else None)
-        print(f"  {mid}: raw dos summary =\n{_json.dumps(summary, indent=2, default=str)[:1500]}")
-        tid = _first_task_id(summary)
-        print(f"  recovered task_id: {tid}")
-        if not tid:
-            print("  -> no task_id anywhere; unrecoverable for us (settles no_dos).")
-            return
-        # End-to-end: download + resample exactly as the real fetch does, so a green
-        # diagnose means the full run will attach this material's DOS.
-        try:
-            grid = dos_to_grid(*complete_dos_total(dr.get_dos_from_task_id(tid)))
-            if grid is None:
-                print("  -> DOS downloaded but degenerate/out-of-window (would settle no_dos).")
-            else:
-                print(f"  -> OK end-to-end: resampled to grid[{len(grid)}], "
-                      f"sum={float(grid.sum()):.3f}. The full fetch will attach this DOS.")
+        print(f"  {mid}: raw dos summary =\n{_json.dumps(summary, indent=2, default=str)[:1200]}")
+        top = _first_task_id(summary)
+        if top:
+            candidates.append(("dos-summary", top))
+        try:                                             # provenance — may name the real DOS calc
+            sdocs = mpr.materials.summary.search(material_ids=mid, fields=["origins"])
+            origins = ((sdocs[0].get("origins") if sdocs and isinstance(sdocs[0], dict) else None)
+                       or [])
+            print(f"  origins = {_json.dumps(origins, default=str)[:700]}")
+            for o in origins:
+                if isinstance(o, dict) and o.get("task_id"):
+                    candidates.append((f"origin:{o.get('name')}", str(o["task_id"])))
         except Exception as exc:  # noqa: BLE001
-            print(f"  -> download/resample FAILED: {type(exc).__name__}: {str(exc)[:160]}")
+            print(f"  origins probe failed: {type(exc).__name__}: {str(exc)[:120]}")
+
+        if not candidates:
+            print("  -> no candidate task_id anywhere (settles no_dos).")
+            return
+
+        def _probe(method, tid):
+            try:
+                grid = dos_to_grid(*complete_dos_total(method(tid)))
+                return (f"OK grid[{len(grid)}] sum={float(grid.sum()):.3f}"
+                        if grid is not None else "downloaded but degenerate")
+            except Exception as exc:  # noqa: BLE001
+                return f"FAILED {type(exc).__name__}: {str(exc)[:80]}"
+
+        print(f"  testing {len(candidates)} candidate task_id(s) — RAW-key vs validate_ids:")
+        for label, tid in candidates:
+            raw = _probe(lambda t: _download_dos(dr, t), tid)            # the new path (raw key first)
+            val = _probe(dr.get_dos_from_task_id, tid)                   # the stock (normalized) path
+            print(f"    [{label}] {tid}:  raw-key -> {raw}   |   validate_ids -> {val}")
+        print("  (the fetch uses the raw-key path; if raw-key is OK above, the full run will "
+              "now attach this DOS. If BOTH fail for every candidate, paste this back.)")
 
 
 def _has_dos_props(doc):
@@ -219,9 +267,9 @@ def _fetch_dos_grid(client_factory, mid, broaden_ev, retries):
             return grid, None
         except Exception as exc:  # noqa: BLE001
             if _looks_missing(exc):
-                return None, None                           # terminal: no DOS
-            if _is_validation_error(exc) or attempt == retries - 1:
-                return None, exc                            # terminal parse / transient exhausted
+                return None, None                           # terminal: no DOS -> no_dos
+            if _is_terminal_fail(exc) or attempt == retries - 1:
+                return None, exc                            # deterministic / transient exhausted -> fail
             time.sleep(2 ** attempt)                        # backoff + retry
 
 
