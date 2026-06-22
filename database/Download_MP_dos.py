@@ -198,6 +198,23 @@ def diagnose_dos(api_key, mid):
             print("  -> no candidate task_id anywhere (settles no_dos).")
             return
 
+        # Surface the REAL S3 error: _query_open_data collapses every botocore ClientError
+        # (AccessDenied / NoSuchKey / region / unsigned-access) into a generic 'No object
+        # found', so a bucket-access misconfig looks identical to a purged object. Probe the
+        # bucket directly and report the actual error code — the discriminator for ok=0.
+        from io import BytesIO
+        def _probe_s3(tid):
+            key = f"dos/{tid}.json.gz"
+            try:
+                dr.s3_client.download_fileobj("materialsproject-parsed", key, BytesIO())
+                return f"S3 OK (object exists at {key})"
+            except Exception as exc:  # noqa: BLE001
+                resp = getattr(exc, "response", None)
+                if isinstance(resp, dict):
+                    e = resp.get("Error", {})
+                    return f"S3 {e.get('Code', '?')}: {str(e.get('Message', ''))[:90]} [{key}]"
+                return f"S3 {type(exc).__name__}: {str(exc)[:90]} [{key}]"
+
         def _probe(method, tid):
             try:
                 grid = dos_to_grid(*complete_dos_total(method(tid)))
@@ -206,13 +223,13 @@ def diagnose_dos(api_key, mid):
             except Exception as exc:  # noqa: BLE001
                 return f"FAILED {type(exc).__name__}: {str(exc)[:80]}"
 
-        print(f"  testing {len(candidates)} candidate task_id(s) — RAW-key vs validate_ids:")
+        print(f"  testing {len(candidates)} candidate task_id(s):")
         for label, tid in candidates:
-            raw = _probe(lambda t: _download_dos(dr, t), tid)            # the new path (raw key first)
-            val = _probe(dr.get_dos_from_task_id, tid)                   # the stock (normalized) path
-            print(f"    [{label}] {tid}:  raw-key -> {raw}   |   validate_ids -> {val}")
-        print("  (the fetch uses the raw-key path; if raw-key is OK above, the full run will "
-              "now attach this DOS. If BOTH fail for every candidate, paste this back.)")
+            print(f"    [{label}] {tid}:")
+            print(f"        raw S3 probe -> {_probe_s3(tid)}")            # true botocore error code
+            print(f"        raw-key dl   -> {_probe(lambda t: _download_dos(dr, t), tid)}")
+        print("  (S3 'NoSuchKey' = object truly purged; 'AccessDenied'/'InvalidAccessKeyId'/"
+              "region/signature = a bucket-access misconfig -> the real ok=0 cause. Paste back.)")
 
 
 def _has_dos_props(doc):
