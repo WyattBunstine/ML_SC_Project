@@ -160,10 +160,17 @@ def cmd_fetch_dos(args):
     # relaxed MP graphs the index points at -> the DOS-bearing population (a separate
     # masked-union member) for multitask pretraining. Needs MP_API_KEY + network.
     # Resumable; then pack-dataset on this index -> the DOS pack (has_dos=true).
-    if not os.path.exists(args.index):
-        sys.exit(f"error: index not found: {args.index}")
     if not os.environ.get("MP_API_KEY"):
         sys.exit("error: set the MP_API_KEY environment variable before fetching DOS.")
+    if args.diagnose:                       # dump one material's raw dos summary + task_id
+        from database.Download_MP_dos import diagnose_dos
+        print(f"Diagnosing DOS schema for {args.diagnose}:")
+        diagnose_dos(os.environ["MP_API_KEY"], args.diagnose)
+        return
+    if not args.index:
+        sys.exit("error: --index is required (unless --diagnose MID)")
+    if not os.path.exists(args.index):
+        sys.exit(f"error: index not found: {args.index}")
     from database.Download_MP_dos import fetch_and_attach_dos, N_ENERGY
     print(f"Fetching MP DOS for {args.index} (E_F-aligned, {N_ENERGY} bins, "
           f"broaden={args.broaden} eV, {args.workers} workers) -> graph['dos']. "
@@ -629,11 +636,15 @@ def build_parser():
                     "materials with an electronic-structure calc), so expect many no_dos "
                     "skips. Needs MP_API_KEY. pack-dataset after -> the DOS pack.",
     )
-    fd.add_argument("--index", required=True,
-                    help="MP index pickle (id + graph_path) whose graphs get graph['dos']")
+    fd.add_argument("--index", default=None,
+                    help="MP index pickle (id + graph_path) whose graphs get graph['dos'] "
+                         "(required unless --diagnose)")
     fd.add_argument("--broaden", type=float, default=0.1,
                     help="Gaussian broadening sigma in eV (default 0.1; 0 = none)")
     fd.add_argument("--limit", type=int, default=None, help="only process the first N materials")
+    fd.add_argument("--diagnose", metavar="MID", default=None,
+                    help="dump one material's RAW dos summary + recovered task_id and exit "
+                         "(debug the emmet-core/server schema; no index needed)")
     fd.add_argument("--workers", type=int, default=8,
                     help="parallel DOS-fetch threads (default 8; the fetch is network-bound). "
                          "A bulk has-DOS pre-filter runs first so the no-DOS majority is "

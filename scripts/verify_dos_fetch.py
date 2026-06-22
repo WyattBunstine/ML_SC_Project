@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Verify the parallelized fetch-dos orchestration WITHOUT network: a mock MPRester
-exercises the bulk has-DOS pre-filter, the thread-pool fetch, resumability, the
-sentinel writes, and the no-prefilter fallback. (The grid math has its own coverage;
-this guards the concurrency/pre-filter/resume logic in database/Download_MP_dos.py.)
+"""Verify the parallelized + schema-robust fetch-dos orchestration WITHOUT network: a
+mock MPRester exercises the bulk has-DOS pre-filter, the thread-pool fetch, the RAW-mode
+DOS retrieval that survives the emmet-core/server task_id mismatch (the ValidationError
+storm), resumability, and the no-prefilter fallback.
 
     python scripts/verify_dos_fetch.py     # exit 0 = pass, 1 = fail, 77 = skipped
 """
@@ -27,15 +27,24 @@ except Exception as exc:  # noqa: BLE001 — DOS fetch is optional infra
 
 import Download_MP_dos as D  # noqa: E402
 
-HAS = {"mp-1", "mp-3", "mp-5"}                 # which materials "have" a DOS
-PREFILTER_BREAKS = {"value": False}            # toggle to exercise the fallback
+HAS = {"mp-1", "mp-3", "mp-5"}                 # has_props says these have a DOS
+PREFILTER_BREAKS = {"value": False}
 
 
-class _Doc:
-    def __init__(self, mid, has=None):
-        self.material_id = mid
-        if has is not None:
-            self.has_props = ["dos"] if has else ["materials", "thermo"]
+def _summary_for(mid):
+    """Raw ES 'dos' summary per material, modelling the schema drift:
+      mp-1: task_id in total.1 (the happy path)
+      mp-3: total.1 MISSING task_id, but total.-1 has it -> the walk must recover it
+      mp-5: task_id absent everywhere -> unrecoverable (no usable DOS)"""
+    if mid == "mp-1":
+        return {"total": {"1": {"band_gap": 1.0, "task_id": "mp-1-dos"}}}
+    if mid == "mp-3":
+        return {"total": {"1": {"band_gap": 2.0},
+                          "-1": {"band_gap": 2.0, "task_id": "mp-3-dos"}},
+                "elemental": {"Fe": {"s": {"1": {"band_gap": 2.0}}}}}
+    if mid == "mp-5":
+        return {"total": {"1": {"band_gap": 3.0}, "-1": {"band_gap": 3.0}}}
+    return None
 
 
 class _CDos:
@@ -45,23 +54,43 @@ class _CDos:
         self.efermi = 0.0
 
 
+class _Doc:
+    def __init__(self, mid):
+        self.material_id = mid
+
+
 class _Summary:
     def search(self, material_ids=None, has_props=None, fields=None):
         if PREFILTER_BREAKS["value"]:
             raise RuntimeError("simulated prefilter outage")
-        if has_props and "dos" in has_props:
-            return [_Doc(m) for m in material_ids if m in HAS]
-        return [_Doc(m, has=(m in HAS)) for m in material_ids]
+        return [_Doc(m) for m in material_ids if m in HAS]      # server-side has_props filter
+
+
+class _ESRester:
+    def search(self, material_ids=None, fields=None):
+        FakeMPRester.es_search_calls.append(material_ids)      # mid is a single string here
+        s = _summary_for(material_ids)
+        return [{"dos": s}] if s is not None else []
+
+
+class _DosRester:
+    es_rester = _ESRester()
+
+    def get_dos_from_task_id(self, tid):
+        FakeMPRester.dos_obj_calls.append(tid)
+        return _CDos()
 
 
 class _Materials:
     summary = _Summary()
+    electronic_structure_dos = _DosRester()
 
 
 class FakeMPRester:
-    get_dos_calls = []
+    es_search_calls = []
+    dos_obj_calls = []
 
-    def __init__(self, key):
+    def __init__(self, key, use_document_model=True, **kw):
         self.materials = _Materials()
 
     def __enter__(self):
@@ -69,12 +98,6 @@ class FakeMPRester:
 
     def __exit__(self, *a):
         return False
-
-    def get_dos_by_material_id(self, mid):
-        FakeMPRester.get_dos_calls.append(mid)
-        if mid in HAS:
-            return _CDos()
-        raise RuntimeError("404 not found: no DOS for this material")
 
 
 mpc.MPRester = FakeMPRester
@@ -110,37 +133,41 @@ def _states(paths):
 def main():
     tmp = tempfile.mkdtemp()
     try:
-        # prefilter path: only HAS materials get a get_dos download.
-        FakeMPRester.get_dos_calls = []
+        ALL = {f"mp-{i}" for i in range(6)}
+        # prefilter path: only HAS materials hit the ES endpoint; task_id walk recovers
+        # mp-3 (task_id only in total.-1); mp-5 has none -> no_dos.
+        FakeMPRester.es_search_calls = []
+        FakeMPRester.dos_obj_calls = []
         ip, paths = _make_index(tmp)
         c = D.fetch_and_attach_dos(ip, workers=4)
         dos, miss = _states(paths)
-        prefilter = set(FakeMPRester.get_dos_calls) == HAS
-        coverage = dos == HAS and miss == ({f"mp-{i}" for i in range(6)} - HAS)
-        counters = c["ok"] == 3 and c["no_dos"] == 3 and c["fail"] == 0
+        prefilter = set(FakeMPRester.es_search_calls) == HAS         # no ES call for no-DOS majority
+        recover = set(FakeMPRester.dos_obj_calls) == {"mp-1-dos", "mp-3-dos"}  # drift recovered
+        coverage = dos == {"mp-1", "mp-3"} and miss == (ALL - {"mp-1", "mp-3"})
+        counters = c["ok"] == 2 and c["no_dos"] == 4 and c["fail"] == 0
 
-        # resumability: a second run does ZERO downloads, all skip.
-        FakeMPRester.get_dos_calls = []
+        # resumability: a second run hits the ES endpoint zero times, all skip.
+        FakeMPRester.es_search_calls = []
         c2 = D.fetch_and_attach_dos(ip, workers=4)
-        resume = (len(FakeMPRester.get_dos_calls) == 0 and c2["skip"] == 6)
+        resume = (len(FakeMPRester.es_search_calls) == 0 and c2["skip"] == 6)
 
-        # fallback: prefilter outage -> fetch all in parallel, misses settle via 404.
+        # fallback: prefilter outage -> query all 6 at the ES endpoint, still correct.
         PREFILTER_BREAKS["value"] = True
-        FakeMPRester.get_dos_calls = []
+        FakeMPRester.es_search_calls = []
         tmp2 = tempfile.mkdtemp()
         try:
             ip2, paths2 = _make_index(tmp2)
             c3 = D.fetch_and_attach_dos(ip2, workers=4)
             dos2, _ = _states(paths2)
-            fallback = (set(FakeMPRester.get_dos_calls) == {f"mp-{i}" for i in range(6)}
-                        and dos2 == HAS and c3["ok"] == 3 and c3["no_dos"] == 3)
+            fallback = (set(FakeMPRester.es_search_calls) == ALL
+                        and dos2 == {"mp-1", "mp-3"} and c3["ok"] == 2 and c3["no_dos"] == 4)
         finally:
             shutil.rmtree(tmp2)
         PREFILTER_BREAKS["value"] = False
 
-        ok = all([prefilter, coverage, counters, resume, fallback])
-        print(f"prefilter_skips_downloads={prefilter} coverage={coverage} counters={counters} "
-              f"resumable={resume} fallback={fallback}")
+        ok = all([prefilter, recover, coverage, counters, resume, fallback])
+        print(f"prefilter_skips={prefilter} taskid_walk_recovers={recover} coverage={coverage} "
+              f"counters={counters} resumable={resume} fallback={fallback}")
         print("verify_dos_fetch: " + ("PASS" if ok else "FAIL"))
         return 0 if ok else 1
     finally:
