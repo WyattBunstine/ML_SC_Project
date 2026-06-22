@@ -10,13 +10,18 @@ probed at superconductor T_c. The metric that matters is **T_c transfer**, not p
 | `01_energy_only`    | energy                                  | `packed_v4` |
 | `02_forces_stress`  | + forces, stress (conservative autograd)| `packed_v4` |
 | `03_magmom_bandgap` | + magmom, bandgap                       | `packed_v4` |
-| `04_dos_full`       | + DOS                                   | `packed_v4` ∪ `dos_pack` |
+| `04_dos_full` *(PARKED)* | + DOS                              | `packed_v4` ∪ `dos_pack` |
 
-`forces`/`stress` are `−∂E/∂cart` / `∂E/∂strain` (conservative autograd, not direct heads);
-`dos` is a per-structure total spectrum (per-atom Softplus head → `_segment_sum`, 256-bin
-E_F-aligned grid). The DOS rung trains over the masked **union** of the MPtrj pack (E/F/stress/
-magmom/bandgap) and the relaxed-MP DOS pack (dos only) — each pack supplies its targets, the
-others NaN-masked.
+`forces`/`stress` are `−∂E/∂cart` / `∂E/∂strain` (conservative autograd, not direct heads).
+`bandgap` is the per-structure electronic-structure signal that co-trains in rung 03.
+
+> **`04_dos_full` is PARKED (2026-06-22).** DOS is a per-structure total spectrum (per-atom
+> Softplus head → `_segment_sum`) trained over the masked union of `packed_v4` and a relaxed-MP
+> DOS pack. But MP's open-data DOS objects (`s3://materialsproject-parsed/dos/<mid>.json.gz`)
+> are only mirrored for **278** materials of this `theoretical=False` (experimental/ICSD) set —
+> too few to train a DOS head. The code path (DOS pack, `ConcatMTDataset` union, dos head) is
+> built and tested; revive `04` only with a DOS-rich material set (e.g. theoretical materials).
+> The live ladder is **01 → 02 → 03**; `bandgap` carries the electronic leg in the interim.
 
 ## Run protocol (per rung)
 
