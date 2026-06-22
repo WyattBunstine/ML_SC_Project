@@ -121,29 +121,36 @@ def _dos_object(mpr, mid):
 
 
 def diagnose_dos(api_key, mid):
-    """Confirm the material-id DOS retrieval (`dos/<mid>.json.gz`) end-to-end on a real
-    material, plus a known-present key — so a green line means the full fetch will attach it:
-        python main.py fetch-dos --diagnose mp-11944"""
+    """Probe the open-data DOS coverage: test the requested material plus canonical materials
+    (Silicon, diamond, GaAs, MgO) and a known-present high-id key, then report the bucket's id
+    range — to tell whether the dos/<mid>.json.gz mirror is missing common materials or only we
+    are:  python main.py fetch-dos --diagnose mp-11944"""
     from mp_api.client import MPRester
+    # Canonical, heavily-viewed DOS materials — if THESE 404, the open-data mirror is the
+    # bottleneck, not our dataset. mp-1000000 is a key the listing proved is present.
+    canon = ["mp-149", "mp-66", "mp-2534", "mp-1265", "mp-1000000"]
     with MPRester(api_key, use_document_model=False) as mpr:
-        # Test the requested material AND a key the bucket listing showed exists, to separate
-        # "scheme works, this material just isn't in open-data" from "scheme broken".
-        for test_mid in (mid, "mp-1000000"):
-            key = f"dos/{test_mid}.json.gz"
+        dr = mpr.materials.electronic_structure_dos
+        print("  DOS object presence (dos/<mid>.json.gz):")
+        for test_mid in dict.fromkeys([mid] + canon):       # requested first, dedup, keep order
             try:
                 cdos = _dos_object(mpr, test_mid)
-                if cdos is None:
-                    print(f"  {key}: object present but empty/unreadable")
-                    continue
-                grid = dos_to_grid(*complete_dos_total(cdos))
-                g = "None (degenerate)" if grid is None else f"[{len(grid)}] sum={float(grid.sum()):.3f}"
-                print(f"  {key}: OK type={type(cdos).__name__} grid={g}")
+                grid = None if cdos is None else dos_to_grid(*complete_dos_total(cdos))
+                print(f"    {test_mid:>12}: OK ({type(cdos).__name__}, "
+                      f"grid {'present' if grid is not None else 'degenerate'})")
             except Exception as exc:  # noqa: BLE001
                 miss = "no object found" in str(exc).lower()
-                print(f"  {key}: {'404 (not in open-data)' if miss else 'FAILED ' + type(exc).__name__}"
-                      f"{'' if miss else ': ' + str(exc)[:120]}")
-        print("  (mp-1000000 OK confirms the scheme; if the requested mid is 404 it just isn't "
-              "mirrored. The full fetch attaches whatever IS present.)")
+                print(f"    {test_mid:>12}: {'404 absent' if miss else 'FAIL ' + type(exc).__name__ + ': ' + str(exc)[:70]}")
+        # What id range does the bucket's dos/ prefix actually cover? (lexicographic first key)
+        try:
+            r = dr.s3_client.list_objects_v2(Bucket="materialsproject-parsed",
+                                             Prefix="dos/mp-", MaxKeys=3)
+            print(f"  bucket first dos/ keys (lexicographic): "
+                  f"{[o['Key'] for o in r.get('Contents', [])]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  bucket list failed: {type(exc).__name__}: {str(exc)[:90]}")
+        print("  (canonical materials OK -> scheme works, our experimental set is just poorly "
+              "mirrored; canonical materials 404 -> the open-data DOS mirror itself is incomplete.)")
 
 
 def _has_dos_props(doc):
