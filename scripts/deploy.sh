@@ -386,6 +386,10 @@ set -euo pipefail
 ${ENV_SETUP}
 
 export PYTHONUNBUFFERED=1          # stream training output to the log live
+# Let the CUDA allocator grow/shrink one segment instead of fragmenting many — bounds
+# peak reserved memory for the GPS poly-shell attention + the autograd-force double
+# backward (the main OOM source on the a100). Harmless for non-GPS / CPU jobs.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 cd "${REMOTE_PATH}"
 echo "Host: \$(hostname)   GPU(s):"; nvidia-smi -L || true
 echo "Running: python ${entrypoint} ${config_rel}"
