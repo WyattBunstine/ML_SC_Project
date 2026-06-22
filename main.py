@@ -166,8 +166,10 @@ def cmd_fetch_dos(args):
         sys.exit("error: set the MP_API_KEY environment variable before fetching DOS.")
     from database.Download_MP_dos import fetch_and_attach_dos, N_ENERGY
     print(f"Fetching MP DOS for {args.index} (E_F-aligned, {N_ENERGY} bins, "
-          f"broaden={args.broaden} eV) -> graph['dos']. DOS covers a SUBSET of MP.")
-    fetch_and_attach_dos(args.index, broaden_ev=args.broaden, limit=args.limit)
+          f"broaden={args.broaden} eV, {args.workers} workers) -> graph['dos']. "
+          f"DOS covers a SUBSET of MP.")
+    fetch_and_attach_dos(args.index, broaden_ev=args.broaden, limit=args.limit,
+                         workers=args.workers)
     print("Done. pack-dataset on this index -> the DOS pack; verify has_dos=true.")
 
 
@@ -632,6 +634,10 @@ def build_parser():
     fd.add_argument("--broaden", type=float, default=0.1,
                     help="Gaussian broadening sigma in eV (default 0.1; 0 = none)")
     fd.add_argument("--limit", type=int, default=None, help="only process the first N materials")
+    fd.add_argument("--workers", type=int, default=8,
+                    help="parallel DOS-fetch threads (default 8; the fetch is network-bound). "
+                         "A bulk has-DOS pre-filter runs first so the no-DOS majority is "
+                         "settled without a per-material download.")
     fd.set_defaults(func=cmd_fetch_dos)
 
     pk = sub.add_parser(
