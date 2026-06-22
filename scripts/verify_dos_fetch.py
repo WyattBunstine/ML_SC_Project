@@ -28,7 +28,9 @@ except Exception as exc:  # noqa: BLE001 — DOS fetch is optional infra
 import Download_MP_dos as D  # noqa: E402
 
 HAS = {"mp-1", "mp-3", "mp-5"}                 # has_props says these have a DOS calc
-_STORED = {"mp-1", "mp-3"}                      # ...but only these have an OBJECT at dos/<mid>.json.gz
+_STOCK = {"mp-1"}                               # has an object via the STOCK task-id route (Silicon-like)
+_BY_MID = {"mp-3"}                              # has an object only via dos/<mid>.json.gz (mp-1000000-like)
+# mp-5: has_props dos but NO object under either scheme -> no_object
 PREFILTER_BREAKS = {"value": False}
 
 
@@ -54,8 +56,8 @@ class _Summary:
 class _DosRester:
     def _query_open_data(self, bucket=None, key=None, decoder=None):
         mid = key.split("/")[-1].replace(".json.gz", "")       # dos/<mid>.json.gz -> mid
-        FakeMPRester.dos_obj_calls.append(mid)
-        if mid in _STORED:
+        FakeMPRester.calls.append(("matid", mid))
+        if mid in _BY_MID:
             return ([{"data": _CDos()}], 1)                    # object may be wrapped {"data": dos}
         raise RuntimeError(f"No object found: s3://materialsproject-parsed/dos/{mid}.json.gz")
 
@@ -66,10 +68,16 @@ class _Materials:
 
 
 class FakeMPRester:
-    dos_obj_calls = []
+    calls = []
 
     def __init__(self, key, use_document_model=True, **kw):
         self.materials = _Materials()
+
+    def get_dos_by_material_id(self, mid):                      # the STOCK task-id route
+        FakeMPRester.calls.append(("stock", mid))
+        if mid in _STOCK:
+            return _CDos()
+        raise RuntimeError(f"No object found: s3://materialsproject-parsed/dos/<task>.json.gz")
 
     def __enter__(self):
         return self
@@ -114,33 +122,36 @@ def main():
     tmp = tempfile.mkdtemp()
     try:
         ALL = {f"mp-{i}" for i in range(6)}
-        # prefilter path: only HAS materials are downloaded by material-id key; mp-1/mp-3 have
-        # objects -> ok; mp-5 has a DOS calc but no object -> no_object (settled + flagged).
-        FakeMPRester.dos_obj_calls = []
+        mids = lambda: {m for _, m in FakeMPRester.calls}
+        # prefilter path: only HAS materials are fetched. mp-1 resolves via the STOCK task-id
+        # route (Silicon-like), mp-3 only via the material-id key (mp-1000000-like), mp-5 via
+        # neither -> no_object (settled + flagged).
+        FakeMPRester.calls = []
         ip, paths = _make_index(tmp)
         c = D.fetch_and_attach_dos(ip, workers=4)
         dos, miss, purged = _states(paths)
-        prefilter = set(FakeMPRester.dos_obj_calls) == HAS           # only has-DOS materials downloaded
-        byid = all(k.startswith("mp-") for k in FakeMPRester.dos_obj_calls)  # keyed by material id
+        prefilter = mids() == HAS                                    # only has-DOS materials fetched
+        both_routes = (("stock", "mp-1") in FakeMPRester.calls       # stock route recovers Silicon-like
+                       and ("matid", "mp-3") in FakeMPRester.calls)  # material-id recovers the newer slice
         coverage = (dos == {"mp-1", "mp-3"} and miss == (ALL - {"mp-1", "mp-3"})
                     and purged == {"mp-5"})                           # object-absent flagged
         counters = (c["ok"] == 2 and c["no_dos"] == 3 and c["no_object"] == 1
                     and c["fail"] == 0)
 
-        # resumability: a second run downloads nothing, all skip.
-        FakeMPRester.dos_obj_calls = []
+        # resumability: a second run fetches nothing, all skip.
+        FakeMPRester.calls = []
         c2 = D.fetch_and_attach_dos(ip, workers=4)
-        resume = (len(FakeMPRester.dos_obj_calls) == 0 and c2["skip"] == 6)
+        resume = (len(FakeMPRester.calls) == 0 and c2["skip"] == 6)
 
-        # fallback: prefilter outage -> attempt all 6 by material-id; mp-1/mp-3 ok, rest 404.
+        # fallback: prefilter outage -> attempt all 6; mp-1/mp-3 ok, the rest 404 -> no_object.
         PREFILTER_BREAKS["value"] = True
-        FakeMPRester.dos_obj_calls = []
+        FakeMPRester.calls = []
         tmp2 = tempfile.mkdtemp()
         try:
             ip2, paths2 = _make_index(tmp2)
             c3 = D.fetch_and_attach_dos(ip2, workers=4)
             dos2, _, _ = _states(paths2)
-            fallback = (set(FakeMPRester.dos_obj_calls) == ALL and dos2 == {"mp-1", "mp-3"}
+            fallback = (mids() == ALL and dos2 == {"mp-1", "mp-3"}
                         and c3["ok"] == 2 and c3["no_object"] == 4)
         finally:
             shutil.rmtree(tmp2)
@@ -148,19 +159,19 @@ def main():
 
         # retry_no_object: after a fix makes a prior-no_object material's object retrievable,
         # --retry-no-object clears that sentinel and re-attempts ONLY it (mp-0/2/4 stay no_dos).
-        _STORED.add("mp-5")
+        _BY_MID.add("mp-5")
         try:
-            FakeMPRester.dos_obj_calls = []
+            FakeMPRester.calls = []
             c4 = D.fetch_and_attach_dos(ip, workers=4, retry_no_object=True)
             dos4, _, _ = _states(paths)
-            retry = ("mp-5" in dos4 and FakeMPRester.dos_obj_calls == ["mp-5"]
-                     and c4["ok"] == 1)
+            retry = ("mp-5" in dos4 and mids() == {"mp-5"} and c4["ok"] == 1)
         finally:
-            _STORED.discard("mp-5")
+            _BY_MID.discard("mp-5")
 
-        ok = all([prefilter, byid, coverage, counters, resume, fallback, retry])
-        print(f"prefilter_skips={prefilter} keyed_by_material_id={byid} coverage={coverage} "
-              f"counters={counters} resumable={resume} fallback={fallback} retry_no_object={retry}")
+        ok = all([prefilter, both_routes, coverage, counters, resume, fallback, retry])
+        print(f"prefilter_skips={prefilter} both_routes(stock+matid)={both_routes} "
+              f"coverage={coverage} counters={counters} resumable={resume} fallback={fallback} "
+              f"retry_no_object={retry}")
         print("verify_dos_fetch: " + ("PASS" if ok else "FAIL"))
         return 0 if ok else 1
     finally:
