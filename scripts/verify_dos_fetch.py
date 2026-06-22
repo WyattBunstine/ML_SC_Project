@@ -77,7 +77,8 @@ class FakeMPRester:
         FakeMPRester.calls.append(("stock", mid))
         if mid in _STOCK:
             return _CDos()
-        raise RuntimeError(f"No object found: s3://materialsproject-parsed/dos/<task>.json.gz")
+        # mimic the real "no ES summary doc" error so the fall-through to material-id is tested
+        raise RuntimeError(f"No electronic structure data found for material ID {mid}.")
 
     def __enter__(self):
         return self

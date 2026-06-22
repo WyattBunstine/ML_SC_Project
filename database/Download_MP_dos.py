@@ -112,7 +112,10 @@ def _dos_object(mpr, mid):
         if dos is not None:
             return dos
     except Exception as exc:  # noqa: BLE001
-        if not (_is_validation_error(exc) or "no object found" in str(exc).lower()
+        # "try the next scheme" failures: schema drift (no total.1.task_id), a 404, or "No
+        # electronic structure data found" (mp-1000000+ have a dos object but no ES summary).
+        if not (_is_validation_error(exc) or _looks_missing(exc)
+                or "no object found" in str(exc).lower()
                 or isinstance(exc, (KeyError, TypeError, IndexError))):
             raise                                         # a real error (network/auth), not "try next"
     from mp_api.client.core.utils import load_json        # (2) material-id key
