@@ -97,151 +97,53 @@ def _is_validation_error(exc):
     return "validationerror" in type(exc).__name__.lower()
 
 
-def _is_terminal_fail(exc):
-    """A deterministic, non-retryable failure that is NOT 'no DOS': a schema ValidationError,
-    or a 'No object found' from the DOS object store (the task_id we resolved doesn't key a
-    stored DOS — an mp-api/emmet-core vs MP-layout lag). Terminal so we don't retry 3x, but
-    counted as a FAIL (left un-marked) rather than no_dos, so a future client fix re-tries it."""
-    return _is_validation_error(exc) or "no object found" in str(exc).lower()
-
-
-def _first_task_id(obj):
-    """First non-empty `task_id` anywhere in a (raw) DOS summary dict. The summary nests
-    task_id under total/elemental/orbital per spin; ALL entries reference the SAME DOS calc,
-    so any one is the id we download by. Walking the raw dict (vs the stock
-    dos["total"]["1"]["task_id"]) survives the emmet-core/server schema drift where some
-    entries arrive without task_id (the cause of the ValidationError storm)."""
-    if isinstance(obj, dict):
-        tid = obj.get("task_id")
-        if isinstance(tid, str) and tid:
-            return tid
-        for v in obj.values():
-            r = _first_task_id(v)
-            if r:
-                return r
-    elif isinstance(obj, (list, tuple)):
-        for v in obj:
-            r = _first_task_id(v)
-            if r:
-                return r
-    return None
-
-
-def _download_dos(dr, task_id):
-    """Download a DOS CompleteDos by task_id, RAW S3 key first. The stock
-    get_dos_from_task_id runs the id through validate_ids, which currently normalizes a
-    'blessed' AlphaID (e.g. 'aaadtbme') to a legacy numeric id ('1705864') whose object
-    isn't stored -> 'No object found'. The object lives under the AlphaID key, so we fetch
-    `dos/<raw id>.json.gz` directly (same bucket/decoder as the stock method) and only fall
-    back to the validated path if the raw key is genuinely absent (covers already-numeric ids)."""
-    from mp_api.client.core.utils import load_json
-    try:
-        res = dr._query_open_data(
-            bucket="materialsproject-parsed",
-            key=f"dos/{task_id}.json.gz",
-            decoder=lambda x: load_json(x, deser=True))
-        return res[0][0]["data"]
-    except Exception as exc:  # noqa: BLE001
-        if "no object found" not in str(exc).lower():
-            raise
-        return dr.get_dos_from_task_id(task_id)          # fallback: validated/normalized id
-
-
 def _dos_object(mpr, mid):
-    """CompleteDos for one material, ROBUST to the emmet-core 0.86.x / server mismatch: the ES
-    'dos' summary omits the (required) per-entry task_id (so the stock get_dos_by_material_id
-    raises a ValidationError) AND moved the id to an AlphaID that validate_ids mis-normalizes.
-    The client is RAW mode (use_document_model=False) so the dos-summary query skips
-    validation; we take the DOS task_id from anywhere in the summary and download by its RAW
-    key. Returns None when the material has no DOS doc or no recoverable task_id."""
-    dr = mpr.materials.electronic_structure_dos          # DosRester (raw mode -> raw es_rester)
-    docs = dr.es_rester.search(material_ids=mid, fields=["dos"])
-    if not docs:
-        return None
-    doc0 = docs[0]
-    summary = doc0.get("dos") if isinstance(doc0, dict) else getattr(doc0, "dos", None)
-    task_id = _first_task_id(summary)
-    if not task_id:
-        return None
-    return _download_dos(dr, task_id)
+    """CompleteDos for one material, downloaded from MP's AWS open-data store, which keys
+    DOS objects by MATERIAL ID — `dos/<mid>.json.gz` (verified by listing the bucket). The
+    stock get_dos_by_material_id instead resolves a task_id and fetches dos/<task_id>.json.gz,
+    which 404s for everything (wrong key scheme + an AlphaID->numeric mangling on top). We go
+    straight to the material-id key. Returns a pymatgen CompleteDos, or None on a 404 (no
+    object for this material). The stored object is either the CompleteDos directly or wrapped
+    as {"data": dos, ...} — handle both."""
+    from mp_api.client.core.utils import load_json
+    dr = mpr.materials.electronic_structure_dos
+    # Let a 404 ("No object found") propagate: these materials passed the has-DOS prefilter,
+    # so an absent object means "DOS calc exists but its object isn't in open-data" -> the
+    # caller records it as no_object (distinct from no DOS calc at all).
+    res = dr._query_open_data(
+        bucket="materialsproject-parsed",
+        key=f"dos/{mid}.json.gz",
+        decoder=lambda x: load_json(x, deser=True))
+    obj = res[0][0] if (res and res[0]) else None
+    if isinstance(obj, dict) and "data" in obj:           # unwrap {"data": dos, ...}
+        obj = obj["data"]
+    return obj
 
 
 def diagnose_dos(api_key, mid):
-    """Print the RAW ES 'dos' summary for one material id and whether a task_id is
-    recoverable — to confirm the schema and the fix on a real failing material:
-        python main.py fetch-dos --index <any> --diagnose mp-11944"""
-    import json as _json
+    """Confirm the material-id DOS retrieval (`dos/<mid>.json.gz`) end-to-end on a real
+    material, plus a known-present key — so a green line means the full fetch will attach it:
+        python main.py fetch-dos --diagnose mp-11944"""
     from mp_api.client import MPRester
     with MPRester(api_key, use_document_model=False) as mpr:
-        dr = mpr.materials.electronic_structure_dos
-        # Collect every candidate DOS task_id we can reach, then test each against the
-        # object store — to find which (if any) source yields a real DOS for this material.
-        candidates = []                                  # [(source_label, task_id)]
-        docs = dr.es_rester.search(material_ids=mid, fields=["dos"])
-        summary = (docs[0].get("dos") if docs and isinstance(docs[0], dict) else None)
-        print(f"  {mid}: raw dos summary =\n{_json.dumps(summary, indent=2, default=str)[:1200]}")
-        top = _first_task_id(summary)
-        if top:
-            candidates.append(("dos-summary", top))
-        try:                                             # provenance — may name the real DOS calc
-            sdocs = mpr.materials.summary.search(material_ids=mid, fields=["origins"])
-            origins = ((sdocs[0].get("origins") if sdocs and isinstance(sdocs[0], dict) else None)
-                       or [])
-            print(f"  origins = {_json.dumps(origins, default=str)[:700]}")
-            for o in origins:
-                if isinstance(o, dict) and o.get("task_id"):
-                    candidates.append((f"origin:{o.get('name')}", str(o["task_id"])))
-        except Exception as exc:  # noqa: BLE001
-            print(f"  origins probe failed: {type(exc).__name__}: {str(exc)[:120]}")
-
-        if not candidates:
-            print("  -> no candidate task_id anywhere (settles no_dos).")
-            return
-
-        # Surface the REAL S3 error: _query_open_data collapses every botocore ClientError
-        # (AccessDenied / NoSuchKey / region / unsigned-access) into a generic 'No object
-        # found', so a bucket-access misconfig looks identical to a purged object. Probe the
-        # bucket directly and report the actual error code — the discriminator for ok=0.
-        from io import BytesIO
-        def _probe_s3(tid):
-            key = f"dos/{tid}.json.gz"
+        # Test the requested material AND a key the bucket listing showed exists, to separate
+        # "scheme works, this material just isn't in open-data" from "scheme broken".
+        for test_mid in (mid, "mp-1000000"):
+            key = f"dos/{test_mid}.json.gz"
             try:
-                dr.s3_client.download_fileobj("materialsproject-parsed", key, BytesIO())
-                return f"S3 OK (object exists at {key})"
+                cdos = _dos_object(mpr, test_mid)
+                if cdos is None:
+                    print(f"  {key}: object present but empty/unreadable")
+                    continue
+                grid = dos_to_grid(*complete_dos_total(cdos))
+                g = "None (degenerate)" if grid is None else f"[{len(grid)}] sum={float(grid.sum()):.3f}"
+                print(f"  {key}: OK type={type(cdos).__name__} grid={g}")
             except Exception as exc:  # noqa: BLE001
-                resp = getattr(exc, "response", None)
-                if isinstance(resp, dict):
-                    e = resp.get("Error", {})
-                    return f"S3 {e.get('Code', '?')}: {str(e.get('Message', ''))[:90]} [{key}]"
-                return f"S3 {type(exc).__name__}: {str(exc)[:90]} [{key}]"
-
-        def _probe(method, tid):
-            try:
-                grid = dos_to_grid(*complete_dos_total(method(tid)))
-                return (f"OK grid[{len(grid)}] sum={float(grid.sum()):.3f}"
-                        if grid is not None else "downloaded but degenerate")
-            except Exception as exc:  # noqa: BLE001
-                return f"FAILED {type(exc).__name__}: {str(exc)[:80]}"
-
-        print(f"  testing {len(candidates)} candidate task_id(s):")
-        for label, tid in candidates:
-            print(f"    [{label}] {tid}:")
-            print(f"        raw S3 probe -> {_probe_s3(tid)}")            # true botocore error code
-            print(f"        raw-key dl   -> {_probe(lambda t: _download_dos(dr, t), tid)}")
-
-        # 404 (not AccessDenied) means the bucket is reachable but the key scheme is wrong.
-        # LIST what actually exists so we can see the real DOS object key format / prefix.
-        print("  bucket reconnaissance (what keys actually exist):")
-        for prefix in ("dos/", "dos_", "electronic_structure/dos/", ""):
-            try:
-                resp = dr.s3_client.list_objects_v2(
-                    Bucket="materialsproject-parsed", Prefix=prefix, MaxKeys=6, Delimiter="/")
-                keys = [o["Key"] for o in resp.get("Contents", [])]
-                subdirs = [p["Prefix"] for p in resp.get("CommonPrefixes", [])]
-                print(f"    prefix {prefix!r}: keys={keys[:6]} subdirs={subdirs[:8]}")
-            except Exception as exc:  # noqa: BLE001
-                print(f"    prefix {prefix!r}: list failed {type(exc).__name__}: {str(exc)[:90]}")
-        print("  (the first real keys reveal the correct DOS object path; paste this back.)")
+                miss = "no object found" in str(exc).lower()
+                print(f"  {key}: {'404 (not in open-data)' if miss else 'FAILED ' + type(exc).__name__}"
+                      f"{'' if miss else ': ' + str(exc)[:120]}")
+        print("  (mp-1000000 OK confirms the scheme; if the requested mid is 404 it just isn't "
+              "mirrored. The full fetch attaches whatever IS present.)")
 
 
 def _has_dos_props(doc):
