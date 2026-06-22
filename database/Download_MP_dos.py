@@ -91,64 +91,163 @@ def _looks_missing(exc):
     return any(s in msg for s in ("404", "not found", "no electronic", "no dos", "no data"))
 
 
-def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3):
+def _has_dos_props(doc):
+    """True if a summary doc's has_props lists 'dos'. Tolerates the field being a list
+    of enums/strings or a bool-valued dict across mp_api/emmet versions."""
+    hp = getattr(doc, "has_props", None)
+    if hp is None:
+        return False
+    if isinstance(hp, dict):
+        return bool(hp.get("dos"))
+    try:
+        return any(str(getattr(x, "value", x)) == "dos" for x in hp)
+    except TypeError:
+        return False
+
+
+def _materials_with_dos(api_key, mids, chunk=1000):
+    """The subset of `mids` whose MP record actually HAS a computed DOS — found with bulk
+    summary queries (one call per ~1000 ids) instead of a full-DOS download per material.
+    DOS exists for a SUBSET of MP, so this lets the no-DOS majority be marked `dos_missing`
+    without ever downloading a (large) DOS object. Tries the server-side has_props filter
+    first; falls back to fetching has_props and filtering locally. Raises on total failure
+    so the caller can degrade to fetching everything in parallel."""
+    from mp_api.client import MPRester
+
+    have = set()
+    with MPRester(api_key) as mpr:
+        for i in range(0, len(mids), chunk):
+            ch = mids[i:i + chunk]
+            try:                                            # server-side filter (cheapest)
+                docs = mpr.materials.summary.search(
+                    material_ids=ch, has_props=["dos"], fields=["material_id"])
+                have.update(str(d.material_id) for d in docs)
+            except Exception:                               # noqa: BLE001 — older client / enum
+                docs = mpr.materials.summary.search(
+                    material_ids=ch, fields=["material_id", "has_props"])
+                have.update(str(d.material_id) for d in docs if _has_dos_props(d))
+    return have
+
+
+def _fetch_dos_grid(client_factory, mid, broaden_ev, retries):
+    """Fetch + resample ONE material's total DOS. Returns (grid_or_None, exc_or_None):
+    grid=None with exc=None means a terminal 'no DOS' (record the miss); exc set means it
+    exhausted retries on a transient error (leave un-marked, retried next run). Pure of any
+    file I/O so it is safe to run in a thread pool — the caller serializes the writes."""
+    import time
+    for attempt in range(retries):
+        try:
+            cdos = client_factory().get_dos_by_material_id(mid)
+            grid = (None if cdos is None
+                    else dos_to_grid(*complete_dos_total(cdos), broaden_ev=broaden_ev))
+            return grid, None
+        except Exception as exc:  # noqa: BLE001
+            if _looks_missing(exc):
+                return None, None                           # terminal: no DOS
+            if attempt == retries - 1:
+                return None, exc                            # transient, exhausted
+            time.sleep(2 ** attempt)                        # backoff + retry
+
+
+def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3, workers=8):
     """Attach graph["dos"] (resampled total DOS) to each relaxed MP graph the index points
     at, by material id. Resumable on BOTH a written dos AND a no_dos sentinel
-    (graph["dos_missing"]) — so a re-run doesn't re-query the ~majority of MP materials that
-    have no DOS. Transient API errors are retried with backoff and left un-marked (retried
-    next run); terminal-missing / degenerate DOS is recorded as no_dos. Per-kind tally."""
+    (graph["dos_missing"]) — so a re-run doesn't re-query materials already settled.
+
+    Two speedups over a naive per-material loop: (1) a BULK pre-filter (`_materials_with_dos`)
+    settles the no-DOS majority from cheap metadata queries, with NO full-DOS download; (2)
+    the remaining real DOS fetches run across a thread pool (`workers`) — the work is
+    network-latency-bound, so concurrency is a near-linear win. Writes stay serialized on the
+    main thread (atomic tmp+replace). Transient API errors retry with backoff and are left
+    un-marked; terminal-missing / degenerate DOS is recorded as no_dos. Per-kind tally."""
+    import threading
     import time
+    import concurrent.futures as cf
     import pandas as pd
     from mp_api.client import MPRester
 
     df = pd.read_pickle(index_path)
     counters = {k: 0 for k in ("streamed", "ok", "skip", "no_graph", "no_dos", "fail")}
     start = time.time()
-    with MPRester(_get_api_key()) as mpr:
-        for _, row in df.iterrows():
-            if limit and counters["streamed"] >= limit:
-                break
-            counters["streamed"] += 1
-            mid = str(row["id"]).replace(".cif", "")        # material id for the MP-API
-            gp = row["graph_path"]
-            if not os.path.exists(gp):
-                counters["no_graph"] += 1
-                continue
-            with open(gp) as f:
-                graph = json.load(f)
-            if "dos" in graph or graph.get("dos_missing"):  # resumable: hit OR known miss
-                counters["skip"] += 1
-                continue
-            grid, failed = None, False
-            for attempt in range(retries):
-                try:
-                    cdos = mpr.get_dos_by_material_id(mid)
-                    grid = (None if cdos is None
-                            else dos_to_grid(*complete_dos_total(cdos), broaden_ev=broaden_ev))
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    if _looks_missing(exc):
-                        break                               # terminal: no DOS -> grid stays None
-                    if attempt == retries - 1:
-                        failed = True
-                        counters["fail"] += 1
-                        print(f"  [fail] {mid}: {type(exc).__name__}: {str(exc)[:120]}", flush=True)
-                        break
-                    time.sleep(2 ** attempt)                 # transient: backoff + retry
-            if failed:
-                continue                                    # un-marked -> retried next run
-            if grid is None:                                # missing / degenerate -> sentinel
+
+    # 1) Worklist: the rows that still need a fetch (resumable skips + missing graphs).
+    work = []                                               # [(mid, graph_path), ...]
+    for _, row in df.iterrows():
+        if limit and counters["streamed"] >= limit:
+            break
+        counters["streamed"] += 1
+        gp = row["graph_path"]
+        if not os.path.exists(gp):
+            counters["no_graph"] += 1
+            continue
+        with open(gp) as f:
+            graph = json.load(f)
+        if "dos" in graph or graph.get("dos_missing"):      # resumable: hit OR known miss
+            counters["skip"] += 1
+            continue
+        work.append((str(row["id"]).replace(".cif", ""), gp))
+
+    api_key = _get_api_key()
+
+    # 2) Bulk pre-filter: which of these materials actually have a DOS? Mark the rest
+    #    dos_missing with no DOS download. Best-effort — degrade to fetching all on failure.
+    to_fetch = work
+    if work:
+        try:
+            have = _materials_with_dos(api_key, [m for m, _ in work])
+            to_fetch, no_dos_pre = [], []
+            for mid, gp in work:
+                (to_fetch if mid in have else no_dos_pre).append((mid, gp))
+            for _mid, gp in no_dos_pre:                     # settle misses, no API call
+                with open(gp) as f:
+                    graph = json.load(f)
                 graph["dos_missing"] = True
                 _write_graph(graph, gp)
                 counters["no_dos"] += 1
+            print(f"  pre-filter: {len(to_fetch)} have DOS, {len(no_dos_pre)} have none "
+                  f"(of {len(work)} to settle)", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [warn] DOS pre-filter unavailable ({type(exc).__name__}: "
+                  f"{str(exc)[:100]}); fetching all {len(work)} in parallel", flush=True)
+            to_fetch = work
+
+    # 3) Parallel DOS fetch (network-bound). Each worker thread gets its own MPRester;
+    #    results are consumed in order on this thread, which owns all the file writes.
+    tls = threading.local()
+
+    def client_factory():
+        c = getattr(tls, "mpr", None)
+        if c is None:
+            c = tls.mpr = MPRester(api_key)
+        return c
+
+    def task(item):
+        mid, gp = item
+        grid, exc = _fetch_dos_grid(client_factory, mid, broaden_ev, retries)
+        return gp, mid, grid, exc
+
+    done = 0
+    with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        for gp, mid, grid, exc in ex.map(task, to_fetch):
+            done += 1
+            if exc is not None:
+                counters["fail"] += 1
+                print(f"  [fail] {mid}: {type(exc).__name__}: {str(exc)[:120]}", flush=True)
+                continue
+            with open(gp) as f:
+                graph = json.load(f)
+            if grid is None:                                # missing / degenerate -> sentinel
+                graph["dos_missing"] = True
+                counters["no_dos"] += 1
             else:
                 graph["dos"] = grid.tolist()
-                _write_graph(graph, gp)
                 counters["ok"] += 1
-            if counters["streamed"] % 500 == 0:
-                rate = counters["streamed"] / max(time.time() - start, 1e-9)
-                print(f"  {counters['streamed']} processed ({rate:.1f}/s)  {counters}", flush=True)
-    print(f"DOS attach done: {counters}", flush=True)
+            _write_graph(graph, gp)
+            if done % 500 == 0:
+                rate = done / max(time.time() - start, 1e-9)
+                print(f"  {done}/{len(to_fetch)} fetched ({rate:.1f}/s)  {counters}", flush=True)
+
+    print(f"DOS attach done in {time.time() - start:.0f}s: {counters}", flush=True)
     print(f"  coverage: {counters['ok']} graphs gained DOS; {counters['no_dos']} had none "
           f"(electronic-structure calc absent — a SUBSET of MP, as expected).")
     return counters
