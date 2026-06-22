@@ -98,24 +98,30 @@ def _is_validation_error(exc):
 
 
 def _dos_object(mpr, mid):
-    """CompleteDos for one material, downloaded from MP's AWS open-data store, which keys
-    DOS objects by MATERIAL ID — `dos/<mid>.json.gz` (verified by listing the bucket). The
-    stock get_dos_by_material_id instead resolves a task_id and fetches dos/<task_id>.json.gz,
-    which 404s for everything (wrong key scheme + an AlphaID->numeric mangling on top). We go
-    straight to the material-id key. Returns a pymatgen CompleteDos, or None on a 404 (no
-    object for this material). The stored object is either the CompleteDos directly or wrapped
-    as {"data": dos, ...} — handle both."""
-    from mp_api.client.core.utils import load_json
+    """CompleteDos for one material, trying BOTH open-data key schemes MP mixes in dos/:
+    (1) the STOCK get_dos_by_material_id — ES summary -> task_id -> dos/<task_id>.json.gz;
+    this is the route that works for canonical materials (Silicon mp-149 etc.), the bulk of
+    a typical set. (2) the material-id key dos/<mid>.json.gz — the newer mp-1000000+ slice.
+    Benign (1) failures — the emmet schema drift (no total.1.task_id -> KeyError/ValidationError)
+    or a 404 — fall through to (2). Returns a CompleteDos, or raises 'No object found' (caller
+    -> no_object) when NEITHER scheme has an object. The stored object may be the CompleteDos
+    directly or wrapped as {"data": dos}."""
     dr = mpr.materials.electronic_structure_dos
-    # Let a 404 ("No object found") propagate: these materials passed the has-DOS prefilter,
-    # so an absent object means "DOS calc exists but its object isn't in open-data" -> the
-    # caller records it as no_object (distinct from no DOS calc at all).
+    try:                                                  # (1) stock task-id route
+        dos = mpr.get_dos_by_material_id(mid)
+        if dos is not None:
+            return dos
+    except Exception as exc:  # noqa: BLE001
+        if not (_is_validation_error(exc) or "no object found" in str(exc).lower()
+                or isinstance(exc, (KeyError, TypeError, IndexError))):
+            raise                                         # a real error (network/auth), not "try next"
+    from mp_api.client.core.utils import load_json        # (2) material-id key
     res = dr._query_open_data(
         bucket="materialsproject-parsed",
         key=f"dos/{mid}.json.gz",
         decoder=lambda x: load_json(x, deser=True))
     obj = res[0][0] if (res and res[0]) else None
-    if isinstance(obj, dict) and "data" in obj:           # unwrap {"data": dos, ...}
+    if isinstance(obj, dict) and "data" in obj:
         obj = obj["data"]
     return obj
 
