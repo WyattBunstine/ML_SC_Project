@@ -91,6 +91,67 @@ def _looks_missing(exc):
     return any(s in msg for s in ("404", "not found", "no electronic", "no dos", "no data"))
 
 
+def _is_validation_error(exc):
+    """A pydantic ValidationError from the MP client's document model — deterministic
+    (the server response doesn't match emmet-core's schema), so retrying never helps."""
+    return "validationerror" in type(exc).__name__.lower()
+
+
+def _first_task_id(obj):
+    """First non-empty `task_id` anywhere in a (raw) DOS summary dict. The summary nests
+    task_id under total/elemental/orbital per spin; ALL entries reference the SAME DOS calc,
+    so any one is the id we download by. Walking the raw dict (vs the stock
+    dos["total"]["1"]["task_id"]) survives the emmet-core/server schema drift where some
+    entries arrive without task_id (the cause of the ValidationError storm)."""
+    if isinstance(obj, dict):
+        tid = obj.get("task_id")
+        if isinstance(tid, str) and tid:
+            return tid
+        for v in obj.values():
+            r = _first_task_id(v)
+            if r:
+                return r
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            r = _first_task_id(v)
+            if r:
+                return r
+    return None
+
+
+def _dos_object(mpr, mid):
+    """CompleteDos for one material, ROBUST to the emmet-core 0.86.x / server mismatch where
+    the ES 'dos' summary omits the (required) task_id and the stock get_dos_by_material_id
+    raises a ValidationError. The client is built in RAW mode (use_document_model=False), so
+    the dos-summary query returns plain dicts with NO validation; we pull the DOS calc's
+    task_id from anywhere in the summary and download the object by id. Returns None when the
+    material has no DOS doc or no recoverable task_id."""
+    dr = mpr.materials.electronic_structure_dos          # DosRester (raw mode -> raw es_rester)
+    docs = dr.es_rester.search(material_ids=mid, fields=["dos"])
+    if not docs:
+        return None
+    doc0 = docs[0]
+    summary = doc0.get("dos") if isinstance(doc0, dict) else getattr(doc0, "dos", None)
+    task_id = _first_task_id(summary)
+    if not task_id:
+        return None
+    return dr.get_dos_from_task_id(task_id)
+
+
+def diagnose_dos(api_key, mid):
+    """Print the RAW ES 'dos' summary for one material id and whether a task_id is
+    recoverable — to confirm the schema and the fix on a real failing material:
+        python main.py fetch-dos --index <any> --diagnose mp-11944"""
+    import json as _json
+    from mp_api.client import MPRester
+    with MPRester(api_key, use_document_model=False) as mpr:
+        docs = mpr.materials.electronic_structure_dos.es_rester.search(
+            material_ids=mid, fields=["dos"])
+        summary = (docs[0].get("dos") if docs and isinstance(docs[0], dict) else None)
+    print(f"  {mid}: raw dos summary =\n{_json.dumps(summary, indent=2, default=str)[:2000]}")
+    print(f"  recovered task_id: {_first_task_id(summary)}")
+
+
 def _has_dos_props(doc):
     """True if a summary doc's has_props lists 'dos'. Tolerates the field being a list
     of enums/strings or a bool-valued dict across mp_api/emmet versions."""
@@ -137,15 +198,15 @@ def _fetch_dos_grid(client_factory, mid, broaden_ev, retries):
     import time
     for attempt in range(retries):
         try:
-            cdos = client_factory().get_dos_by_material_id(mid)
+            cdos = _dos_object(client_factory(), mid)
             grid = (None if cdos is None
                     else dos_to_grid(*complete_dos_total(cdos), broaden_ev=broaden_ev))
             return grid, None
         except Exception as exc:  # noqa: BLE001
             if _looks_missing(exc):
                 return None, None                           # terminal: no DOS
-            if attempt == retries - 1:
-                return None, exc                            # transient, exhausted
+            if _is_validation_error(exc) or attempt == retries - 1:
+                return None, exc                            # terminal parse / transient exhausted
             time.sleep(2 ** attempt)                        # backoff + retry
 
 
@@ -218,7 +279,9 @@ def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3, work
     def client_factory():
         c = getattr(tls, "mpr", None)
         if c is None:
-            c = tls.mpr = MPRester(api_key)
+            # RAW mode: the DOS-summary query must skip the document-model validation
+            # that the emmet-core/server task_id mismatch trips over (see _dos_object).
+            c = tls.mpr = MPRester(api_key, use_document_model=False)
         return c
 
     def task(item):
