@@ -211,7 +211,8 @@ def _fetch_dos_grid(client_factory, mid, broaden_ev, retries):
             time.sleep(2 ** attempt)                        # transient: backoff + retry
 
 
-def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3, workers=8):
+def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3, workers=8,
+                         retry_no_object=False):
     """Attach graph["dos"] (resampled total DOS) to each relaxed MP graph the index points
     at, by material id. Resumable on BOTH a written dos AND a no_dos sentinel
     (graph["dos_missing"]) — so a re-run doesn't re-query materials already settled.
@@ -245,9 +246,20 @@ def fetch_and_attach_dos(index_path, broaden_ev=0.1, limit=None, retries=3, work
             continue
         with open(gp) as f:
             graph = json.load(f)
-        if "dos" in graph or graph.get("dos_missing"):      # resumable: hit OR known miss
+        if "dos" in graph:                                  # already attached -> skip
             counters["skip"] += 1
             continue
+        if graph.get("dos_missing"):
+            # `--retry-no-object` clears the no_object sentinels a PRIOR (wrong-key-scheme)
+            # run wrote, so the corrected material-id fetch re-attempts them. Genuine no_dos
+            # (no DOS calc per has_props) stays settled.
+            if retry_no_object and graph.get("dos_skip_reason") == "no_object":
+                graph.pop("dos_missing", None)
+                graph.pop("dos_skip_reason", None)
+                _write_graph(graph, gp)
+            else:
+                counters["skip"] += 1
+                continue
         work.append((str(row["id"]).replace(".cif", ""), gp))
 
     api_key = _get_api_key()

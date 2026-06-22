@@ -176,7 +176,7 @@ def cmd_fetch_dos(args):
           f"broaden={args.broaden} eV, {args.workers} workers) -> graph['dos']. "
           f"DOS covers a SUBSET of MP.")
     fetch_and_attach_dos(args.index, broaden_ev=args.broaden, limit=args.limit,
-                         workers=args.workers)
+                         workers=args.workers, retry_no_object=args.retry_no_object)
     print("Done. pack-dataset on this index -> the DOS pack; verify has_dos=true.")
 
 
@@ -643,8 +643,12 @@ def build_parser():
                     help="Gaussian broadening sigma in eV (default 0.1; 0 = none)")
     fd.add_argument("--limit", type=int, default=None, help="only process the first N materials")
     fd.add_argument("--diagnose", metavar="MID", default=None,
-                    help="dump one material's RAW dos summary + recovered task_id and exit "
-                         "(debug the emmet-core/server schema; no index needed)")
+                    help="test DOS retrieval for one material id (dos/<mid>.json.gz) end-to-end "
+                         "and exit; no index needed")
+    fd.add_argument("--retry-no-object", action="store_true",
+                    help="re-attempt materials a prior run settled as 'no_object' (clears those "
+                         "dos_missing sentinels) — use after a retrieval fix; genuine no-DOS "
+                         "materials stay settled")
     fd.add_argument("--workers", type=int, default=8,
                     help="parallel DOS-fetch threads (default 8; the fetch is network-bound). "
                          "A bulk has-DOS pre-filter runs first so the no-DOS majority is "
