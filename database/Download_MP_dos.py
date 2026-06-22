@@ -228,8 +228,20 @@ def diagnose_dos(api_key, mid):
             print(f"    [{label}] {tid}:")
             print(f"        raw S3 probe -> {_probe_s3(tid)}")            # true botocore error code
             print(f"        raw-key dl   -> {_probe(lambda t: _download_dos(dr, t), tid)}")
-        print("  (S3 'NoSuchKey' = object truly purged; 'AccessDenied'/'InvalidAccessKeyId'/"
-              "region/signature = a bucket-access misconfig -> the real ok=0 cause. Paste back.)")
+
+        # 404 (not AccessDenied) means the bucket is reachable but the key scheme is wrong.
+        # LIST what actually exists so we can see the real DOS object key format / prefix.
+        print("  bucket reconnaissance (what keys actually exist):")
+        for prefix in ("dos/", "dos_", "electronic_structure/dos/", ""):
+            try:
+                resp = dr.s3_client.list_objects_v2(
+                    Bucket="materialsproject-parsed", Prefix=prefix, MaxKeys=6, Delimiter="/")
+                keys = [o["Key"] for o in resp.get("Contents", [])]
+                subdirs = [p["Prefix"] for p in resp.get("CommonPrefixes", [])]
+                print(f"    prefix {prefix!r}: keys={keys[:6]} subdirs={subdirs[:8]}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"    prefix {prefix!r}: list failed {type(exc).__name__}: {str(exc)[:90]}")
+        print("  (the first real keys reveal the correct DOS object path; paste this back.)")
 
 
 def _has_dos_props(doc):
