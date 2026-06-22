@@ -76,8 +76,15 @@ class _ESRester:
 class _DosRester:
     es_rester = _ESRester()
 
-    def get_dos_from_task_id(self, tid):
+    def _query_open_data(self, bucket=None, key=None, decoder=None):
+        tid = key.split("/")[-1].replace(".json.gz", "")      # raw-key download path
         FakeMPRester.dos_obj_calls.append(tid)
+        if tid in {"mp-1-dos", "mp-3-dos"}:
+            return ([{"data": _CDos()}], 1)
+        raise RuntimeError(f"No object found: s3://materialsproject-parsed/dos/{tid}.json.gz")
+
+    def get_dos_from_task_id(self, tid):                       # validated fallback
+        FakeMPRester.dos_obj_calls.append("validated:" + tid)
         return _CDos()
 
 
