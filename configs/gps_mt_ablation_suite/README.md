@@ -10,18 +10,23 @@ probed at superconductor T_c. The metric that matters is **T_c transfer**, not p
 | `01_energy_only`    | energy                                  | `packed_v4` |
 | `02_forces_stress`  | + forces, stress (conservative autograd)| `packed_v4` |
 | `03_magmom_bandgap` | + magmom, bandgap                       | `packed_v4` |
-| `04_dos_full` *(PARKED)* | + DOS                              | `packed_v4` ∪ `dos_pack` |
+| `04_dos_full` *(REVIVED)* | + DOS                             | `packed_v4` ∪ `dos_pack` |
 
 `forces`/`stress` are `−∂E/∂cart` / `∂E/∂strain` (conservative autograd, not direct heads).
 `bandgap` is the per-structure electronic-structure signal that co-trains in rung 03.
 
-> **`04_dos_full` is PARKED (2026-06-22).** DOS is a per-structure total spectrum (per-atom
+> **`04_dos_full` is REVIVED (2026-06-24).** DOS is a per-structure total spectrum (per-atom
 > Softplus head → `_segment_sum`) trained over the masked union of `packed_v4` and a relaxed-MP
-> DOS pack. But MP's open-data DOS objects (`s3://materialsproject-parsed/dos/<mid>.json.gz`)
-> are only mirrored for **278** materials of this `theoretical=False` (experimental/ICSD) set —
-> too few to train a DOS head. The code path (DOS pack, `ConcatMTDataset` union, dos head) is
-> built and tested; revive `04` only with a DOS-rich material set (e.g. theoretical materials).
-> The live ladder is **01 → 02 → 03**; `bandgap` carries the electronic leg in the interim.
+> DOS pack. The earlier 278-coverage "park" was a self-inflicted bug — `_dos_object` had been
+> switched to a material-id-ONLY S3 key, which 404'd every canonical material. With the stock
+> `get_dos_by_material_id` (task-id) route restored as the primary path (commits `084017b`,
+> `02a2ed4`), a re-fetch now covers **31,403 / 49,280** relaxed-MP materials — ample to train a
+> DOS head. The DOS pack (`database/datafiles/MP/dos_pack`, `has_dos=true`, `has_positions=true`,
+> exact `has_to_jimage=true`) is built locally and shipped with `deploy.sh sync-dos-pack`.
+> Build it: `python main.py fetch-dos --index database/datafiles/MP_Energy/MP_Energy_V4.pickle`
+> then `python main.py pack-dataset --index database/datafiles/MP_Energy/MP_Energy_V4.pickle
+> --out database/datafiles/MP/dos_pack`. The DOS pack carries no forces/magmom/stress (relaxed
+> structures) — those are NaN-masked; energy + DOS co-train on it.
 
 ## Run protocol (per rung)
 
