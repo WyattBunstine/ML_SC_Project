@@ -1,61 +1,57 @@
 {
     "architecture": "gps",
-    "index_path": "${ML_SC_DATA}/MPtrj/packed_v4",
+    "index_path": "${ML_SC_DATA}/MPtrj/packed_v1",
     "target_column": "formation_energy_per_atom",
     "max_num_nbr": 14,
     "max_num_poly_nbr": 64,
-    "atom_feat_len": 128,
-    "n_conv": 4,
-    "h_feat_len": 128,
+    "atom_feat_len": 64,
+    "n_conv": 3,
+    "h_feat_len": 64,
     "n_hidden": 2,
     "use_poly_edges": true,
     "atom_pooling": "mean",
     "set_transformer_heads": 8,
-    "gps_global": false,
-    "gps_global_heads": 8,
+    "gps_global": true,
+    "gps_global_heads": 4,
     "gps_ffn_mult": 2,
     "local_transformer": true,
     "per_atom_head": true,
-    "use_bond_edges": true,
-    "shell_aggregation": "attention",
-    "use_angle_bias": true,
     "task": "regression",
     "target_transform": "none",
     "normalize_features": true,
     "split_by": "material",
-    "split_seed": 123,
-    "val_ratio": 0.05,
-    "test_ratio": 0.05,
     "batch_size": 512,
     "size_grouped_batches": true,
-    "max_atoms_per_batch": 4000,
+    "max_atoms_per_batch": 12000,
     "size_pool_factor": 20,
-    "amp": false,
+    "amp": true,
     "num_workers": 20,
     "prefetch_factor": 4,
+    "val_ratio": 0.05,
+    "test_ratio": 0.05,
     "optim": "AdamW",
     "learning_rate": 0.0003,
     "warmup_epochs": 3,
     "grad_clip": 0.5,
-    "weight_decay": 1e-05,
+    "dropout": 0.15,
+    "weight_decay": 0.01,
     "lr_milestones": [
         30,
-        50
+        50,
+        70
     ],
-    "epochs": 60,
+
+
+    "swa": true,
+    "swa_start": 80,
+    "swa_lr": 1e-05,
+    "epochs": 100,
     "print_split": 200,
     "out_file": "result",
     "slurm": {
         "cpus": 24,
         "mem": "96G",
-        "time": "24:00:00"
+        "time": "72:00:00"
     },
-    "run_tag": "gps_mt_01_energy_only",
-    "tasks": [
-        "energy"
-    ],
-    "loss_weights": {
-        "energy": 1.0
-    },
-    "n_energy": 256
+    "run_tag": "gps_eform_reg"
 }
