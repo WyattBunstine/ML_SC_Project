@@ -194,7 +194,7 @@ def cmd_pack_dataset(args):
     if args.limit:
         print(f"  (limited to first {args.limit} samples)")
     pack_dataset(args.index, args.out, n_workers=args.workers,
-                 limit=args.limit)
+                 limit=args.limit, derive_mp_id=args.derive_mp_id)
     print("Done.")
 
 
@@ -675,6 +675,11 @@ def build_parser():
                     help="extraction worker processes (default: os.cpu_count())")
     pk.add_argument("--limit", type=int, default=None,
                     help="only pack the first N samples (for testing)")
+    pk.add_argument("--derive-mp-id", action="store_true",
+                    help="synthesize an mp_id column from id (minus a trailing .cif) when the "
+                         "index lacks one, so the pack supports a material-level split. Use for "
+                         "single-structure-per-material packs that join a material-split union "
+                         "(the DOS pack / rung 04); leave OFF for frame-split datasets.")
     pk.set_defaults(func=cmd_pack_dataset)
 
     em = sub.add_parser(

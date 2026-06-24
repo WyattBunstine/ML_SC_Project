@@ -76,12 +76,21 @@ def _extract_one(graph_path):
         return None, f"{type(exc).__name__}: {exc}"
 
 
-def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
+def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
+                 derive_mp_id=False):
     """Pack every graph referenced by an index pickle into ``out_dir``.
 
     Extraction parallelizes across a process pool; the writer appends to the
     field files sequentially in index order (offsets must be deterministic).
     Samples whose graph fails to read are skipped and logged to failed.txt.
+
+    ``derive_mp_id`` (opt-in): when the index has no ``mp_id`` column, synthesize
+    one from ``id`` (stripping a trailing ``.cif``) so the pack supports a
+    material-level split. For single-structure-per-material datasets (relaxed MP,
+    e.g. the DOS pack) where ``id`` *is* the material id — needed when such a pack
+    joins a material-split masked union (rung 04). OFF by default so it never
+    silently flips the split of a dataset that intends a frame split (the
+    MP_Energy eform benchmark) — those keep groups=None.
     """
     import multiprocessing as mp
 
@@ -165,6 +174,11 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16):
         meta["stress"] = list(np.stack(stresses))
     if doses:
         meta["dos"] = list(np.stack(doses))
+    # Opt-in material-split key for single-structure-per-material packs (the DOS
+    # pack): id IS the material id, so mp_id = id minus a trailing .cif. Only when
+    # the index didn't already carry mp_id (never clobber an explicit one).
+    if derive_mp_id and "mp_id" not in meta.columns and "id" in meta.columns:
+        meta["mp_id"] = meta["id"].astype(str).str.replace(r"\.cif$", "", regex=True)
     meta.to_pickle(os.path.join(out_dir, "meta.pickle"))
 
     header = {
