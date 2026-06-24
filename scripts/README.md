@@ -22,7 +22,10 @@ never touched.
 | `sync-data` | once | rsyncs `atom_init.json` + the MP / MP_Energy `graphs_v4/` dirs and index pickles. Resumable (`--partial`); re-running only sends the delta. MPtrj is deliberately NOT synced — it is cluster-built (see below). |
 | `run <config>` | per run | validates the config locally, picks the trainer from the config (MPNN vs baseline CGCNN), rsyncs code + configs, generates an `sbatch` script under remote `jobs/`, and submits it. |
 | `build-mptrj` | once (+ after a graph-format change) | CPU job (partition `parallel`, full node): streams the 12 GB MPtrj JSON and builds ~1.6M cgv4 graphs onto **scratch**. Resumable; also ensures `ijson`/`tess` in the env and ships the builder + source JSON first. |
-| `pack-mptrj` | after build-mptrj (+ after any graph rebuild) | CPU job: packs the MPtrj graphs into the columnar training format (`models/MPNN/MPNNPack.py`) on scratch. Training configs point `index_path` at the pack directory. |
+| `pack-mptrj [out_dir]` | after build-mptrj (+ after any graph rebuild) | CPU job: packs the MPtrj graphs into the columnar training format (`models/MPNN/MPNNPack.py`) on scratch. Training configs point `index_path` at the pack directory. Default writes `packed_v1`; pass `$SCRATCH_MPTRJ_PACK_V2/_V4` after the augment steps. |
+| `augment-positions` | once (for the distance bias / forces) | CPU job: backfills `frac_coords` + `lattice` onto the MPtrj graphs from the source structures (no Voronoi rebuild), then re-pack → `packed_v2`. |
+| `augment-physics` | once (for multitask) | CPU job: attaches per-frame `force`/`magmom`/`stress` (+ bandgap) onto the rebuilt MPtrj graphs, then re-pack → `packed_v4`. Pairs with a `build-mptrj` REBUILD that restores exact per-edge `to_jimage`. |
+| `sync-dos-pack` | once (for rung 04) | rsyncs the **locally-built** DOS pack (`database/datafiles/MP/dos_pack`) to scratch `MP/dos_pack` — the relaxed-MP DOS union member for the multitask rung 04. Guards on `has_dos=true`; build it first with `main.py fetch-dos` + `pack-dataset`. |
 | `sync-code` | (auto) | pushes just code + configs. Called automatically by `run`; rarely needed directly. |
 | `status` | as needed | `squeue` for your jobs. |
 | `logs <jobid>` | as needed | `tail -f` the live SLURM stdout (`logs/<jobname>-<jobid>.out`). |

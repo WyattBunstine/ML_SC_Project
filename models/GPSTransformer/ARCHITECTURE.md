@@ -2,9 +2,11 @@
 
 **DESIGN DRAFT + BUILD LOG.** This document specifies the full architecture;
 Increment 1 — the local/global encoder + energy regression of §4–§6 — is
-**implemented** (see the build log in §10), while the multi-task heads (§9),
-position-differentiable forces (§7/§9), and the register/global-token coupling
-(§5.1) remain design ahead of implementation. Companion docs: `../../claude.md`
+**implemented** (see the build log in §10), as are the multi-task heads (§9) and
+position-differentiable conservative-autograd forces/stress (§7/§9) — built in the
+multi-task increment (branch `gps-tier2`, 2026-06-18). Only the register/global-token
+coupling (§5.1) and the ECoN-prior logits remain design ahead of implementation.
+Companion docs: `../../claude.md`
 (research roadmap — this is "our encoder" in Phase 2), `../MPNN/ARCHITECTURE.md`
 (the chemically-motivated featurization and the validated message-passing pieces
 this model reuses), `../head/` (the small T_c head this model feeds).
@@ -237,12 +239,16 @@ tunable option). With `local_transformer=False` only the global FFN is present.
   atom from being washed out by averaging embeddings before the nonlinear head
   (`per_atom_head=false` restores the older `mean`/`mean_max`-pool-then-head).
   Register-token / `g^L`-conditioned pooling remains deferred. **Forces = `−∂E/∂x`
-  via autograd** still pending the positions-in-forward increment (§1/§9).
+  and stress = `∂E/∂strain` via autograd are implemented** (the positions-in-forward
+  increment landed — §7/§9): the energy is differentiated through an in-forward
+  Cartesian leaf (the differentiable column-replacement geometry).
 - **Per-atom magnetic-moment head:** `h^L → scalar |m_i|` (collinear), the MPtrj
-  magmom target (§9).
-- **Per-atom electronic head:** `h^L →` site-projected `N_i(E_F)` (and optionally
-  a few PDOS-window values around E_F), the MP-DOS target (§9). Bandgap (a free
-  MPtrj per-frame scalar) is an optional cheap auxiliary.
+  magmom target (§9) — built.
+- **Per-atom electronic head:** `h^L →` a per-atom Softplus DOS contribution, summed
+  (`_segment_sum`) into the per-structure **total DOS** — the full 256-bin E_F-aligned
+  spectrum over [-10,+5] eV, the MP-DOS target (§9). *(Built as the full spectrum, not
+  the site `N_i(E_F)`/PDOS-window reduction once sketched in §9.4.)* **Bandgap** (a free
+  per-frame scalar) is a built co-training auxiliary head.
 - **Coupling outputs (derived, not separately supervised):** because every target
   above is a position-differentiable function, the transfer head can request
   `∂N_i(E_F)/∂x` (deformation-potential proxy) and `∂m_i/∂x` (spin-lattice
@@ -308,9 +314,10 @@ between them are only partially supervised — see below.)
 | bandgap (optional aux) | electronic | MPtrj per-frame | free, off-equilibrium scalar |
 
 Key data facts established 2026-06-15: MPtrj frames carry `force`, `stress`,
-`magmom`, **and** `bandgap` — our current extractor (`database/Extract_MPtrj.py`)
-deliberately drops all but energy, so **re-extracting force + magmom (+ bandgap)
-is the first data task.** Forces and magmom are thus *off-equilibrium* (good — the
+`magmom`, **and** `bandgap`. The extractor (`database/Extract_MPtrj.py`) once dropped
+all but energy; that re-extraction is **DONE** — `packed_v4` now carries
+force/magmom/stress + a bandgap index column (and exact per-edge `to_jimage`).
+Forces and magmom are thus *off-equilibrium* (good — the
 coupling derivatives ∂(·)/∂x are meaningful across configurations). DOS is the odd
 one out: MP has it only for relaxed ground states, so the electronic channel is
 **equilibrium-only** (see the coupling caveat in §9.4).
@@ -357,8 +364,10 @@ Jacobian/VJP operations; restrict to on-site / nearest-neighbor blocks in practi
   reliable (DFT+U/functional-dependent) for exactly the correlated systems
   (cuprates, heavy-fermion) that matter most — still strictly additive vs. a
   force-only encoder, just not the full story.
-- **DOS target shaping:** predict N(E_F) / a narrow PDOS window around E_F, not
-  the whole DOS(E) spectrum (capacity should sit where SC physics is).
+- **DOS target shaping (decision reversed at build time):** the implemented target is
+  the **whole 256-bin DOS(E) spectrum** on a fixed E_F-aligned grid ([-10,+5] eV), not
+  the N(E_F)/narrow-PDOS-window reduction once preferred here — it is what
+  `Download_MP_dos.py` resamples and the per-atom Softplus head reconstructs.
 - **Ragged multi-task labels + loss balancing:** train on the *union* of MPtrj
   (force+magmom) and MP-static (DOS), masking absent targets per sample; the
   per-target scale/noise differences make loss weighting (or gradient-surgery /
@@ -437,33 +446,54 @@ from MPNN) so GPS owns its model end-to-end; plus `WithinCrystalAttention`,
     before any data-layer change.
 - `gps_main.py` — thin trainer entry: builds the model, drives `common`'s loaders
   + `run_regression`. CLI: `python main.py train-gps configs/gps/gps_eform.json`.
+  **Update (2026-06-18): Increment 3 — multi-task physics pretraining (branch
+  `gps-tier2`).** All co-trained at once over a masked union, then the encoder is
+  frozen for the T_c probe:
+  - **Conservative autograd forces/stress** — `−∂E/∂cart` and `∂E/∂strain` via a
+    differentiable **column-replacement geometry** (recompute bond-length /
+    length-over-ΣR / angle-cos from a Cartesian leaf using exact per-edge `to_jimage`;
+    topology/Voronoi/chemistry held fixed). fp32 force path (bf16 ruins derivatives);
+    the dist-bias is detached from the force graph to bound double-backward memory.
+  - **Multi-task heads** live inside `GPSCrystalNet` (no separate wrapper): per-atom
+    magmom, per-structure bandgap, per-structure total DOS (per-atom Softplus →
+    `_segment_sum`, 256-bin E_F-aligned spectrum). `tasks=None` keeps the single-scalar
+    path bit-identical.
+  - **`run_multitask`** in `common/train.py` (additive; `run_regression` untouched):
+    builds the `cart`/`strain` leaves per batch, std-normalized masked weighted loss,
+    per-step NaN abort. `gps_main` branches on the config `tasks` list.
+  - **Masked-union `ConcatMTDataset`** (`common/data.py`): `packed_v4` (MPtrj:
+    energy/forces/stress/magmom/bandgap) ∪ the DOS pack (relaxed MP: dos), absent
+    targets NaN-masked per sample. Material ids dedup across packs (no split leakage).
+  - **Transfer**: `model.encode()` (per-atom `h` with `cart=None`, static, no autograd)
+    + `models/head/embed_gps.py` / `main.py embed-gps` export per-structure `.npy` in
+    the embed-mace layout. `GPSCrystalNet.from_args` is the single arch-spec source
+    (gps_main + embed_gps build through it).
+  - Configs: `configs/gps/gps_multitask.json` (full union) + the **signal** ablation
+    ladder `configs/gps_mt_ablation_suite/01–04` (energy → +forces/stress →
+    +magmom/bandgap → +DOS), distinct from the *architecture* ladder above.
+  - Gates: `scripts/verify_autograd_forces.py`, `verify_multitask_train.py`,
+    `verify_union_masking.py` (plus the existing `smoke_dataset.py`).
 
 **Still to write (later increments), in build order:**
 - **register tokens** + **global→local query conditioning** (the `g` coupling) in
   `GPSBlock` (§5.1, §11).
 - **ECoN-prior logits** on the local attention (§5.1).
-- **multi-task heads**: per-atom magmom + N(E_F), and a `GPSMultiTask` wrapper;
-  needs a multi-task loss path (the shared `run_regression` is single-target, so
-  add `run_multitask` to `common/train.py`).
-- **position-differentiable forces**: positions/cell into the batch + in-model
-  differentiable geometry (§7, §9) — the largest item; gated behind the cheap
-  pre-tests (§13).
-- `embed.py` (or `--encoder gps` on the embed entrypoint) to write frozen per-atom
-  embeddings for transfer.
 
-**New data work (prerequisite for the multi-task increment, §9.1):**
-- **positions (frac_coords + lattice) — DONE for the distance bias (2026-06-17).**
-  `_compact_v4_graph` had been DROPPING them at build time, so packed_v1 carries no
-  geometry. Regenerated WITHOUT a Voronoi rebuild: `deploy.sh augment-positions`
-  backfills them onto existing graphs from the source MPtrj structures (atom-order
-  verified by Z) → `deploy.sh pack-mptrj <SCRATCH>/MPtrj/packed_v2`. The pack now
-  stores `frac_coords` (atom-aligned) + `lattice` (meta col) + `has_positions`;
-  legacy packs read as zeros. `use_dist_bias`/rung 08 train on `packed_v2`. The same
-  positions are the prerequisite for forces (§7/§9) — bundle that increment with this.
-- extend `database/Extract_MPtrj.py` to keep `force` + `magmom` (+ `bandgap`) —
-  currently dropped — and carry them through the packed store.
-- a Materials-Project DOS pull (site-projected N(E_F), via pymatgen) joined to the
-  pretraining structures; optional JARVIS-DFT/AFLOW fallback (§9.6).
+**Data work — DONE:**
+- **positions (frac_coords + lattice), 2026-06-17.** `_compact_v4_graph` had been
+  DROPPING them at build time. Regenerated WITHOUT a Voronoi rebuild:
+  `deploy.sh augment-positions` backfills them from the source MPtrj structures
+  (atom-order verified by Z) → re-pack. `use_dist_bias`/rung 08 train on `packed_v2`.
+- **MPtrj physics + exact PBC images → `packed_v4`.** `Extract_MPtrj.py` now keeps
+  `force`/`magmom`/`stress` (+ `bandgap` index); a full MPtrj REBUILD restores the
+  builder's exact `edge["to_jimage"]` (`deploy.sh build-mptrj` → `augment-physics` →
+  `pack-mptrj $SCRATCH_MPTRJ_PACK_V4`). The to_jimage *recompute* was proven
+  ambiguous for multi-image bonds, hence the rebuild.
+- **Materials-Project DOS pull → the DOS pack.** `database/Download_MP_dos.py` /
+  `main.py fetch-dos` attaches the resampled **full** DOS spectrum (not site `N(E_F)`)
+  by material id; `pack-dataset` → `database/datafiles/MP/dos_pack`
+  (`has_dos`/`has_positions`/`has_to_jimage` true), shipped by `deploy.sh sync-dos-pack`.
+  Coverage 31,403/49,280 relaxed-MP materials. (JARVIS-DFT/AFLOW remain §9.6 fallbacks.)
 
 **Integration DONE (2026-06-16):** `scripts/deploy.sh` ships `models/common/` +
 `models/GPSTransformer/`; `main.py train-gps` runs `gps_main.py`; GPS has a

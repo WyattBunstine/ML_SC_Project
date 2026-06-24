@@ -371,6 +371,17 @@ bias on the global attention, and an 8-rung complexity ablation ladder
 formation energy. The positions data the distance bias needs — also the Phase-4
 forces prerequisite — is regenerated without a Voronoi rebuild via
 `deploy.sh augment-positions` → `packed_v2`. Current build state: ARCHITECTURE.md §10.
+**Update (2026-06-18→24): the multi-task physics pretraining is BUILT and running,
+pulling Phase 3's electronic/magnetic heads and Phase 4's autograd forces forward into
+one combined pretrain (branch `gps-tier2`).** `GPSCrystalNet` now co-trains
+conservative-autograd forces (`−∂E/∂cart`) + stress + per-atom magmom + per-structure
+bandgap + per-structure total DOS (256-bin spectrum) over a masked union of `packed_v4`
+(MPtrj) and a relaxed-MP DOS pack (`run_multitask` in `common/train.py`;
+`model.encode()`/`main.py embed-gps` for the frozen transfer export). The **signal**
+ablation ladder `configs/gps_mt_ablation_suite/01–04` (energy → +forces/stress →
++magmom/bandgap → +DOS) is the multitask one running now — distinct from the
+architecture ladder above; rung 04's DOS was revived 2026-06-24 (MP coverage
+31,403/49,280). See ARCHITECTURE.md §9–§10.
 SuperCon side: 3DSC family labels (cuprates/Fe-based/heavy-fermion/…) for
 family-resolved evaluation; ordered-compound subsets to control the
 doping-representation problem. Deliverable: the conventional/unconventional
@@ -383,14 +394,23 @@ doping), and family-correlated DFT quality (PBE worst for correlated oxides).
 Intermediate fine-tune on *computed* electron-phonon datasets before the empirical
 DB: Marques-group high-throughput λ/ω_log (~7k), JARVIS-EPC (~1k), BETE-NET α²F
 (~800). A backbone+head that predicts λ and ω_log well should nail conventional
-SuperCon entries via Allen-Dynes — a direct, clean test of hypothesis 1. Add
-**electronic auxiliaries** as multi-task heads (MP DOS@E_F, band gap, metal/
-insulator) to supply the electronic numerator of λ. Add **per-site DFT magmoms**
-as node features (old #3 — cheapest real gap for unconventional SC; caveat: DFT
-moments least reliable exactly for correlated systems; static moment is a coarse
-proxy for dynamic spin fluctuations).
+SuperCon entries via Allen-Dynes — a direct, clean test of hypothesis 1. The
+**electronic + magnetic auxiliaries are no longer future here:** per-structure
+**band gap** and **per-structure total DOS** (the full 256-bin spectrum, not just
+DOS@E_F) and per-atom **magmom** are BUILT multi-task heads co-training now
+(2026-06-18; rungs 03–04 of the signal ladder) — magmom as a per-atom head *target*,
+not a node feature (old #3). Caveat unchanged: DFT moments least reliable exactly for
+correlated systems; static moment is a coarse proxy for dynamic spin fluctuations. The
+*computed* e-ph curriculum (λ/ω_log from Marques/JARVIS-EPC/BETE-NET) is the
+genuinely-future Phase-3 step.
 
 ### Phase 4 — own the backbone (Tier-1 differentiable rework)
+**STATUS (2026-06-18): the core is BUILT.** Conservative autograd forces `−∂E/∂cart` +
+stress `∂E/∂strain` are implemented in `GPSCrystalNet` via a differentiable
+column-replacement geometry (recompute bond-length/ratio/angle-cos from an in-forward
+Cartesian leaf using exact per-edge `to_jimage`; topology/Voronoi/chemistry held fixed),
+and the model is force-training in the multi-task pretrain. Dihedral consumption and the
+Voronoi→fixed-topology demotion below remain; **Tier-2** (e3nn) stays out of scope.
 Key fact: forces need **position-differentiability, not internal equivariance** —
 the autograd gradient of an invariant energy is automatically equivariant
 (SchNet/ALIGNN-style). Move featurization in-model: positions + PBC image vectors
