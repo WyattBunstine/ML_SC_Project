@@ -13,6 +13,7 @@
 #   ./scripts/deploy.sh build-mptrj               # build MPtrj cgv4 graphs on the cluster (CPU job)
 #   ./scripts/deploy.sh augment-positions         # backfill frac_coords+lattice onto MPtrj graphs (CPU job)
 #   ./scripts/deploy.sh pack-mptrj [out_dir]      # pack graphs into the fast columnar training format
+#   ./scripts/deploy.sh sync-dos-pack             # rsync the LOCAL DOS pack (database/datafiles/MP/dos_pack) to scratch (rung 04 union member)
 #   ./scripts/deploy.sh status                    # squeue for your jobs
 #   ./scripts/deploy.sh logs <jobid>              # tail a running job's log
 #   ./scripts/deploy.sh fetch                     # rsync model_data/ + logs back here
@@ -48,6 +49,13 @@ SCRATCH_MPTRJ_PACK_V2="${SCRATCH_PATH}/ML_SC_Proj/MPtrj/packed_v2"
 # stress + bandgap index column — for multitask conservative-autograd pretraining. Built
 # after `deploy.sh augment-physics` + a re-pack. v1/v2 stay valid for older runs.
 SCRATCH_MPTRJ_PACK_V4="${SCRATCH_PATH}/ML_SC_Proj/MPtrj/packed_v4"
+# DOS pack: the relaxed-MP electronic-structure union member for the rung-04 multitask run
+# (per-structure total DOS on a fixed E_F-aligned grid + positions + exact to_jimage). Built
+# LOCALLY (`python main.py fetch-dos` then `pack-dataset` -> database/datafiles/MP/dos_pack,
+# self-contained columnar binary), then shipped here by `deploy.sh sync-dos-pack`. The
+# multitask config (gps_mt_ablation_suite/04_dos_full.json) lists this as index_path[1].
+SCRATCH_MP_DOS_PACK="${SCRATCH_PATH}/ML_SC_Proj/MP/dos_pack"
+LOCAL_MP_DOS_PACK="database/datafiles/MP/dos_pack"
 
 # --- SLURM resource request (Rockfish-specific — verify against your allocation) ---
 SLURM_PARTITION="a100"                   # Rockfish GPU partition (a100 nodes)
@@ -176,6 +184,33 @@ sync_data() {
     # would carry local paths and clobber the cluster one anyway).
 
     echo ">> Dataset sync complete."
+}
+
+# ---------------------------------------------------------------------------
+# Ship the LOCAL DOS pack to scratch (the rung-04 masked-union member). The pack
+# is a self-contained columnar store (binary field files + meta.pickle +
+# pack_header.json), so it carries no graph paths and is portable as-is — no
+# cluster rebuild and no re-sync of the (changed) MP_Energy graph JSONs needed.
+# Built locally by `python main.py fetch-dos` + `pack-dataset` (see
+# database/Download_MP_dos.py). Resumable/idempotent: rsync skips unchanged files.
+# ---------------------------------------------------------------------------
+sync_dos_pack() {
+    if [ ! -f "${LOCAL_MP_DOS_PACK}/pack_header.json" ]; then
+        echo "ERROR: no DOS pack at ${LOCAL_MP_DOS_PACK} (missing pack_header.json)." >&2
+        echo "  Build it first: python main.py fetch-dos --index database/datafiles/MP_Energy/MP_Energy_V4.pickle" >&2
+        echo "                  python main.py pack-dataset --index database/datafiles/MP_Energy/MP_Energy_V4.pickle --out ${LOCAL_MP_DOS_PACK}" >&2
+        exit 1
+    fi
+    # Guard against shipping a pack with no DOS labels (e.g. a fetch that never ran).
+    if ! grep -q '"has_dos": *true' "${LOCAL_MP_DOS_PACK}/pack_header.json"; then
+        echo "ERROR: ${LOCAL_MP_DOS_PACK}/pack_header.json has has_dos != true — fetch-dos before packing." >&2
+        exit 1
+    fi
+    echo ">> Syncing DOS pack ${LOCAL_MP_DOS_PACK} -> ${SSH}:${SCRATCH_MP_DOS_PACK} ..."
+    ssh "${SSH}" "mkdir -p '${SCRATCH_MP_DOS_PACK}'"
+    rsync -a --info=progress2 --partial \
+        "${LOCAL_MP_DOS_PACK}/" "${SSH}:${SCRATCH_MP_DOS_PACK}/"
+    echo ">> DOS pack sync complete. Rung 04 (configs/gps_mt_ablation_suite/04_dos_full.json) can now run."
 }
 
 # ---------------------------------------------------------------------------
@@ -725,6 +760,7 @@ case "${cmd}" in
     augment-positions) augment_positions ;;
     augment-physics) augment_physics ;;
     pack-mptrj)  pack_mptrj "$@" ;;
+    sync-dos-pack) sync_dos_pack ;;
     status)    status ;;
     logs)      logs "$@" ;;
     fetch)     fetch ;;

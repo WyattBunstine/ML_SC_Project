@@ -7,7 +7,7 @@ total density onto a FIXED E_F-aligned grid (matching models/common/data.DOS_N_E
 and attaches it as graph["dos"] (atomic write, resumable). pack-dataset then carries it
 into the DOS pack's meta.
 
-    python main.py fetch-dos --index database/datafiles/MP_Energy/energies_MP_v4.pickle
+    python main.py fetch-dos --index database/datafiles/MP_Energy/MP_Energy_V4.pickle
     # then: python main.py pack-dataset --index <that index> --out <dos_pack_dir>
 
 DOS coverage is a SUBSET of MP (not every material has an electronic-structure calc) and
