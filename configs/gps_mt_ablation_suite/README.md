@@ -25,8 +25,16 @@ probed at superconductor T_c. The metric that matters is **T_c transfer**, not p
 > exact `has_to_jimage=true`) is built locally and shipped with `deploy.sh sync-dos-pack`.
 > Build it: `python main.py fetch-dos --index database/datafiles/MP_Energy/MP_Energy_V4.pickle`
 > then `python main.py pack-dataset --index database/datafiles/MP_Energy/MP_Energy_V4.pickle
-> --out database/datafiles/MP/dos_pack`. The DOS pack carries no forces/magmom/stress (relaxed
-> structures) — those are NaN-masked; energy + DOS co-train on it.
+> --out database/datafiles/MP/dos_pack --derive-mp-id`. The DOS pack carries no
+> forces/magmom/stress (relaxed structures) — those are NaN-masked; energy + DOS co-train on it.
+>
+> **`--derive-mp-id` is REQUIRED for this pack.** The union splits by material
+> (`split_by="material"`), which needs every member to carry an `mp_id`. The relaxed-MP index has
+> no `mp_id` column (its `id` *is* the material id, one structure each), so the flag synthesizes
+> `mp_id = id` (minus `.cif`). Without it the pack's `groups` is `None`, collapses the union's
+> groups to `None`, and the run dies in `get_sc_nonsc_loaders` ("no usable 'mp_id' column"). The
+> flag is opt-in precisely so it does NOT touch `MP_Energy_V4.pickle` itself — the `eform`
+> benchmark suite trains solo on that index with a frame split, which must stay unchanged.
 
 ## Run protocol (per rung)
 
