@@ -84,6 +84,7 @@ def cmd_build_db(args):
             output_index=out,
             has_header=args.has_header,
             limit=args.limit,
+            oxidation_parent_csv=args.oxidation_parent_csv,
         )
     print("Done.")
 
@@ -476,6 +477,14 @@ def build_parser():
         default=None,
         help=f"[cgv4] directory to write per-material JSON graph files "
              f"(default: {DEFAULT_CGV4_GRAPH_DIR})",
+    )
+    db.add_argument(
+        "--oxidation-parent-csv",
+        default=None,
+        help="[cgv4] 3DSC master CSV (3DSC_MP.csv) supplying each cif's undoped parent "
+             "composition; enables doping-aware oxidation states for DISORDERED (doped) "
+             "structures (charge-balanced redox center) instead of the builder's failed "
+             "~0 guess. Only affects disordered cifs; omit for non-SC / MPtrj builds.",
     )
     db.set_defaults(func=cmd_build_db)
 

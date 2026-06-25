@@ -294,7 +294,7 @@ def _fmt_dur(seconds):
     return f"{s}s"
 
 
-def _init_cgv4_worker():
+def _init_cgv4_worker(parent_map=None):
     """Per-worker init: silence pymatgen's benign CIF-parse UserWarning (e.g.
     'N fractional coordinates rounded to ideal values to avoid ... finite
     precision'), which is harmless but would otherwise print once per structure
@@ -302,6 +302,16 @@ def _init_cgv4_worker():
     import warnings
     warnings.filterwarnings("ignore", message="Issues encountered while parsing CIF",
                             category=UserWarning)
+    if parent_map is not None:                     # doping-aware oxidation (3DSC SC set)
+        global _OXI_PARENT_MAP
+        _OXI_PARENT_MAP = parent_map
+
+
+# {cif_id -> undoped parent composition}; set in the worker initializer when building the
+# 3DSC SC set so doped structures get charge-balanced oxidation states (database/
+# oxidation_doping.py). None for every other build (MPtrj / MP_Energy / non-SC) -> the
+# builder's own oxidation guess, unchanged.
+_OXI_PARENT_MAP = None
 
 
 def _process_cgv4_row(task):
@@ -313,14 +323,39 @@ def _process_cgv4_row(task):
     """
     cif_id, cif_path, graph_path = task
     from database.crystal_graph_v4_import import build_crystal_graph_from_cif
+    parent = _OXI_PARENT_MAP.get(cif_id) if _OXI_PARENT_MAP else None
     try:
         # compute_spacegroup=False: the compact output drops the metadata block, so
         # symmetry analysis is wasted work here — and spglib floods stderr / can
         # wedge workers on distorted structures.
-        graph = build_crystal_graph_from_cif(cif_path, compute_spacegroup=False)
+        if parent is not None:
+            graph = _build_decorated_graph(cif_path, parent)
+        else:
+            graph = build_crystal_graph_from_cif(cif_path, compute_spacegroup=False)
     except Exception as exc:
         return (graph_path, "build_fail", cif_id, f"{type(exc).__name__}: {exc}")
     return _compact_and_write(graph, graph_path, cif_id)
+
+
+def _build_decorated_graph(cif_path, parent_comp):
+    """Build a graph for a doped 3DSC structure with charge-balanced oxidation states.
+
+    Only DISORDERED (doped) structures are decorated: for them the builder's own
+    oxidation guess fails on the fractional composition and defaults to ~0, so we assign
+    states via database/oxidation_doping.decorate_structure (undoped-nominal + redox
+    balance) and feed the builder's explicit-oxidation path. Ordered structures take the
+    unchanged path — their integer composition guesses fine, and that keeps them
+    consistent with the (ordered) pretraining graphs."""
+    # Import the shim first — it puts the sibling RPToleranceFactor repo (crystal_graph_v4)
+    # on sys.path, so the builder's own loader is importable on the next line.
+    from database.crystal_graph_v4_import import build_crystal_graph_from_structure
+    from crystal_graph_v4 import _load_unit_cell_structure_from_cif  # builder's own loader
+    from database.oxidation_doping import decorate_structure
+
+    structure = _load_unit_cell_structure_from_cif(cif_path)
+    if not structure.is_ordered:
+        structure, _info = decorate_structure(structure, parent_comp)
+    return build_crystal_graph_from_structure(structure, compute_spacegroup=False)
 
 
 def _compact_and_write(graph, graph_path, item_id):
@@ -581,7 +616,7 @@ def _write_index_files(index_rows, output_index):
 
 def generate_CGv4_DB(data_files: list, output_dir='database/datafiles/MP/graphs_v4',
                      output_index='database/datafiles/MP/SC_MP_V4', has_header=False,
-                     limit=None, n_workers=None):
+                     limit=None, n_workers=None, oxidation_parent_csv=None):
     """Pre-compute crystal_graph_v4 graphs for each material and store as compact JSON files.
 
     Creates one JSON per material in output_dir, plus an index pickle/csv at output_index.
@@ -678,15 +713,26 @@ def generate_CGv4_DB(data_files: list, output_dir='database/datafiles/MP/graphs_
                 else:
                     failed_lines.append(f"{cif_id}\t{msg}\n")
 
+        # Doping-aware oxidation for the 3DSC SC set: load the {cif_id -> undoped parent
+        # composition} map once and hand it to the workers (initializer global), so doped
+        # structures get charge-balanced states instead of the builder's failed ~0 guess.
+        parent_map = None
+        if oxidation_parent_csv:
+            from database.oxidation_doping import parent_composition_map
+            parent_map = parent_composition_map(oxidation_parent_csv)
+            print(f"  doping-aware oxidation: parent compositions for {len(parent_map)} cifs")
+
         if n_workers == 1:
-            _init_cgv4_worker()   # suppress the CIF-parse warning in this process too
+            _init_cgv4_worker(parent_map)   # suppress the CIF-parse warning + set parent map
             _consume(map(_process_cgv4_row, tasks))
         else:
             # Context-managed pool so workers are always cleaned up, including
             # on KeyboardInterrupt / exception mid-build. The full iterator is
             # consumed inside the block, so all tasks finish before exit. Each
-            # worker silences the benign pymatgen CIF-parse warning on startup.
-            with mp.Pool(processes=n_workers, initializer=_init_cgv4_worker) as pool:
+            # worker silences the benign pymatgen CIF-parse warning + receives the
+            # oxidation parent map on startup.
+            with mp.Pool(processes=n_workers, initializer=_init_cgv4_worker,
+                         initargs=(parent_map,)) as pool:
                 _consume(pool.imap_unordered(_process_cgv4_row, tasks))
 
     # Emit one index row per source row whose graph file now exists.
