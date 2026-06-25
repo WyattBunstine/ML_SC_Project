@@ -420,7 +420,12 @@ ${account_line}
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --time=${s_time}
-#SBATCH --gpus=${s_gpus}
+# --gpus-per-node, NOT --gpus: on Rockfish's a100 nodes (2 sockets x 2 GPUs, partition
+# mixes v100+a100) the total-count form '--gpus=4' is rejected with "Requested node
+# configuration is not available", while --gpus-per-node=4 (and --gres=gpu:4) schedule
+# fine. With --nodes=1 the two are equivalent for single-GPU jobs. Verified via
+# sbatch --test-only (2026-06-25): --gpus=4 fails, --gpus-per-node=4 works.
+#SBATCH --gpus-per-node=${s_gpus}
 #SBATCH --cpus-per-task=${s_cpus}
 #SBATCH --mem=${s_mem}
 ${mail_lines}
