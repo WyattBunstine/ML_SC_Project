@@ -35,6 +35,27 @@ def _autocast(args):
     return nullcontext()
 
 
+def _setup_matmul_precision(args):
+    """Enable TF32 matmuls on Ampere+ GPUs — a ~1.3-2x speedup on the matmul-heavy
+    encoder (attention + FFNs + per-atom heads) for FREE. TF32 keeps full fp32
+    dynamic RANGE and only rounds the matmul *inputs* to a 10-bit mantissa, so it is
+    far gentler than the bf16 autocast we deliberately avoid on the conservative-force
+    path (`amp=false` for multitask). On by default on CUDA; set `"tf32": false` to
+    force exact fp32 (e.g. an A/B against `scripts/verify_tf32_forces.py`). No effect
+    on CPU or the fp64 finite-difference force gate — TF32 is CUDA-matmul-only."""
+    if not args.get("cuda"):
+        return
+    if args.get("tf32", True):
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print("TF32 matmuls ENABLED (float32_matmul_precision='high'); "
+              "set \"tf32\": false in the config for exact fp32.")
+    else:
+        torch.set_float32_matmul_precision("highest")
+        print("TF32 matmuls DISABLED (exact fp32).")
+
+
 class Normalizer:
     """Target normalizer with an optional monotone transform applied BEFORE the
     z-score (and inverted after denorm).
@@ -256,6 +277,7 @@ def run_regression(args, model, criterion, optimizer, scheduler, loaders, normal
 
     The model is supplied by the caller; nothing here is MPNN- or GPS-specific.
     """
+    _setup_matmul_precision(args)
     best_mae_error = float("inf")
     train_losses, val_losses = [], []
 
@@ -512,6 +534,7 @@ def run_multitask(args, model, optimizer, scheduler, loaders, stats, weights):
     """Multitask pretraining loop. Checkpoints on the val ENERGY MAE (the primary
     transferable signal); the real evaluation is the downstream T_c transfer, not a
     held-out pretraining metric, so there's no test-CSV / SWA / balanced-val here."""
+    _setup_matmul_precision(args)
     train_loader, val_loader = loaders["train"], loaders["val_realistic"]
     best = float("inf")
     from resmon import ResourceMonitor

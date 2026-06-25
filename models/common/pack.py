@@ -30,7 +30,8 @@ import torch
 from torch.utils.data import Dataset
 
 from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_targets,
-                      _select_target_key, build_data_rows, rows_meanstd,
+                      _select_target_key, build_data_rows, subsample_frames_by_group,
+                      rows_meanstd,
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN,
                       DIHEDRAL_FEA_LEN, DOS_N_ENERGY)
@@ -227,7 +228,7 @@ class PackedCIFDataV4(Dataset):
                  graph_cache_size=0, random_seed=123, target_column=None,
                  use_bond_angles=False, use_poly_edges=True,
                  build_angle_bias=False, use_rich_node_features=False,
-                 use_dihedrals=False, multitask=False):
+                 use_dihedrals=False, multitask=False, frame_subsample=1):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
         if self._header["version"] != PACK_VERSION:
@@ -302,6 +303,12 @@ class PackedCIFDataV4(Dataset):
             meta, target_key, list(range(len(meta))), random_seed, keep_all=multitask)
         if dropped:
             print(f"PackedCIFDataV4: dropped {dropped} rows with no '{target_key}' value")
+        if frame_subsample and frame_subsample > 1:
+            n0 = len(self.data)
+            self.data, self.groups, self.labels = subsample_frames_by_group(
+                self.data, self.groups, self.labels, frame_subsample)
+            print(f"PackedCIFDataV4: frame_subsample={frame_subsample} kept "
+                  f"{len(self.data)}/{n0} frames (1-in-{frame_subsample} per material)")
 
         self._mm = None
         self._mm_pid = None

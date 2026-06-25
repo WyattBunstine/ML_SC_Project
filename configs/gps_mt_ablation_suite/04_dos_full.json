@@ -33,6 +33,7 @@
     "size_grouped_batches": true,
     "max_atoms_per_batch": 4000,
     "size_pool_factor": 20,
+    "frame_subsample": 3,
     "amp": false,
     "num_workers": 20,
     "prefetch_factor": 4,
