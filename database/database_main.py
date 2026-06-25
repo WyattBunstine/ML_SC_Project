@@ -139,6 +139,23 @@ def Proc_Basic_Batch(df, out_rows, cif_loc, thread_num, label=1):
     print("Thread " + str(thread_num) + " time: " + str(round(time.time()-t1, 4)) + " seconds.")
 
 
+def _occ_weighted_elem_prop(species, prop_name):
+    """Occupancy-weighted mean of a per-element scalar (ionization_energy /
+    electron_affinity) over a site's species list, normalized by the occupancy of species
+    with a defined value (mirrors the builder's chi/radius _weighted_avg). Returns None if
+    no species has a value -> caller falls back to the dominant element. For an ordered
+    site (one species, occ 1) this returns that element's value, so ordered graphs are
+    byte-identical; a doped site reads the occupancy-weighted mix (the dopant's IE/EA)."""
+    from pymatgen.core.periodic_table import Element as PmgElement
+    acc = tot = 0.0
+    for sp in species or []:
+        val = getattr(PmgElement(sp["symbol"]), prop_name)
+        if val is not None:
+            acc += sp["occupancy"] * float(val)
+            tot += sp["occupancy"]
+    return acc / tot if tot > 0 else None
+
+
 def _compact_v4_graph(graph: dict) -> dict:
     """Reduce a full crystal_graph_v4 dict to the compact feature-only form the
     MPNN consumes (nodes, bonding edges + adjacency, polyhedral edges +
@@ -149,12 +166,20 @@ def _compact_v4_graph(graph: dict) -> dict:
     compact_nodes = []
     for node in graph["nodes"]:
         el = PmgElement(node["element"])
-        z = el.Z
-        # Free-atom electronic props (eV), pure per-element lookups carried over
-        # from the original CGCNN atom_init vector. None for elements without
-        # tabulated data -> 0.0 so they don't poison the feature vector.
-        ie = el.ionization_energy
-        ea = el.electron_affinity
+        z = el.Z   # dominant-species Z stays an integer (alignment guards + atom_init/
+                   # rich-feature integer indexing rely on it); doping is carried by the
+                   # continuous channels (oxidation, chi, radius, and IE/EA below).
+        # Free-atom electronic props (eV), carried from the original CGCNN atom_init
+        # vector — now occupancy-weighted over the site's species so a doped site reflects
+        # its dopant; falls back to the dominant element for legacy nodes without species.
+        # None for elements without tabulated data -> 0.0 so they don't poison the vector.
+        species = node.get("species")
+        ie = _occ_weighted_elem_prop(species, "ionization_energy")
+        ea = _occ_weighted_elem_prop(species, "electron_affinity")
+        if ie is None:
+            ie = el.ionization_energy
+        if ea is None:
+            ea = el.electron_affinity
         hist = node.get("sharing_mode_hist") or {"corner": 0, "edge": 0, "face": 0, "other": 0}
         compact_nodes.append({
             "Z": z,
