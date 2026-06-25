@@ -47,6 +47,7 @@
     "print_split": 200,
     "out_file": "result",
     "slurm": {
+        "partition": "ica100,a100",
         "gpus": 4,
         "cpus": 24,
         "mem": "96G",
