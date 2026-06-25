@@ -1,73 +1,71 @@
-# Multi-GPU (DDP) scope for the GPS multitask pretraining
+# Multi-GPU (data-parallel) for the GPS multitask pretraining
 
-**Status: SCOPE / PLAN ONLY (2026-06-25). Not implemented.** Requested as the
-high-effort speedup option after TF32 + frame-subsampling (the cheap wins, done).
+**Status: IMPLEMENTED (2026-06-25), branch master.** Data-parallel training for the
+GPS multitask pretrainer (`run_multitask`), gated so the single-GPU path is
+byte-identical. Validated by `scripts/verify_ddp_multitask.py` (2 ranks, gloo).
 
-## Baseline & motivation
-A prior MPtrj-scale GPS-family run logged **99% GPU util, ~1% data-wait** — the
-trainer is compute-bound, so a second/third/fourth GPU translates almost directly to
-throughput. We currently request **1 GPU** (`SLURM_GPUS=1`); Rockfish a100 nodes have
-~4. The single-process loop in `models/common/train.py` (`run_multitask`) has no
-distributed code.
+## Why explicit all-reduce, not `DistributedDataParallel`
+The conservative-force path computes `autograd.grad(E, cart, create_graph=True)` INSIDE
+the forward, so `loss.backward()` is a *second* backward — exactly where DDP's
+gradient-allreduce autograd hooks are most fragile. We instead keep the plain model on
+each rank and synchronize explicitly (`models/common/dist_utils.py`):
 
-## ⚡ Zero-effort alternative — read this first
-If the goal is **"the 4-rung ladder finishes sooner"** (not "one rung trains faster"),
-you do NOT need DDP. Launch the four rungs as four independent 1-GPU jobs (concurrently
-on a 4-GPU node, or as four separate submissions). Same total GPU-hours, but the ladder
-completes in ~1 rung's wall-clock instead of 4×. No code change. **DDP is only worth it
-when a SINGLE rung must be faster** (e.g. iterating on rung 04 alone, or scaling the
-model past one GPU's memory).
+- **`broadcast_model`** (startup): copy rank-0's parameters AND buffers (the feature-norm
+  stats) to every rank, so all replicas start bit-identical.
+- **`all_reduce_grads`** (every step, after `loss.backward()`, before clip/step): average
+  the gradients across ranks via one coalesced collective, so every replica steps
+  identically and stays in lockstep.
 
-## What DDP requires here (the real work)
+Robust for double-backward and trivially testable; cost is ~10% less compute/comm overlap
+than the DDP wrapper — the right trade here. If we ever want that overlap back, the DDP
+wrapper with `static_graph=True` is the drop-in alternative.
 
-1. **Launch + process group.** `torchrun --nproc_per_node=N models/GPSTransformer/gps_main.py`
-   (or `mp.spawn`); `dist.init_process_group("nccl")`; `torch.cuda.set_device(local_rank)`.
-   `deploy.sh` must set `SLURM_GPUS=4`, request matching `cpus`, and `srun torchrun ...`.
-   Rank 0 owns all I/O (checkpoints, `_epoch_log.csv`, ResourceMonitor); other ranks stay silent.
+## How it works (as built)
+- **Launch.** `deploy.sh run <gps multitask config>` with `slurm.gpus > 1` emits
+  `torchrun --standalone --nproc_per_node=<gpus> models/GPSTransformer/gps_main.py <config>`
+  under one `srun`/`ntasks=1`. `gps_main` calls `init_distributed()` (reads torchrun's
+  `RANK`/`LOCAL_RANK`/`WORLD_SIZE`); NCCL when there's a GPU per rank, gloo otherwise (the
+  CPU test). No torchrun → `WORLD_SIZE=1` → single-process, unchanged.
+- **Data sharding.** `DistributedShardSampler` (data.py) gives each rank a disjoint,
+  per-epoch-reshuffled shard of the train indices, fed UNDER `SizeGroupedBatchSampler`
+  (size-grouping within the shard). The material split is computed identically on all ranks
+  first, so sharding stays leakage-free. `set_epoch(epoch)` is called each epoch.
+- **Equal steps.** The size-grouped sampler yields a different batch count per shard, so
+  each epoch all-reduces the **min** count (`all_reduce_min_int`) and every rank runs exactly
+  that many steps (drops its tail) — unequal counts would deadlock the next collective.
+- **Stats.** `feature_stats` (model buffers, via `broadcast_model`) and `target_stats`
+  (`broadcast_object`) are computed once on rank 0 and propagated, so all replicas normalize
+  identically.
+- **Rank 0 only:** validation (`_validate_mt`; replicas are identical, so one validates),
+  checkpoint, epoch-log CSV, ResourceMonitor. A per-epoch `barrier` keeps ranks aligned.
+- **Workers.** `num_workers` is divided across ranks (`num_workers // world_size`) to avoid
+  CPU oversubscription; `slurm.cpus` must cover all ranks (rung configs: gpus=4, cpus=24,
+  workers=20 → 5/rank → 20 procs + mains < 24).
+- **LR.** Kept at the configured value (no large-batch scaling) — the conservative choice
+  given the earlier lr=0.003 → collapse. Warmup is specified in *epochs*, which is invariant
+  to sharding (each epoch still covers all data across ranks), so no warmup change was needed.
 
-2. **Model wrap.** `DistributedDataParallel(model, device_ids=[local_rank])`.
-   - Every head runs every step (energy/forces/stress/magmom/bandgap/dos all computed),
-     so **`find_unused_parameters=False`** is correct (no per-step unused params).
-   - **Double-backward sharp edge (the #1 risk):** conservative forces do
-     `autograd.grad(E, cart, create_graph=True)` *inside* forward, then `loss.backward()`.
-     DDP's gradient allreduce hooks fire on the OUTER backward; higher-order graphs are a
-     known DDP rough spot. Likely needs **`static_graph=True`** (the graph topology is
-     fixed across steps). Must be validated, not assumed — adapt `verify_multitask_train.py`
-     to a 2-rank run and assert param grads match the single-GPU reference within tolerance.
+## Running it
+```bash
+./scripts/deploy.sh sync-code            # ships dist_utils + the trainer/loader/deploy changes
+./scripts/deploy.sh run configs/gps_mt_ablation_suite/04_dos_full.json   # slurm.gpus=4 -> torchrun x4
+```
+The four MT rung configs carry `slurm.gpus=4`. Expected ~3–3.5× per-rung speedup (sublinear:
+allreduce + rank-0 validation + tail-drop). Checkpoints/logs are unchanged in layout (rank 0
+writes them), so `embed-gps` / `train-head` / `compare_runs` downstream are unaffected.
 
-3. **Data sharding + the size-grouped-sampler desync (the #1 implementation cost).**
-   DDP needs each rank to see a **disjoint** shard AND run the **same number of optimizer
-   steps** — unequal step counts → NCCL allreduce hangs. Our `SizeGroupedBatchSampler`
-   emits a **variable batch count** depending on each shard's atom distribution, so naive
-   sharding desyncs. Plan:
-   - Deterministically partition indices across ranks each epoch (shard by material so the
-     material split stays leakage-free), seeded by epoch.
-   - Each rank builds its size-grouped batches over its shard (reuse the existing sampler).
-   - **All-reduce the per-rank batch count to the min** and have every rank iterate exactly
-     that many batches (drop the tail). Small per-epoch data loss; avoids the hang.
-   - `BalancedEpochSampler` (train re-sampling) composes underneath the per-rank shard.
+## Gate
+`scripts/verify_ddp_multitask.py` runs 2 gloo ranks over a synthetic multitask pack and asserts
+the two invariants that make the scheme correct: (1) **replica consistency** — ranks start
+identical (broadcast) and STAY identical after every all-reduced step (a param-checksum's
+cross-rank max==min); (2) **double-backward under DDP** — a force-only objective still yields
+nonzero parameter gradients on each rank. Runs on CPU, so it gates on any box (incl. CI / the
+1-GPU dev machine) BEFORE a real NCCL multi-GPU run.
 
-4. **Stats consistency.** Compute `compute_feature_stats` / `compute_target_stats` on rank 0
-   (or per-shard) and **broadcast from rank 0** so every replica normalizes identically.
-
-5. **Validation.** Simplest: rank 0 validates (`_validate_mt`, val set is small) and
-   broadcasts the metric for the checkpoint decision. (Sharded val + all-reduce is a later
-   optimization.) Validation needs `enable_grad` for forces — already handled.
-
-6. **LR / schedule.** Effective batch is N× larger. The warmup-steps math
-   (`_resolve_warmup_steps`, per-step) changes with fewer steps/epoch; revisit warmup and
-   consider a modest LR scale. Tuning item, not correctness.
-
-## Effort & payoff
-- **Effort:** ~1–2 focused days. Phase 1: single-node 4-GPU, material-sharded indices,
-  rank-0 val/ckpt/log, `static_graph=True`. Phase 2: the min-batch-count sync for the
-  size-grouped sampler. Phase 3: 2-rank double-backward correctness gate.
-- **Payoff:** ~3–3.5× on 4 GPUs (sublinear: allreduce + rank-0 validation + tail-drop).
-- **Risks:** (a) double-backward × DDP allreduce correctness — test it; (b) size-grouped
-  batch-count desync hang — the min-count sync is the fix; (c) NCCL/module setup on Rockfish.
-
-## Recommendation
-Try the **zero-effort concurrent-rungs** approach first — it likely solves the ladder
-wall-clock with no code. Reserve DDP for when a single rung's per-epoch time is the
-blocker. If we build DDP, do Phase 1 behind a `--distributed` flag so the single-GPU
-path stays byte-identical and the existing gates keep passing unchanged.
+## Known limitations / future
+- Wired for the **multitask** GPS trainer only; single-target GPS regression under torchrun
+  exits with a message (run it on one GPU).
+- Single-node only (`--standalone`); multi-node would need a rendezvous endpoint.
+- The masked per-task loss is normalized per-batch then grad-averaged across ranks, so a rank
+  whose batch has few/no samples for a task slightly dilutes that step's gradient for it.
+  Material-sharding keeps this balanced in expectation; it's a minor stochastic effect.

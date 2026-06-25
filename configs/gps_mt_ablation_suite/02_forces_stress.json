@@ -47,6 +47,7 @@
     "print_split": 200,
     "out_file": "result",
     "slurm": {
+        "gpus": 4,
         "cpus": 24,
         "mem": "96G",
         "time": "24:00:00"

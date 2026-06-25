@@ -401,6 +401,16 @@ PY
     local mail_lines=""
     [ -n "${s_mail}" ] && mail_lines=$'#SBATCH --mail-type=BEGIN,END,FAIL\n'"#SBATCH --mail-user=${s_mail}"
 
+    # Multi-GPU: the GPS multitask trainer is data-parallel (explicit gradient
+    # all-reduce; see models/common/dist_utils). When a GPS config requests >1 GPU,
+    # launch N ranks on the one node with torchrun (it sets RANK/LOCAL_RANK/WORLD_SIZE);
+    # gps_main auto-detects this and shards. Everything else stays a plain python run.
+    local launch_cmd="python ${entrypoint} \"${config_rel}\""
+    if [ "${entrypoint}" = "models/GPSTransformer/gps_main.py" ] && [ "${s_gpus}" -gt 1 ]; then
+        launch_cmd="torchrun --standalone --nproc_per_node=${s_gpus} ${entrypoint} \"${config_rel}\""
+        echo ">> Multi-GPU: launching ${s_gpus} ranks via torchrun (data-parallel)."
+    fi
+
     echo ">> Writing remote job script: ${job_file}"
     ssh "${SSH}" "cat > '${REMOTE_PATH}/${job_file}'" <<EOF
 #!/usr/bin/env bash
@@ -427,8 +437,8 @@ export PYTHONUNBUFFERED=1          # stream training output to the log live
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 cd "${REMOTE_PATH}"
 echo "Host: \$(hostname)   GPU(s):"; nvidia-smi -L || true
-echo "Running: python ${entrypoint} ${config_rel}"
-python ${entrypoint} "${config_rel}"
+echo "Running: ${launch_cmd}"
+${launch_cmd}
 EOF
 
     echo ">> Submitting..."

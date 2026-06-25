@@ -22,6 +22,8 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 
+from dist_utils import all_reduce_grads, all_reduce_min_int, barrier  # noqa: E402
+
 
 def _autocast(args):
     """bf16 autocast context when `amp` is set and running on CUDA, else a no-op.
@@ -480,14 +482,21 @@ def _mt_loss(out, targets, masks, stats, weights, seg):
     return total, maes
 
 
-def _train_mt(loader, model, optimizer, epoch, stats, weights, args):
+def _train_mt(loader, model, optimizer, epoch, stats, weights, args,
+              dist_info=None, max_steps=None):
     model.train()
     loss_meter, maes = AverageMeter(), {}
-    steps = len(loader)
+    # Under data parallelism every rank must run the SAME number of optimizer steps
+    # (an unequal count deadlocks the next collective), so the schedule uses the
+    # rank-synced `max_steps` (the min batch count across shards) and we break there.
+    steps = max_steps if max_steps is not None else len(loader)
     warmup_steps = _resolve_warmup_steps(args, steps)
     base_lr = args["learning_rate"]
+    is_main = dist_info is None or dist_info.is_main
     t0 = time.time(); data_t = 0.0; end = time.time()
     for i, (input_batch, targets, masks, _cids) in enumerate(loader):
+        if i >= steps:                             # drop the tail past the synced count
+            break
         data_t += time.time() - end
         input_var = _to_input_var(input_batch, args["cuda"])
         cart, strain = _build_cart_strain(input_var)
@@ -503,12 +512,16 @@ def _train_mt(loader, model, optimizer, epoch, stats, weights, args):
             sys.exit(1)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()                            # DOUBLE backward (force/stress terms)
+        # Average gradients across ranks BEFORE clip/step so every replica steps
+        # identically (our explicit stand-in for DDP; no-op single-process).
+        if dist_info is not None:
+            all_reduce_grads(model, dist_info)
         _warmup_and_step(optimizer, model, args, base_lr, warmup_steps, epoch * steps + i)
         loss_meter.update(float(loss.detach()), 1)
         for k, v in batch_maes.items():
             maes.setdefault(k, AverageMeter()).update(float(v.detach()), 1)
         end = time.time()
-        if i % args.get("print_split", 10) == 0:
+        if is_main and i % args.get("print_split", 10) == 0:
             tstr = "  ".join(f"{k} {m.avg:.4f}" for k, m in maes.items())
             print(f"Epoch [{epoch}][{i}/{steps}]  loss {loss_meter.avg:.4f}  {tstr}")
     return loss_meter.avg, {k: m.avg for k, m in maes.items()}, data_t, time.time() - t0
@@ -530,59 +543,94 @@ def _validate_mt(loader, model, stats, weights, args):
     return loss_meter.avg, {k: m.avg for k, m in maes.items()}
 
 
-def run_multitask(args, model, optimizer, scheduler, loaders, stats, weights):
+def run_multitask(args, model, optimizer, scheduler, loaders, stats, weights,
+                  dist_info=None):
     """Multitask pretraining loop. Checkpoints on the val ENERGY MAE (the primary
     transferable signal); the real evaluation is the downstream T_c transfer, not a
-    held-out pretraining metric, so there's no test-CSV / SWA / balanced-val here."""
+    held-out pretraining metric, so there's no test-CSV / SWA / balanced-val here.
+
+    Data-parallel (dist_info.enabled): each rank trains on its own data shard with
+    gradients all-reduced every step (in _train_mt); only rank 0 validates, logs, and
+    checkpoints (the replicas are kept bit-identical by the grad all-reduce, so rank
+    0's weights represent all). Single-process when dist_info is None/disabled —
+    byte-identical to before."""
     _setup_matmul_precision(args)
     train_loader, val_loader = loaders["train"], loaders["val_realistic"]
+    shard_sampler = loaders.get("train_shard_sampler")
+    is_main = dist_info is None or dist_info.is_main
     best = float("inf")
-    from resmon import ResourceMonitor
-    monitor = ResourceMonitor(interval=2.0).start()
-    print(ResourceMonitor.describe())
+    monitor = log = w = None
+    if is_main:
+        from resmon import ResourceMonitor
+        monitor = ResourceMonitor(interval=2.0).start()
+        print(ResourceMonitor.describe())
     task_cols = [k for k in ("energy", "forces", "stress", "magmom", "bandgap", "dos")
                  if k in stats]
-    print(f"Multitask targets (with data): {task_cols}; loss weights: "
-          f"{{ {', '.join(f'{k}:{weights.get(k, 1.0)}' for k in task_cols)} }}")
-    log = open(args["out_file"] + "_epoch_log.csv", "w", newline="")
-    w = csv.writer(log)
-    w.writerow(["epoch", "train_loss", "val_loss"]
-               + [f"train_{k}_mae" for k in task_cols]
-               + [f"val_{k}_mae" for k in task_cols]
-               + ["lr", "epoch_time_sec", "train_time_sec", "data_time_sec",
-                  "gpu_util_pct", "gpu_mem_gb", "is_best"])
+    if is_main:
+        print(f"Multitask targets (with data): {task_cols}; loss weights: "
+              f"{{ {', '.join(f'{k}:{weights.get(k, 1.0)}' for k in task_cols)} }}"
+              + (f"  [data-parallel x{dist_info.world_size}]" if dist_info and dist_info.enabled else ""))
+        log = open(args["out_file"] + "_epoch_log.csv", "w", newline="")
+        w = csv.writer(log)
+        w.writerow(["epoch", "train_loss", "val_loss"]
+                   + [f"train_{k}_mae" for k in task_cols]
+                   + [f"val_{k}_mae" for k in task_cols]
+                   + ["lr", "epoch_time_sec", "train_time_sec", "data_time_sec",
+                      "gpu_util_pct", "gpu_mem_gb", "is_best"])
 
     for epoch in range(args["epochs"]):
         e0 = time.time()
         lr = optimizer.param_groups[0]["lr"]
+        if shard_sampler is not None:                 # reshuffle this rank's shard
+            shard_sampler.set_epoch(epoch)
+            # We break at the synced min step count below, so the size-grouped sampler's
+            # generator never reaches its post-pass auto-clear — drop its cached layout
+            # explicitly, or the next epoch would reuse this epoch's (stale, unsharded-for-
+            # the-new-epoch) batches instead of rebuilding from the reshuffled shard.
+            bsamp = getattr(train_loader, "batch_sampler", None)
+            if bsamp is not None and hasattr(bsamp, "_pending"):
+                bsamp._pending = None
+        # All ranks must run the SAME #steps; the size-grouped sampler gives each shard
+        # a different batch count, so sync to the min (len() materializes the cached
+        # layout that __iter__ then reuses, so this doesn't re-shuffle).
+        max_steps = all_reduce_min_int(len(train_loader), dist_info) if dist_info else None
         tr_loss, tr_maes, data_s, tr_s = _train_mt(
-            train_loader, model, optimizer, epoch, stats, weights, args)
-        va_loss, va_maes = _validate_mt(val_loader, model, stats, weights, args)
-        if va_loss != va_loss:
+            train_loader, model, optimizer, epoch, stats, weights, args,
+            dist_info=dist_info, max_steps=max_steps)
+
+        # Only rank 0 validates (the replicas are identical; val is cheap and needs no
+        # collective). Other ranks skip straight to the barrier below.
+        va_loss, va_maes = (_validate_mt(val_loader, model, stats, weights, args)
+                            if is_main else (0.0, {}))
+        if is_main and va_loss != va_loss:
             print("Exit due to NaN")
             sys.exit(1)
-        scheduler.step()
+        scheduler.step()                              # deterministic, all ranks in step
 
-        val_metric = va_maes.get("energy", va_loss)   # checkpoint on energy MAE
-        is_best = val_metric < best
-        best = min(val_metric, best)
-        _save_checkpoint({
-            "epoch": epoch + 1, "state_dict": model.state_dict(), "best": best,
-            "optimizer": optimizer.state_dict(), "target_stats": stats,
-            "loss_weights": weights, "args": args,
-        }, is_best, args["out_file"])
+        if is_main:
+            val_metric = va_maes.get("energy", va_loss)   # checkpoint on energy MAE
+            is_best = val_metric < best
+            best = min(val_metric, best)
+            _save_checkpoint({
+                "epoch": epoch + 1, "state_dict": model.state_dict(), "best": best,
+                "optimizer": optimizer.state_dict(), "target_stats": stats,
+                "loss_weights": weights, "args": args,
+            }, is_best, args["out_file"])
+            res = monitor.epoch_stats()
+            w.writerow([epoch, float(tr_loss), float(va_loss)]
+                       + [tr_maes.get(k, "") for k in task_cols]
+                       + [va_maes.get(k, "") for k in task_cols]
+                       + [lr, time.time() - e0, round(tr_s, 2), round(data_s, 2),
+                          res["gpu_util_pct"], res["gpu_mem_gb"], int(is_best)])
+            log.flush()
+            tstr = "  ".join(f"{k}={va_maes[k]:.4f}" for k in task_cols if k in va_maes)
+            print(f">> epoch {epoch}: train_loss {tr_loss:.4f}  val_loss {va_loss:.4f}  "
+                  f"val[{tstr}]  ({time.time() - e0:.1f}s, data-wait {data_s:.1f}s)")
+        # Keep ranks aligned before the next epoch's collective (rank 0 spent time in
+        # validation/checkpoint while the others idled here).
+        barrier(dist_info) if dist_info else None
 
-        res = monitor.epoch_stats()
-        w.writerow([epoch, float(tr_loss), float(va_loss)]
-                   + [tr_maes.get(k, "") for k in task_cols]
-                   + [va_maes.get(k, "") for k in task_cols]
-                   + [lr, time.time() - e0, round(tr_s, 2), round(data_s, 2),
-                      res["gpu_util_pct"], res["gpu_mem_gb"], int(is_best)])
-        log.flush()
-        tstr = "  ".join(f"{k}={va_maes[k]:.4f}" for k in task_cols if k in va_maes)
-        print(f">> epoch {epoch}: train_loss {tr_loss:.4f}  val_loss {va_loss:.4f}  "
-              f"val[{tstr}]  ({time.time() - e0:.1f}s, data-wait {data_s:.1f}s)")
-
-    monitor.stop()
-    log.close()
-    print(f"Multitask pretraining done. Best val energy MAE: {best:.4f}")
+    if is_main:
+        monitor.stop()
+        log.close()
+        print(f"Multitask pretraining done. Best val energy MAE: {best:.4f}")
