@@ -125,14 +125,11 @@ def _worker(rank, pack_dir, result_path):
         opt = torch.optim.AdamW(model.parameters(), lr=0.01)
         args = {"cuda": False, "learning_rate": 0.01, "print_split": 10**9,
                 "grad_clip": 0.5, "warmup_epochs": 0}
-        shard = loaders["train_shard_sampler"]
+        bsamp = getattr(loaders["train"], "batch_sampler", None)
         for ep in range(STEPS):
-            # Mirror run_multitask's epoch prologue: reshuffle the shard, drop the
-            # tail-truncated size-grouped layout, then sync the step count to the min.
-            shard.set_epoch(ep)
-            bsamp = getattr(loaders["train"], "batch_sampler", None)
-            if bsamp is not None and hasattr(bsamp, "_pending"):
-                bsamp._pending = None
+            # Mirror run_multitask's epoch prologue: set_epoch reshuffles the shard AND
+            # drops the tail-truncated size-grouped layout; then sync the step count.
+            bsamp.set_epoch(ep)
             max_steps = all_reduce_min_int(len(loaders["train"]), di)
             _train_mt(loaders["train"], model, opt, ep, ts, _DEFAULT_LOSS_WEIGHTS, args,
                       dist_info=di, max_steps=max_steps)

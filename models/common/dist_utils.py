@@ -25,12 +25,16 @@ class DistInfo:
     """Process-group facts. ``enabled`` is False for the single-process path, where
     rank=0/world_size=1/is_main=True so every ``is_main`` guard degrades to 'always'."""
 
-    def __init__(self, enabled, rank, local_rank, world_size):
+    def __init__(self, enabled, rank, local_rank, world_size, gpu_per_rank=True):
         self.enabled = enabled
         self.rank = rank
         self.local_rank = local_rank
         self.world_size = world_size
         self.is_main = (rank == 0)
+        # True when there's a dedicated GPU per rank (NCCL) — i.e. it's safe to pin this
+        # rank to cuda:local_rank. False on the gloo fallback (more ranks than GPUs, the
+        # CPU correctness test), where binding to local_rank would be an invalid ordinal.
+        self.gpu_per_rank = gpu_per_rank
 
     def __repr__(self):
         return (f"DistInfo(enabled={self.enabled}, rank={self.rank}/"
@@ -55,7 +59,7 @@ def init_distributed():
     dist.init_process_group(backend="nccl" if use_nccl else "gloo")
     if use_nccl:
         torch.cuda.set_device(local_rank)
-    return DistInfo(True, rank, local_rank, world_size)
+    return DistInfo(True, rank, local_rank, world_size, gpu_per_rank=use_nccl)
 
 
 def cleanup(di):
@@ -83,17 +87,29 @@ def all_reduce_grads(model, di):
     """Average the gradients across ranks IN PLACE (the explicit stand-in for DDP's
     gradient reduction). Call after ``loss.backward()`` and BEFORE grad-clip/step, so
     clipping and the optimizer act on the synchronized mean gradient and every replica
-    stays bit-aligned. Coalesces all grads into one tensor -> a single collective."""
+    stays bit-aligned. Coalesces all grads into one tensor -> a single collective.
+
+    Reduces over EVERY ``requires_grad`` parameter (materializing a zero for any whose
+    grad is None this step), NOT just the params that happen to have a grad. The model
+    structure is identical across ranks, so this guarantees the flattened tensor has the
+    same shape on every rank regardless of which heads a rank's batch exercised —
+    immune to a future change that makes a head's gradient conditional on batch contents
+    (which would otherwise give ranks different-length grad lists and a shape-mismatched
+    all-reduce)."""
     if not di.enabled:
         return
-    grads = [p.grad for p in model.parameters() if p.grad is not None]
-    if not grads:
+    params = [p for p in model.parameters() if p.requires_grad]
+    if not params:
         return
+    grads = [p.grad if p.grad is not None else torch.zeros_like(p) for p in params]
     flat = torch._utils._flatten_dense_tensors(grads)
     dist.all_reduce(flat, op=dist.ReduceOp.SUM)
     flat /= di.world_size
-    for g, synced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
-        g.copy_(synced)
+    for p, synced in zip(params, torch._utils._unflatten_dense_tensors(flat, grads)):
+        if p.grad is None:
+            p.grad = synced.clone()          # other ranks contributed a grad this step
+        else:
+            p.grad.copy_(synced)
 
 
 def all_reduce_min_int(value, di):
