@@ -386,6 +386,35 @@ def build_data_rows(index_df, target_key, third_full, random_seed, keep_all=Fals
     return data, groups, [rec[3] for rec in data], dropped
 
 
+def subsample_frames_by_group(data, groups, labels, stride):
+    """Keep every ``stride``-th frame per material (group), in trajectory order, to
+    thin near-duplicate consecutive MPtrj frames — a near-linear epoch speedup for
+    pretraining (the downstream metric is T_c transfer, not held-out frame MAE, so the
+    full ~1.5M-frame trajectory density is overkill).
+
+    NO-OP when ``stride<=1`` or there are no groups (without a material key we can't
+    tell which rows are frames of the same trajectory, so we'd risk a non-material
+    subset). Single-frame materials (the relaxed-MP DOS pack) keep their one frame, so
+    applying this to a masked union only thins the trajectory member. Ordering proxy is
+    each row's element-2 (packed: meta row position == pack/trajectory order; lazy:
+    graph path), so the kept frames are evenly spread across the trajectory rather than
+    clustered. Only DROPS rows (the surviving rows keep their post-shuffle order), so
+    splits/feature-stats see a strict subset — material membership is unchanged, so a
+    material-level split stays leakage-free. Returns filtered (data, groups, labels)."""
+    if not stride or stride <= 1 or groups is None:
+        return data, groups, labels
+    by_group = {}
+    for i, g in enumerate(groups):
+        by_group.setdefault(g, []).append(i)
+    keep = set()
+    for idxs in by_group.values():
+        ordered = sorted(idxs, key=lambda i: data[i][2])   # trajectory order
+        keep.update(ordered[::stride])
+    kept = [i for i in range(len(data)) if i in keep]       # preserve shuffled order
+    return ([data[i] for i in kept], [groups[i] for i in kept],
+            [labels[i] for i in kept])
+
+
 def accumulate_slot_rbf(vslots, vcos, n_slots):
     """Per-slot sequential float32 accumulation of RBF(cos) contributions.
 
@@ -913,7 +942,8 @@ class CIFDataV4(Dataset):
                  random_seed: int = 123, target_column: str = None,
                  use_bond_angles: bool = False, use_poly_edges: bool = True,
                  build_angle_bias: bool = False, use_rich_node_features: bool = False,
-                 use_dihedrals: bool = False, multitask: bool = False):
+                 use_dihedrals: bool = False, multitask: bool = False,
+                 frame_subsample: int = 1):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
         self.use_dihedrals = use_dihedrals
@@ -967,6 +997,12 @@ class CIFDataV4(Dataset):
             keep_all=multitask)
         if dropped:
             print(f"CIFDataV4: dropped {dropped} rows with no '{target_key}' value")
+        if frame_subsample and frame_subsample > 1:
+            n0 = len(self.data)
+            self.data, self.groups, self.labels = subsample_frames_by_group(
+                self.data, self.groups, self.labels, frame_subsample)
+            print(f"CIFDataV4: frame_subsample={frame_subsample} kept "
+                  f"{len(self.data)}/{n0} frames (1-in-{frame_subsample} per material)")
 
         # Guard against the silent footgun: use_bond_angles=True on graphs built
         # before angle_triplets existed would yield all-zero angular features with

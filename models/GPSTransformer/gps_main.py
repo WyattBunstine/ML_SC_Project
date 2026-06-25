@@ -97,6 +97,10 @@ def main():
         use_dihedrals=args.get("use_dihedrals", False),
         # Multitask: __getitem__ yields (input, targets_dict, masks_dict, cif_id).
         multitask=multitask,
+        # Thin near-duplicate consecutive MPtrj frames: keep 1-in-N per material
+        # (no-op on single-frame materials like the DOS pack). Near-linear epoch
+        # speedup; 1 = off (every frame).
+        frame_subsample=args.get("frame_subsample", 1),
     )
     index_paths = (args["index_path"] if isinstance(args["index_path"], list)
                    else [args["index_path"]])
