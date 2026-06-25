@@ -209,9 +209,13 @@ def main():
             json.dump(metadata, f, indent=2)
         print(f"Model: {total:,} params")
 
-    args["cuda"] = torch.cuda.is_available()
+    # Use CUDA when available, EXCEPT on the gloo fallback (distributed with fewer GPUs
+    # than ranks — the CPU correctness-test path), where binding a rank to cuda:local_rank
+    # would be an invalid device ordinal. There we run on CPU.
+    args["cuda"] = torch.cuda.is_available() and (not dist_info.enabled or dist_info.gpu_per_rank)
     if args["cuda"]:
-        # Pin to this rank's GPU (set by init_distributed); cuda:0 single-process.
+        # Pin to this rank's GPU (set_device'd by init_distributed under NCCL); cuda:0
+        # single-process.
         model.cuda(dist_info.local_rank)
     # Make every replica identical: copy rank 0's weights AND buffers (the feature
     # stats just installed) to all ranks. No-op single-process. After this, the

@@ -1442,6 +1442,17 @@ class SizeGroupedBatchSampler(Sampler):
         self._rng.shuffle(batches)
         return batches
 
+    def set_epoch(self, epoch):
+        """Advance to a new epoch: drop any cached layout (so the next len()/iter rebuilds
+        from the freshly-reshuffled sampler) and forward the epoch to a distributed shard
+        sampler underneath. The cached layout MUST be dropped explicitly here because the
+        data-parallel trainer breaks each epoch early at the synced min step count, so the
+        post-pass auto-clear in __iter__ never runs — without this, the next epoch would
+        reuse this epoch's stale (un-reshuffled, mis-sharded) batches."""
+        self._pending = None
+        if hasattr(self.sampler, "set_epoch"):
+            self.sampler.set_epoch(epoch)
+
     def __len__(self):
         # Build (and cache) this epoch's layout so the count is exact; __iter__ then
         # consumes the same layout. Re-sampling the wrapped sampler happens here.

@@ -503,12 +503,20 @@ def _train_mt(loader, model, optimizer, epoch, stats, weights, args,
         out = model(*input_var, cart=cart, strain=strain)
         targets, masks = _move_target_dicts(targets, masks, args["cuda"])
         loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6])
-        if not torch.isfinite(loss):
-            # Per-step guard: double-backward through 1/|d| reciprocals is more
-            # explosion-prone than single-backward, and an NaN here would step + be
-            # checkpointed before the per-epoch guard fires.
-            print(f"Exit: non-finite multitask loss at epoch {epoch} step {i} "
-                  "(lower learning_rate / raise grad_clip).")
+        # Per-step guard: double-backward through 1/|d| reciprocals is more
+        # explosion-prone than single-backward, and an NaN here would step + be
+        # checkpointed before the per-epoch guard fires. Under data parallelism the
+        # check must be COLLECTIVE: a NaN on one rank's shard has to abort ALL ranks,
+        # else the finite ranks block forever at the all-reduce below (the min over
+        # int(finite) is 0 iff any rank saw a non-finite loss). Single-process ->
+        # all_reduce_min_int returns the local value, byte-identical to before.
+        finite = int(bool(torch.isfinite(loss)))
+        if dist_info is not None and dist_info.enabled:
+            finite = all_reduce_min_int(finite, dist_info)
+        if not finite:
+            if is_main:
+                print(f"Exit: non-finite multitask loss at epoch {epoch} step {i} "
+                      "(lower learning_rate / raise grad_clip).")
             sys.exit(1)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()                            # DOUBLE backward (force/stress terms)
@@ -581,19 +589,22 @@ def run_multitask(args, model, optimizer, scheduler, loaders, stats, weights,
     for epoch in range(args["epochs"]):
         e0 = time.time()
         lr = optimizer.param_groups[0]["lr"]
-        if shard_sampler is not None:                 # reshuffle this rank's shard
-            shard_sampler.set_epoch(epoch)
-            # We break at the synced min step count below, so the size-grouped sampler's
-            # generator never reaches its post-pass auto-clear — drop its cached layout
-            # explicitly, or the next epoch would reuse this epoch's (stale, unsharded-for-
-            # the-new-epoch) batches instead of rebuilding from the reshuffled shard.
+        if shard_sampler is not None:                 # distributed: reshuffle this rank's
+            # shard for the new epoch. set_epoch on the size-grouped sampler drops its
+            # cached layout AND forwards the epoch to the shard; with plain batching there's
+            # no size-grouped sampler, so the shard is set directly.
             bsamp = getattr(train_loader, "batch_sampler", None)
-            if bsamp is not None and hasattr(bsamp, "_pending"):
-                bsamp._pending = None
+            if bsamp is not None and hasattr(bsamp, "set_epoch"):
+                bsamp.set_epoch(epoch)
+            else:
+                shard_sampler.set_epoch(epoch)
         # All ranks must run the SAME #steps; the size-grouped sampler gives each shard
         # a different batch count, so sync to the min (len() materializes the cached
         # layout that __iter__ then reuses, so this doesn't re-shuffle).
         max_steps = all_reduce_min_int(len(train_loader), dist_info) if dist_info else None
+        if max_steps == 0:                            # a shard too small to form one batch
+            print(f">> WARNING: epoch {epoch} has 0 synced steps (a rank's shard yielded no "
+                  "batch); skipping training this epoch. Reduce world_size or max_atoms_per_batch.")
         tr_loss, tr_maes, data_s, tr_s = _train_mt(
             train_loader, model, optimizer, epoch, stats, weights, args,
             dist_info=dist_info, max_steps=max_steps)
@@ -602,8 +613,15 @@ def run_multitask(args, model, optimizer, scheduler, loaders, stats, weights,
         # collective). Other ranks skip straight to the barrier below.
         va_loss, va_maes = (_validate_mt(val_loader, model, stats, weights, args)
                             if is_main else (0.0, {}))
-        if is_main and va_loss != va_loss:
-            print("Exit due to NaN")
+        # Collective val-NaN guard: only rank 0 validates, so its verdict must be shared —
+        # a rank-0-only sys.exit would strand the other ranks forever at the epoch barrier.
+        # (va_loss != va_loss is True only for NaN; non-main ranks vote 1 = finite.)
+        va_finite = int(va_loss == va_loss) if is_main else 1
+        if dist_info is not None and dist_info.enabled:
+            va_finite = all_reduce_min_int(va_finite, dist_info)
+        if not va_finite:
+            if is_main:
+                print("Exit due to NaN")
             sys.exit(1)
         scheduler.step()                              # deterministic, all ranks in step
 

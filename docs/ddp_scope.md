@@ -38,6 +38,11 @@ wrapper with `static_graph=True` is the drop-in alternative.
   identically.
 - **Rank 0 only:** validation (`_validate_mt`; replicas are identical, so one validates),
   checkpoint, epoch-log CSV, ResourceMonitor. A per-epoch `barrier` keeps ranks aligned.
+- **Collective abort.** A non-finite loss (per step) or NaN val loss aborts ALL ranks
+  together via an all-reduced finite-flag — a per-rank `sys.exit` would otherwise strand
+  the survivors at the next collective until walltime. `all_reduce_grads` reduces every
+  `requires_grad` param (not just those with a grad this step), so the reduction can't
+  misalign even if a future head's gradient becomes batch-conditional.
 - **Workers.** `num_workers` is divided across ranks (`num_workers // world_size`) to avoid
   CPU oversubscription; `slurm.cpus` must cover all ranks (rung configs: gpus=4, cpus=24,
   workers=20 → 5/rank → 20 procs + mains < 24).
