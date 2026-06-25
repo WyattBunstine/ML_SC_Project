@@ -1105,9 +1105,10 @@ class ConcatMTDataset:
     union. Concatenates .data/.labels/.groups so the shared splitter (get_sc_nonsc_loaders,
     resolve_split_by) works unchanged; __getitem__ delegates to the pack owning the global
     index. feature_stats delegates to the first pack (all packs share the cgv4 feature space,
-    so they MUST be built with the same feature flags). NOTE: size_grouped_batches must be OFF
-    (it reads a single pack's _off for atom counts); fine for the local encoder (gps_global=
-    False), which is the multitask config anyway."""
+    so they MUST be built with the same feature flags). size_grouped_batches works on the union
+    (`dataset_atom_counts` concatenates the members' counts) and is RECOMMENDED: it bounds the
+    per-batch atom count (and thus the O(N·M²) local-attention + per-atom-head memory), which is
+    what plain batch_size batching leaves uncapped — the rung-04 OOM."""
 
     def __init__(self, datasets):
         assert datasets, "ConcatMTDataset needs >= 1 dataset"
@@ -1324,7 +1325,16 @@ def dataset_atom_counts(dataset):
     position (``dataset.data[i][2]`` is that position for the packed backend), so
     no graphs are read. The lazy CIF backend has no such table -> None, and the
     caller falls back to plain batching.
+
+    ConcatMTDataset (the masked union): concatenate the members' counts in member
+    order — exactly the order ``ConcatMTDataset.data`` (and thus the global index)
+    uses — so size-grouped batching bounds the union's per-batch atom count too.
+    Any member without cheap counts -> None (fall back to plain batching).
     """
+    members = getattr(dataset, "datasets", None)
+    if members is not None:                       # ConcatMTDataset (a union of packs)
+        per = [dataset_atom_counts(d) for d in members]
+        return np.concatenate(per) if all(p is not None for p in per) else None
     off = getattr(dataset, "_off", None)
     if off is None or "n_atoms" not in off:
         return None
