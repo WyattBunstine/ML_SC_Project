@@ -26,6 +26,11 @@ from pymatgen.core import Composition, Element
 ANION_OXI = {"O": -2.0, "F": -1.0, "Cl": -1.0, "Br": -1.0, "I": -1.0,
              "S": -2.0, "Se": -2.0, "Te": -2.0, "N": -3.0, "P": -3.0, "As": -3.0}
 
+# Coinage metals are group-11 like Cu but resist high oxidation (Ag/Au are usually +1/+3
+# in chalcogenides), so they make terrible redox centers — float them only as a last
+# resort. The 3DSC audit traced the worst out-of-range solves (Ag=11) to floating Ag.
+COINAGE = {"Ag", "Au"}
+
 
 def _is_redox_candidate(sym: str) -> bool:
     """A d-block transition metal that is actually redox-active: groups 4-11. Excludes
@@ -87,7 +92,10 @@ def assign_oxidation(doped_comp: dict, parent_comp: dict):
     # redox center: a host group-4..11 TM (prefer 3d = lowest row). Dopant TMs are
     # treated as pinned dopants, not the redox center (e.g. Ce/Co dopants).
     host_redox = [e for e in doped if e not in dopants and _is_redox_candidate(e)]
-    host_redox.sort(key=lambda s: (Element(s).row, s))     # 3d before 4d/5d
+    # Priority: non-coinage before Ag/Au; then most ABUNDANT host TM (the majority TM
+    # forms the framework — picks Cu over Ti, Fe over minority Co, Mo over Ag in Chevrel);
+    # then higher group (later 3d = more redox-active); then symbol for determinism.
+    host_redox.sort(key=lambda s: (s in COINAGE, -doped[s], -Element(s).group, s))
     if len(host_redox) > 1:
         flags.append(f"multi_redox_candidate:{host_redox}")
     redox = host_redox[0] if host_redox else None
@@ -111,11 +119,19 @@ def assign_oxidation(doped_comp: dict, parent_comp: dict):
                               "source": "pinned_only", "flags": flags})
 
     redox_oxi = -fixed_charge / doped[redox]         # solve neutrality (fractional ok)
-    element_oxi[redox] = redox_oxi
     common = Element(redox).common_oxidation_states
     lo, hi = (min(common), max(common)) if common else (0, 6)
-    if not (lo - 1.0 <= redox_oxi <= hi + 1.0):      # sanity window around known states
-        flags.append(f"out_of_range:{redox}={redox_oxi:.2f}")
+    if not (lo - 1.0 <= redox_oxi <= hi + 1.0):
+        # Implausible solve (a false redox center, or a tiny redox amount dividing a large
+        # charge): DON'T emit a garbage oxidation — pin the center to its common state and
+        # accept a residual imbalance, flagged. Keeps the channel sane on the ~8% edge cases.
+        pinned = float(common[0]) if common else 0.0
+        element_oxi[redox] = pinned
+        flags.append(f"out_of_range_pinned:{redox}={redox_oxi:.2f}->{pinned:g}")
+        return (element_oxi, {"redox_element": redox, "redox_oxi": pinned,
+                              "charge_imbalance": fixed_charge + pinned * doped[redox],
+                              "source": "redox_pinned_fallback", "flags": flags})
+    element_oxi[redox] = redox_oxi
     return (element_oxi, {"redox_element": redox, "redox_oxi": redox_oxi,
                           "charge_imbalance": fixed_charge, "source": "redox_balance",
                           "flags": flags})
