@@ -96,29 +96,60 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
     return data
 
 
+def _parent_id(cif_id: str) -> str:
+    """MP parent of a (doped) 3DSC structure, parsed from its filename
+    ('...-MP-mp-978986-synth_doped.cif' -> 'mp-978986'). All doped variants of one parent
+    share this key. Falls back to the full id (singleton group) when there's no MP tag —
+    e.g. the non-SC negatives, which have no doped variants and so split per-row as before."""
+    import re
+    m = re.search(r"-MP-(mp-\d+)", str(cif_id))
+    return m.group(1) if m else str(cif_id)
+
+
 def make_splits(data, seed: int = 123, val_frac: float = 0.1, test_frac: float = 0.2):
-    """Per-row split assignment ('train'/'val'/'test'), SC stratified by family."""
-    from sklearn.model_selection import train_test_split
+    """Per-row split assignment ('train'/'val'/'test'), SC stratified by family and
+    GROUPED BY MP PARENT — every doped variant of a parent lands in the same split, so a
+    near-identical doped structure can't leak across train/test (62% of the SC set is
+    shared-parent variants). Whole groups are greedily packed into test->val->train per
+    family to hit the row-fraction targets. Non-SC negatives have singleton groups, so
+    their split is the usual per-row one."""
+    import random
+    from collections import defaultdict
 
     n = len(data["ids"])
     split = np.empty(n, dtype=object)
-    sc_idx = np.where(data["label"] == 1)[0]
-    nonsc_idx = np.where(data["label"] == 0)[0]
+    groups = np.array([_parent_id(i) for i in data["ids"]])
 
-    def three_way(idx, strat):
-        trainval, test = train_test_split(
-            idx, test_size=test_frac, random_state=seed, stratify=strat)
-        strat_tv = None if strat is None else strat[np.isin(idx, trainval)]
-        train, val = train_test_split(
-            trainval, test_size=val_frac / (1.0 - test_frac),
-            random_state=seed, stratify=strat_tv)
-        return train, val, test
+    def grouped_three_way(idx, label):
+        g2rows = defaultdict(list)
+        for i in idx:
+            g2rows[groups[i]].append(int(i))
+        # Each group's family (constant across a parent's variants): keeps family
+        # stratification while assigning whole parents.
+        by_fam = defaultdict(list)
+        for g, rows in g2rows.items():
+            by_fam[data["family"][rows[0]]].append(g)
+        rng = random.Random(seed + label)
+        bucket = {"train": [], "val": [], "test": []}
+        for fam, gs in by_fam.items():
+            rng.shuffle(gs)                                  # deterministic per (seed, label)
+            gs.sort(key=lambda g: -len(g2rows[g]))           # largest groups first
+            f_rows = sum(len(g2rows[g]) for g in gs)
+            target = {"test": test_frac * f_rows, "val": val_frac * f_rows,
+                      "train": (1.0 - test_frac - val_frac) * f_rows}
+            cur = {"train": 0, "val": 0, "test": 0}
+            for g in gs:                                     # each group -> split with most room
+                s = max(("test", "val", "train"), key=lambda k: target[k] - cur[k])
+                bucket[s] += g2rows[g]
+                cur[s] += len(g2rows[g])
+        return bucket["train"], bucket["val"], bucket["test"]
 
-    sc_train, sc_val, sc_test = three_way(sc_idx, data["family"][sc_idx])
-    split[sc_train], split[sc_val], split[sc_test] = "train", "val", "test"
-    if len(nonsc_idx):
-        ns_train, ns_val, ns_test = three_way(nonsc_idx, None)
-        split[ns_train], split[ns_val], split[ns_test] = "train", "val", "test"
+    for label in (1, 0):
+        idx = np.where(data["label"] == label)[0]
+        if not len(idx):
+            continue
+        tr, va, te = grouped_three_way(idx, label)
+        split[tr], split[va], split[te] = "train", "val", "test"
     return split
 
 
