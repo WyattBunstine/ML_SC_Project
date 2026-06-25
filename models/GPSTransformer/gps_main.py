@@ -32,6 +32,8 @@ from data import (load_cif_dataset, get_sc_nonsc_loaders,  # noqa: E402
                   collate_pool_multitask, DOS_N_ENERGY, ConcatMTDataset)
 from train import (Normalizer, run_regression,  # noqa: E402
                    compute_target_stats, run_multitask, _DEFAULT_LOSS_WEIGHTS)
+from dist_utils import (init_distributed, cleanup, broadcast_model,  # noqa: E402
+                        broadcast_object)
 from model import GPSCrystalNet  # noqa: E402
 
 
@@ -57,16 +59,32 @@ def main():
     if args.get("task", "regression") != "regression":
         sys.exit("GPSTransformer currently supports task='regression' only.")
 
+    # Data-parallel: enabled only under torchrun (WORLD_SIZE>1); otherwise a no-op
+    # single-process run, byte-identical to before. See common/dist_utils.
+    dist_info = init_distributed()
+
+    # Run metadata derives from a timestamp, so it MUST be computed once (rank 0) and
+    # broadcast — independent per-rank timestamps would scatter the output across
+    # different dirs. Only rank 0 creates dirs / copies the config / writes metadata.
     run_tag = args.get("run_tag", "GPS")
-    now = datetime.datetime.now()
-    run_id = f"{run_tag}_{now.strftime('%Y-%m-%d_%H-%M-%S')}"
-    run_dir = os.path.join(args.get("model_data_dir", "model_data"),
-                           now.strftime("%Y-%m-%d"), run_tag, run_id)
-    os.makedirs(run_dir, exist_ok=True)
-    shutil.copy(sys.argv[1], os.path.join(run_dir, "config.json"))
-    args["out_file"] = os.path.join(run_dir, os.path.basename(args.get("out_file", "result")) or "result")
+    if dist_info.is_main:
+        now = datetime.datetime.now()
+        run_id = f"{run_tag}_{now.strftime('%Y-%m-%d_%H-%M-%S')}"
+        run_dir = os.path.join(args.get("model_data_dir", "model_data"),
+                               now.strftime("%Y-%m-%d"), run_tag, run_id)
+        meta = {"run_id": run_id, "run_dir": run_dir,
+                "out_file": os.path.join(run_dir, os.path.basename(
+                    args.get("out_file", "result")) or "result")}
+    else:
+        meta = None
+    meta = broadcast_object(meta, dist_info, src=0)
+    run_id, run_dir = meta["run_id"], meta["run_dir"]
+    args["out_file"] = meta["out_file"]
     args["run_id"] = run_id
-    print(f"Run output dir: {run_dir}")
+    if dist_info.is_main:
+        os.makedirs(run_dir, exist_ok=True)
+        shutil.copy(sys.argv[1], os.path.join(run_dir, "config.json"))
+        print(f"Run output dir: {run_dir}" + (f"  [{dist_info}]" if dist_info.enabled else ""))
 
     # Multitask pretraining mode: config carries a non-empty `tasks` list (e.g.
     # ["energy","forces","stress","magmom","bandgap"]). Conservative-autograd forces
@@ -111,13 +129,17 @@ def main():
 
     split_by = resolve_split_by(args.get("split_by"), dataset)
     args["split_by"] = split_by
+    # Each rank spawns its own DataLoader workers, so divide the configured pool across
+    # ranks to avoid CPU oversubscription (cpus-per-task covers all ranks on the node).
+    per_rank_workers = max(0, args.get("num_workers", 0) // dist_info.world_size)
     loaders = get_sc_nonsc_loaders(
         dataset, batch_size=args["batch_size"],
         val_ratio=args["val_ratio"], test_ratio=args["test_ratio"],
         sc_to_nonsc_ratio=float("inf"),
-        num_workers=args.get("num_workers", 0),
+        num_workers=per_rank_workers,
         pin_memory=torch.cuda.is_available(),
         seed=args.get("split_seed", 123), split_by=split_by,
+        dist_info=dist_info,
         # Bound the within-crystal global-attention memory (B x Lmax^2) by batching
         # similar-sized cells; max_atoms_per_batch caps the peak (large-cell batches
         # get fewer crystals). Off by default -> unchanged behavior when unset.
@@ -148,7 +170,10 @@ def main():
     model = GPSCrystalNet.from_args(
         args, (orig_atom_fea_len, nbr_fea_len, poly_fea_len))
 
-    if args.get("normalize_features", True):
+    # Feature-normalization stats are computed ONCE on rank 0 (over the full train
+    # split) and propagated to every replica by broadcast_model below (they live in
+    # model buffers), so all ranks normalize identically and no rank duplicates the work.
+    if args.get("normalize_features", True) and dist_info.is_main:
         stats = compute_feature_stats(dataset, list(sc_idx),
                                       max_graphs=args.get("feature_stat_graphs", 4000),
                                       seed=args.get("split_seed", 123))
@@ -157,8 +182,8 @@ def main():
         print("Installed per-feature input normalization")
 
     total = sum(p.numel() for p in model.parameters())
-    with open(os.path.join(run_dir, "metadata.json"), "w") as f:
-        json.dump({
+    if dist_info.is_main:
+        metadata = {
             "run_id": run_id, "model": "GPSCrystalNet",
             "timestamp": now.isoformat(timespec="seconds"),
             "feature_dims": {"node": orig_atom_fea_len, "edge": nbr_fea_len, "poly": poly_fea_len},
@@ -178,12 +203,20 @@ def main():
                         "total_indexed": len(dataset), "split_by": split_by,
                         "split_sizes": loaders["split_sizes"]},
             "model_size": {"total_params": total},
-        }, f, indent=2)
-    print(f"Model: {total:,} params")
+            "distributed": {"world_size": dist_info.world_size} if dist_info.enabled else None,
+        }
+        with open(os.path.join(run_dir, "metadata.json"), "w") as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Model: {total:,} params")
 
     args["cuda"] = torch.cuda.is_available()
     if args["cuda"]:
-        model.cuda()
+        # Pin to this rank's GPU (set by init_distributed); cuda:0 single-process.
+        model.cuda(dist_info.local_rank)
+    # Make every replica identical: copy rank 0's weights AND buffers (the feature
+    # stats just installed) to all ranks. No-op single-process. After this, the
+    # per-step gradient all-reduce keeps them in lockstep.
+    broadcast_model(model, dist_info, src=0)
 
     optimizer = _build_optimizer(model, args)
     scheduler = MultiStepLR(optimizer, milestones=args.get("lr_milestones", [100]), gamma=0.1)
@@ -203,17 +236,29 @@ def main():
             sys.exit("multitask training requires a POSITIONED pack (real frac_coords / "
                      "lattice); this pack's lattice is all-zero (e.g. packed_v1). Re-pack "
                      "with positions + forces (packed_v4).")
-        target_stats = compute_target_stats(
-            dataset, list(sc_idx), max_samples=args.get("target_stat_samples", 2000),
-            seed=args.get("split_seed", 123))
+        # Target-normalization stds: compute on rank 0 over the full train split and
+        # broadcast, so every replica scales the loss identically.
+        if dist_info.is_main:
+            target_stats = compute_target_stats(
+                dataset, list(sc_idx), max_samples=args.get("target_stat_samples", 2000),
+                seed=args.get("split_seed", 123))
+        else:
+            target_stats = None
+        target_stats = broadcast_object(target_stats, dist_info, src=0)
         weights = {**_DEFAULT_LOSS_WEIGHTS, **args.get("loss_weights", {})}
-        run_multitask(args, model, optimizer, scheduler, loaders, target_stats, weights)
+        run_multitask(args, model, optimizer, scheduler, loaders, target_stats, weights,
+                      dist_info=dist_info)
     else:
+        if dist_info.enabled:
+            sys.exit("data-parallel (torchrun) is wired for multitask pretraining only; "
+                     "run single-target GPS regression on one GPU.")
         train_targets = torch.tensor([float(dataset.data[i][1]) for i in sc_idx],
                                      dtype=torch.float32)
         normalizer = Normalizer(train_targets, transform=args.get("target_transform", "none"))
         criterion = nn.L1Loss()
         run_regression(args, model, criterion, optimizer, scheduler, loaders, normalizer)
+
+    cleanup(dist_info)
 
 
 if __name__ == "__main__":

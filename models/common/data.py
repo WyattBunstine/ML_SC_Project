@@ -1461,6 +1461,41 @@ class SizeGroupedBatchSampler(Sampler):
         self._pending = None
 
 
+class DistributedShardSampler(Sampler):
+    """A disjoint per-rank shard of ``indices``, reshuffled each epoch, for the
+    explicit-allreduce data-parallel trainer (see common/dist_utils). Deterministically
+    shuffles the FULL index list with ``seed + epoch`` (identical on every rank), pads
+    to a multiple of ``world_size``, then strides by ``rank`` — the standard
+    DistributedSampler scheme, but over our explicit train-index list so it composes
+    UNDER ``SizeGroupedBatchSampler`` (which size-groups within the rank's shard).
+
+    ``set_epoch`` MUST be called once per epoch (the trainer does this): all ranks use
+    the same epoch -> the same shuffle -> disjoint strided shards that together cover
+    the train set. Sharding by index is leakage-free because the material split already
+    happened upstream (each shard is a subset of the same train materials)."""
+
+    def __init__(self, indices, world_size, rank, seed=123):
+        self.indices = list(indices)
+        self.world_size = max(1, int(world_size))
+        self.rank = int(rank)
+        self.seed = int(seed)
+        self.epoch = 0
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def __iter__(self):
+        order = self.indices[:]
+        random.Random(self.seed + self.epoch).shuffle(order)
+        pad = (-len(order)) % self.world_size      # make it divisible so shards are equal
+        if pad:
+            order += order[:pad]
+        yield from order[self.rank::self.world_size]
+
+    def __len__(self):
+        return (len(self.indices) + self.world_size - 1) // self.world_size
+
+
 def nonsc_count_for_ratio(n_sc_train, sc_to_nonsc_ratio, n_nonsc_available):
     """Number of non-SC samples to draw per epoch for a given SC:non-SC ratio.
 
@@ -1480,7 +1515,7 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
                          pin_memory=False, seed=123, split_by="frame",
                          size_grouped=False, max_atoms_per_batch=None,
                          size_pool_factor=20, prefetch_factor=None,
-                         collate_fn=collate_pool):
+                         collate_fn=collate_pool, dist_info=None):
     """Build SC/non-SC loaders shared by the regression and classification tasks.
 
     Stratified per-class split into train/val/test. ``sc_to_nonsc_ratio`` governs
@@ -1593,11 +1628,24 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
         k = min(len(min_idx), len(maj_idx))
         return list(min_idx) + rng.sample(maj_idx, k)
 
-    train_loader = make_loader(
-        BalancedEpochSampler(sc_train, ns_train, n_nonsc_train, seed=seed))
+    # Data-parallel: the TRAIN loader draws from a disjoint per-rank shard (reshuffled
+    # each epoch via set_epoch) so the N replicas see different data and together cover
+    # the train set; val/test stay whole (rank 0 validates). Non-distributed -> the
+    # BalancedEpochSampler path, byte-identical. DDP here targets the all-SC multitask
+    # pretraining (ratio=inf -> ns_train unused), so sharding sc_train is the full train set.
+    train_shard_sampler = None
+    if dist_info is not None and getattr(dist_info, "enabled", False):
+        train_shard_sampler = DistributedShardSampler(
+            sc_train, dist_info.world_size, dist_info.rank, seed=seed)
+        train_loader = make_loader(train_shard_sampler)
+    else:
+        train_loader = make_loader(
+            BalancedEpochSampler(sc_train, ns_train, n_nonsc_train, seed=seed))
 
     return {
         "train": train_loader,
+        # The shard sampler (or None) so the trainer can set_epoch it each epoch.
+        "train_shard_sampler": train_shard_sampler,
         # "realistic" now reflects the configured ratio (not the dataset's true
         # imbalance); "balanced" remains a 1:1 diagnostic drawn from the same
         # ratio-limited non-SC pool, so the two coincide when ratio >= 1 and both
