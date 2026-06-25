@@ -258,6 +258,10 @@ run() {
     # above; missing keys keep the default. MPNNMain.py ignores unknown keys,
     # so the same file drives both training and resource requests.
     # Recognized keys: partition, account, time, gpus, cpus, mem, mail_user.
+    # "partition" accepts a COMMA-SEPARATED LIST to target multiple node types and let
+    # the scheduler start on whichever is free first, e.g. "partition": "ica100,a100"
+    # (a100 = 48-core/192G nodes, ica100 = 64-core/256G nodes; both 4xA100). The request
+    # must fit the SMALLEST listed node (e.g. keep cpus<=48 so it stays a100-eligible).
     local s_part="${SLURM_PARTITION}" s_acct="${SLURM_ACCOUNT}" s_time="${SLURM_TIME}"
     local s_gpus="${SLURM_GPUS}" s_cpus="${SLURM_CPUS}" s_mem="${SLURM_MEM}"
     local s_mail="${SLURM_MAIL_USER}"
