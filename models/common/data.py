@@ -835,14 +835,25 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
             frac_coords, lattice, nbr_jimage_t)
 
 
+# MPtrj stores stress as the RAW VASP tensor in kBar; the model emits stress as the
+# thermodynamic sigma = (1/V) dE/dstrain in eV/A^3 (model.py, no sign flip — unlike forces).
+# Convert the target to the model's units: kBar -> eV/A^3 is /1602.1766 (1 eV/A^3 =
+# 160.21766 GPa = 1602.1766 kBar), and VASP's sign convention is the NEGATIVE of the
+# thermodynamic stress, so flip it — otherwise stress (dE/dstrain) fights forces (dE/dr),
+# which share the same energy. Without this, target ~kBar (|.|~1-11) vs model ~eV/A^3
+# (~1e-2) made stress unlearnable (flat at the mean MAE from epoch 0).
+STRESS_KBAR_TO_EVA3 = -1.0 / 1602.1766208
+
+
 def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
     """Build the (targets, masks) dicts for masked multitask training.
 
     Per-atom: forces (N,3), magmom (N,1) (from the ragged extraction). Per-structure:
-    stress (3,3) (ragged) + scalar energy/bandgap (from the index). An absent target is
-    a NaN sentinel -> its mask is False and its value is zeroed, so a masked loss never
-    propagates NaN. Masks are per-STRUCTURE bools (a structure carries a given label for
-    every atom or none of them -> per-atom force/magmom losses broadcast the structure mask).
+    stress (3,3) (ragged, converted kBar->eV/A^3 via STRESS_KBAR_TO_EVA3) + scalar
+    energy/bandgap (from the index). An absent target is a NaN sentinel -> its mask is
+    False and its value is zeroed, so a masked loss never propagates NaN. Masks are
+    per-STRUCTURE bools (a structure carries a given label for every atom or none of them
+    -> per-atom force/magmom losses broadcast the structure mask).
     """
     def _t(arr):
         t = torch.from_numpy(np.array(arr, dtype=np.float32, copy=True))
@@ -855,7 +866,8 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
 
     forces, m_f = _t(r["forces"])          # (N,3)
     magmom, m_m = _t(r["magmom"])          # (N,1)
-    stress, m_s = _t(r["stress"])          # (3,3)
+    stress, m_s = _t(r["stress"])          # (3,3) raw kBar ...
+    stress = stress * STRESS_KBAR_TO_EVA3  # ... -> eV/A^3, model units (see constant above)
     dos, m_dos = _t(r["dos"])              # (DOS_N_ENERGY,) per-structure total DOS
     energy_t, m_e = _scalar(energy)        # (1,)
     bandgap_t, m_bg = _scalar(bandgap)     # (1,)
