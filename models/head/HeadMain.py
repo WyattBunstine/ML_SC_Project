@@ -46,7 +46,38 @@ DEFAULTS = {
     "tc_weight_decay": 1e-4, "trunk_lr_factor": 0.1,
     "n_seeds": 5, "ridge_alphas": [0.1, 1.0, 10.0, 100.0, 1000.0],
     "device": "cpu",
+    # Optional transfer-reproducibility fields: with a frozen GPS encoder `checkpoint`
+    # set, run() auto-builds the embeddings (from `embed_source`, defaulting to
+    # index_path) and the `descriptors` table if they're missing — so ONE config + one
+    # `train-head` reproduces embed-gps + descriptors + head. Absent (e.g. the MACE
+    # configs, which point embed_dir at a prebuilt dir) -> the artifacts must pre-exist.
+    "checkpoint": None, "embed_source": None,
 }
+
+
+def _prepare_transfer_inputs(cfg, device):
+    """Make the embed_dir + descriptors a head config needs, if absent — so the transfer
+    is reproducible from the config alone. Both are cached/resumable: an embed_dir with
+    .npy or an existing descriptors pickle is reused untouched."""
+    import glob
+    embed_dir = cfg["embed_dir"]
+    have_emb = os.path.isdir(embed_dir) and glob.glob(os.path.join(embed_dir, "*.npy"))
+    if cfg.get("checkpoint") and not have_emb:
+        # The GPS encoder + data layer live under models/common + models/GPSTransformer;
+        # put them on the path the same way the embed-gps CLI does before importing.
+        import sys
+        for _p in (os.path.join("models", "common"), os.path.join("models", "GPSTransformer")):
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
+        from models.head.embed_gps import embed_index
+        source = cfg.get("embed_source") or cfg["index_path"]   # pack (fast) or the index
+        print(f"[transfer] embedding {source} with {os.path.basename(cfg['checkpoint'])} "
+              f"-> {embed_dir}")
+        embed_index(cfg["checkpoint"], source, embed_dir, device=device)
+    if not os.path.exists(cfg["descriptors"]):
+        from models.head.descriptors import build_descriptor_table
+        print(f"[transfer] building descriptors from {cfg['index_path']} -> {cfg['descriptors']}")
+        build_descriptor_table(cfg["index_path"], cfg["descriptors"])
 
 
 def _to_t(x, device):
@@ -131,6 +162,9 @@ def run(config_path):
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "config.json"), "w") as f:
         json.dump(cfg, f, indent=1)
+
+    # ---------- reproduce the frozen-encoder artifacts from the config (no-op if cached) ----
+    _prepare_transfer_inputs(cfg, device)
 
     # ---------------- data ----------------
     data = assemble(cfg["index_path"], cfg["embed_dir"], cfg["descriptors"],
