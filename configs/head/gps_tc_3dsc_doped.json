@@ -13,6 +13,6 @@
   "hidden": 64,
   "dropout": 0.2,
   "class_pretrain": false,
-  "n_seeds": 5,
+  "n_seeds": 7,
   "device": "cpu"
 }
