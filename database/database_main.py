@@ -378,9 +378,19 @@ def _build_decorated_graph(cif_path, parent_comp):
     from database.oxidation_doping import decorate_structure
 
     structure = _load_unit_cell_structure_from_cif(cif_path)
-    if not structure.is_ordered:
-        structure, _info = decorate_structure(structure, parent_comp)
-    return build_crystal_graph_from_structure(structure, compute_spacegroup=False)
+    if structure.is_ordered:
+        return build_crystal_graph_from_structure(structure, compute_spacegroup=False)
+    decorated, _info = decorate_structure(structure, parent_comp)
+    try:
+        return build_crystal_graph_from_structure(decorated, compute_spacegroup=False)
+    except ValueError:
+        # The doping placed an anion-former and a cation on ONE site (e.g. Se->Al in Nb3Al,
+        # F->B in MgB2, C<->N in NbN), so the builder can't assign that site a categorical
+        # cation/anion role. These anion-on-cation-site dopings are chemically ambiguous and
+        # rare (~0.6% of the SC set); fall back to the UNDECORATED build (oxidation ~0, the
+        # pre-doping behavior) so the structure still enters the dataset rather than dropping
+        # out — keeping the doped graph set the same size as the baseline for the A/B.
+        return build_crystal_graph_from_structure(structure, compute_spacegroup=False)
 
 
 def _compact_and_write(graph, graph_path, item_id):
