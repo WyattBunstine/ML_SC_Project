@@ -61,19 +61,32 @@ def _prepare_transfer_inputs(cfg, device):
     .npy or an existing descriptors pickle is reused untouched."""
     import glob
     embed_dir = cfg["embed_dir"]
+    # `encoder`: "gps" = the learned encoder embedding (needs a checkpoint); "raw" = the
+    # per-atom RAW node features the encoder ingests (ablation: does the encoder add
+    # anything?). Defaults to "gps" when a checkpoint is set. Both arms share descriptors
+    # so gps-vs-raw isolates the encoder's contribution.
+    encoder = cfg.get("encoder") or ("gps" if cfg.get("checkpoint") else None)
     have_emb = os.path.isdir(embed_dir) and glob.glob(os.path.join(embed_dir, "*.npy"))
-    if cfg.get("checkpoint") and not have_emb:
+    if encoder in ("gps", "raw") and not have_emb:
         # The GPS encoder + data layer live under models/common + models/GPSTransformer;
         # put them on the path the same way the embed-gps CLI does before importing.
         import sys
         for _p in (os.path.join("models", "common"), os.path.join("models", "GPSTransformer")):
             if _p not in sys.path:
                 sys.path.insert(0, _p)
-        from models.head.embed_gps import embed_index
         source = cfg.get("embed_source") or cfg["index_path"]   # pack (fast) or the index
-        print(f"[transfer] embedding {source} with {os.path.basename(cfg['checkpoint'])} "
-              f"-> {embed_dir}")
-        embed_index(cfg["checkpoint"], source, embed_dir, device=device)
+        # The raw arm matches the encoder's feature space (rich/dihedral flags) for fairness.
+        feat = (torch.load(cfg["checkpoint"], map_location="cpu").get("args", {})
+                if cfg.get("checkpoint") else {})
+        if encoder == "gps":
+            from models.head.embed_gps import embed_index
+            print(f"[transfer] GPS-embedding {source} with "
+                  f"{os.path.basename(cfg['checkpoint'])} -> {embed_dir}")
+            embed_index(cfg["checkpoint"], source, embed_dir, device=device)
+        else:  # raw
+            from models.head.embed_gps import embed_raw
+            print(f"[transfer] RAW node-feature embedding {source} -> {embed_dir}")
+            embed_raw(source, embed_dir, feature_args=feat, device=device)
     if not os.path.exists(cfg["descriptors"]):
         from models.head.descriptors import build_descriptor_table
         print(f"[transfer] building descriptors from {cfg['index_path']} -> {cfg['descriptors']}")

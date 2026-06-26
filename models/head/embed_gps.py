@@ -80,3 +80,43 @@ def embed_index(checkpoint_path, index_path, out_dir, device="cpu", batch_size=6
             done += 1
     print(f"Embedded {done} structures -> {out_dir}/ (per-atom h, dim {model.atom_fea_len})")
     return out_dir
+
+
+def embed_raw(index_path, out_dir, feature_args=None, device="cpu", batch_size=64, resume=True):
+    """Save <id>.npy = the per-atom RAW node-feature matrix (N, node_fea_len) — the
+    encoder's INPUT, pooled the same way by the head. This is the ablation arm: 'does the
+    learned encoder add anything over the raw atom features it ingests?'. No checkpoint /
+    model. ``feature_args`` (a checkpoint's args dict) match the encoder's feature space
+    (rich features / dihedrals / neighbor caps) for a fair comparison; defaults otherwise."""
+    from data import load_cif_dataset, collate_pool_geom
+    from torch.utils.data import DataLoader
+
+    args = feature_args or {}
+    os.makedirs(out_dir, exist_ok=True)
+    dataset = load_cif_dataset(
+        index_path,
+        max_num_nbr=args.get("max_num_nbr", 14),
+        max_num_poly_nbr=args.get("max_num_poly_nbr", 16),
+        target_column=None,
+        use_poly_edges=args.get("use_poly_edges", True),
+        use_bond_angles=args.get("use_bond_angles", False),
+        build_angle_bias=True,
+        use_rich_node_features=args.get("use_rich_node_features", False),
+        use_dihedrals=args.get("use_dihedrals", False))
+
+    loader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_pool_geom)
+    done = dim = 0
+    for input_batch, _t, _l, cif_ids in loader:
+        out_paths = [os.path.join(out_dir, str(cid) + ".npy") for cid in cif_ids]
+        if resume and all(os.path.exists(p) for p in out_paths):
+            continue
+        atom_fea = input_batch[0].cpu().numpy()                   # (N, node_fea_len) — raw input
+        seg = input_batch[6].cpu().numpy()
+        dim = atom_fea.shape[1]
+        for c, out_path in enumerate(out_paths):
+            if resume and os.path.exists(out_path):
+                continue
+            np.save(out_path, atom_fea[seg == c])                 # (n_atoms_c, node_fea_len)
+            done += 1
+    print(f"Embedded {done} structures -> {out_dir}/ (RAW per-atom node features, dim {dim})")
+    return out_dir
