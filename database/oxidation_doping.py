@@ -37,9 +37,19 @@ def _is_redox_candidate(sym: str) -> bool:
     return el.is_transition_metal and 4 <= el.group <= 11
 
 
+def _first_positive_common(common) -> float | None:
+    """First POSITIVE common oxidation state. pymatgen lists some metalloids' negative
+    state first (Sn/Ge/Pb -4), but as a cation here they take a positive state — and an
+    accidental negative would create a cation+anion site the builder rejects."""
+    positive = [c for c in common if c > 0]
+    if positive:
+        return float(positive[0])
+    return float(common[0]) if common else None
+
+
 def _pinned_cation_oxi(sym: str) -> float:
     """Definite oxidation for a fixed-valence cation. Group 3 + lanthanoids -> +3,
-    alkali -> +1, alkaline-earth -> +2; otherwise the element's (single) common state."""
+    alkali -> +1, alkaline-earth -> +2; otherwise the element's first positive common state."""
     el = Element(sym)
     if el.is_alkali:
         return 1.0
@@ -47,8 +57,8 @@ def _pinned_cation_oxi(sym: str) -> float:
         return 2.0
     if el.is_lanthanoid or el.group == 3:
         return 3.0
-    common = el.common_oxidation_states
-    return float(common[0]) if common else 0.0
+    v = _first_positive_common(el.common_oxidation_states)
+    return v if v is not None else 0.0
 
 
 def _dopant_oxi(sym: str, replaced_host: str | None) -> float:
@@ -59,10 +69,11 @@ def _dopant_oxi(sym: str, replaced_host: str | None) -> float:
     if not common:
         return _pinned_cation_oxi(sym)
     if len(common) == 1 or replaced_host is None:
-        return float(common[0])
+        v = _first_positive_common(common)
+        return v if v is not None else float(common[0])
     host_oxi = _pinned_cation_oxi(replaced_host)
     aliovalent = [c for c in common if abs(c - host_oxi) > 1e-9 and c > 0]
-    return float(aliovalent[0]) if aliovalent else float(common[0])
+    return float(aliovalent[0]) if aliovalent else _first_positive_common(common)
 
 
 def assign_oxidation(doped_comp: dict, parent_comp: dict):
