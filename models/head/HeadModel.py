@@ -14,10 +14,90 @@ trainable parameters are ~7.5k at the default k=64, h=64 — inside the ~10k
 budget for ~5.8k noisy T_c labels. The encoder never appears here: it
 contributed the pooled embedding offline (see embed_mace.py), which is what
 makes encoders interchangeable beneath this head.
+
+Pooling (`pooling`, decided 2026-06-29): how the per-atom embedding (N_atoms,D)
+collapses to one structure vector before the trunk.
+  - "meanmax"   : parameter-free [mean||max], pooled offline -> PCA/whiten (above).
+  - "deepsets"  : [mean||max] of a learned per-atom map g(h_i); mirrors the
+                  encoder's pretraining readout E = mean_i head(h_i), so the
+                  nonlinearity acts per-atom BEFORE aggregation (Jensen).
+  - "attention" : gated attention-MIL pool — a learned query weights atoms so the
+                  head can focus on the active sublattice (localized SC physics),
+                  concatenated with a plain value-mean for the global view.
+The learned pools consume the raw per-atom embedding (segment/CSR-packed, see
+HeadData), add fresh params (reported), and replace the PCA step.
 """
 
 import torch
 import torch.nn as nn
+
+
+def _segment_mean(x, seg, n):
+    """Mean of rows of x (A,D) grouped by segment id seg (A,) into n groups."""
+    out = torch.zeros(n, x.shape[1], dtype=x.dtype, device=x.device)
+    out.index_add_(0, seg, x)
+    cnt = torch.zeros(n, 1, dtype=x.dtype, device=x.device)
+    cnt.index_add_(0, seg, torch.ones(x.shape[0], 1, dtype=x.dtype, device=x.device))
+    return out / cnt.clamp(min=1.0)
+
+
+def _segment_max(x, seg, n):
+    """Per-feature max of x (A,D) grouped by seg into n groups (0 for empties)."""
+    out = torch.full((n, x.shape[1]), float("-inf"), dtype=x.dtype, device=x.device)
+    out.scatter_reduce_(0, seg.unsqueeze(1).expand_as(x), x, reduce="amax",
+                        include_self=True)
+    return out.masked_fill(out == float("-inf"), 0.0)
+
+
+def _segment_softmax(scores, seg, n):
+    """Softmax of per-atom scores (A,) within each of n segments -> weights (A,)."""
+    m = torch.full((n,), float("-inf"), dtype=scores.dtype, device=scores.device)
+    m.scatter_reduce_(0, seg, scores, reduce="amax", include_self=True)
+    e = (scores - m[seg]).exp()
+    s = torch.zeros(n, dtype=scores.dtype, device=scores.device)
+    s.index_add_(0, seg, e)
+    return e / s[seg].clamp(min=1e-12)
+
+
+class DeepSetsPool(nn.Module):
+    """pooled = [mean_i g(h_i) || max_i g(h_i)] — a per-atom map THEN aggregate,
+    matching the encoder's pretraining readout (mean of a per-atom head). The
+    nonlinearity acts before pooling, which plain mean||max cannot express."""
+
+    def __init__(self, in_dim: int, pool_dim: int = 32):
+        super().__init__()
+        self.g = nn.Linear(in_dim, pool_dim)
+        self.act = nn.Softplus()
+        self.out_dim = 2 * pool_dim
+
+    def forward(self, x, seg, n):
+        g = self.act(self.g(x))
+        return torch.cat([_segment_mean(g, seg, n), _segment_max(g, seg, n)], dim=1)
+
+
+class AttentionPool(nn.Module):
+    """Gated attention pooling (Ilse et al. 2018, attention-MIL): a learned query
+    scores each atom and a softmax-over-atoms weights a value projection, so the
+    head can concentrate on the few SC-relevant sites. Concatenated with the
+    plain value-mean so the global composition is never lost.
+    pooled = [ sum_i a_i v(h_i) || mean_i v(h_i) ]."""
+
+    def __init__(self, in_dim: int, pool_dim: int = 32, att_dim: int = None):
+        super().__init__()
+        att_dim = att_dim or pool_dim
+        self.v = nn.Linear(in_dim, pool_dim)
+        self.attn = nn.Linear(in_dim, att_dim)     # feature branch (tanh)
+        self.gate = nn.Linear(in_dim, att_dim)     # gating branch (sigmoid)
+        self.score = nn.Linear(att_dim, 1)
+        self.out_dim = 2 * pool_dim
+
+    def forward(self, x, seg, n):
+        v = self.v(x)
+        a = self.score(torch.tanh(self.attn(x)) * torch.sigmoid(self.gate(x))).squeeze(-1)
+        a = _segment_softmax(a, seg, n)
+        ctx = torch.zeros(n, v.shape[1], dtype=v.dtype, device=v.device)
+        ctx.index_add_(0, seg, v * a.unsqueeze(1))
+        return torch.cat([ctx, _segment_mean(v, seg, n)], dim=1)
 
 
 class PCAWhiten(nn.Module):
@@ -75,11 +155,25 @@ class Standardizer(nn.Module):
 
 class TcHead(nn.Module):
     def __init__(self, enc_dim: int, phys_dim: int, pca_k: int = 64,
-                 hidden: int = 64, dropout: float = 0.2):
+                 hidden: int = 64, dropout: float = 0.2,
+                 pooling: str = "meanmax", pool_dim: int = 32):
         super().__init__()
-        self.pca = PCAWhiten(enc_dim, pca_k)
+        # `enc_dim` is the pooled width (2*D) for meanmax, the per-atom width (D)
+        # for the learned pools — HeadMain passes the right one.
+        self.pooling = pooling
+        if pooling == "meanmax":
+            self.pca = PCAWhiten(enc_dim, pca_k)
+            pooled_dim = pca_k
+        elif pooling == "deepsets":
+            self.pool = DeepSetsPool(enc_dim, pool_dim)
+            pooled_dim = self.pool.out_dim
+        elif pooling == "attention":
+            self.pool = AttentionPool(enc_dim, pool_dim)
+            pooled_dim = self.pool.out_dim
+        else:
+            raise ValueError(f"unknown pooling {pooling!r}")
         self.phys_std = Standardizer(phys_dim)
-        in_dim = pca_k + phys_dim
+        in_dim = pooled_dim + phys_dim
         self.norm = nn.LayerNorm(in_dim)
         self.trunk = nn.Sequential(nn.Linear(in_dim, hidden), nn.Softplus(),
                                    nn.Dropout(dropout))
@@ -102,11 +196,19 @@ class TcHead(nn.Module):
     def z_to_kelvin(self, z: torch.Tensor) -> torch.Tensor:
         return torch.expm1(z * self.tc_std + self.tc_mean).clamp(min=0.0)
 
-    def features(self, enc: torch.Tensor, phys: torch.Tensor) -> torch.Tensor:
-        return self.trunk(self.norm(torch.cat([self.pca(enc), self.phys_std(phys)], dim=1)))
+    def _pooled(self, x, seg=None, n=None):
+        """meanmax: x is the offline-pooled (n,2D) vector -> PCA. learned pools:
+        x is the per-atom (A,D) embedding with segment ids seg into n structures."""
+        if self.pooling == "meanmax":
+            return self.pca(x)
+        return self.pool(x, seg, n)
 
-    def forward(self, enc: torch.Tensor, phys: torch.Tensor):
-        h = self.features(enc, phys)
+    def features(self, x, phys, seg=None, n=None) -> torch.Tensor:
+        pooled = self._pooled(x, seg, n)
+        return self.trunk(self.norm(torch.cat([pooled, self.phys_std(phys)], dim=1)))
+
+    def forward(self, x, phys, seg=None, n=None):
+        h = self.features(x, phys, seg, n)
         return self.class_head(h), self.tc_head(h).squeeze(-1)
 
     def n_fresh_params(self) -> int:
