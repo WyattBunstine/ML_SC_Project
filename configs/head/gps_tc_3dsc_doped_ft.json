@@ -13,7 +13,7 @@
   "hidden": 64,
   "dropout": 0.2,
   "class_pretrain": false,
-  "n_seeds": 3,
+  "n_seeds": 7,
   "device": "cuda",
   "finetune": true,
   "pooling": "deepsets",
