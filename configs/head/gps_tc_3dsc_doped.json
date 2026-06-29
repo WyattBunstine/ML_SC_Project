@@ -1,6 +1,6 @@
 {
   "name": "gps_tc_3dsc_doped",
-  "checkpoint": "model_data/2026-06-25/gps_mt_04_dos_full/gps_mt_04_dos_full_2026-06-25_12-29-28/result_model_best.pth.tar",
+  "checkpoint": "model_data/2026-06-26/gps_mt_04_dos_full/gps_mt_04_dos_full_2026-06-26_11-48-33/result_model_best.pth.tar",
   "embed_source": "database/datafiles/MP/SC_pack_doped",
   "index_path": "database/datafiles/MP/SC_MP_V4_doped.pickle",
   "embed_dir": "database/datafiles/MP/embeddings/gps_tc_doped",
