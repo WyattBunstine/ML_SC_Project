@@ -18,6 +18,7 @@ import torch.optim as optim
 from sklearn import metrics
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import MultiStepLR
+from torch.utils.data import DataLoader, SubsetRandomSampler
 from OriginalCGCNN.data import CIFData
 from OriginalCGCNN.data import collate_pool, get_train_val_test_loader, get_classification_loaders
 from OriginalCGCNN.CGCNNOrig import CrystalGraphConvNet
@@ -130,19 +131,28 @@ def main():
         train_loader = loaders["train"]
         val_loader = test_loader = None
     else:
-        train_loader, val_loader, test_loader = get_train_val_test_loader(
-            dataset=dataset,
-            collate_fn=collate_pool,
-            batch_size=args["batch_size"],
-            train_ratio=None,
-            val_ratio=args["val_ratio"],
-            test_ratio=args["test_ratio"],
-            num_workers=args.get("num_workers", 0),
-            train_size=None,
-            test_size=None,
-            val_size=None,
-            pin_memory=torch.cuda.is_available(),
-            return_test=True)
+        if args.get("split_csv"):
+            # Fixed, leak-free split injected by cif id (e.g. the parent-grouped
+            # split the GPS transfer head uses) so this baseline is evaluated on the
+            # SAME train/val/test partition — the stock positional split scatters
+            # doped parent-siblings across train/test (optimistic leakage).
+            train_loader, val_loader, test_loader = _fixed_split_loaders(
+                dataset, args["split_csv"], args["batch_size"], collate_pool,
+                args.get("num_workers", 0), torch.cuda.is_available())
+        else:
+            train_loader, val_loader, test_loader = get_train_val_test_loader(
+                dataset=dataset,
+                collate_fn=collate_pool,
+                batch_size=args["batch_size"],
+                train_ratio=None,
+                val_ratio=args["val_ratio"],
+                test_ratio=args["test_ratio"],
+                num_workers=args.get("num_workers", 0),
+                train_size=None,
+                test_size=None,
+                val_size=None,
+                pin_memory=torch.cuda.is_available(),
+                return_test=True)
 
         sample_target = [target for i, (input, target, _label, _) in enumerate(train_loader)]
         sample_target = torch.cat(sample_target)
@@ -187,6 +197,32 @@ def main():
     else:
         run_regression(args, model, criterion, optimizer, scheduler,
                        train_loader, val_loader, test_loader, normalizer)
+
+
+def _fixed_split_loaders(dataset, split_csv, batch_size, collate_fn, num_workers, pin_memory):
+    """Build train/val/test loaders from an explicit id->split CSV (columns id,split),
+    matched against the dataset's cif ids. Renders the same partition every run, so a
+    from-scratch baseline is comparable to the transfer head on the identical test set."""
+    import pandas as pd
+    sp = pd.read_csv(split_csv)
+    id2split = dict(zip(sp["id"].astype(str), sp["split"]))
+    ds_ids = [str(rec[0]) for rec in dataset.id_prop_data]   # dataset order (shuffled at load)
+    idx = {"train": [], "val": [], "test": []}
+    missing = 0
+    for i, cid in enumerate(ds_ids):
+        s = id2split.get(cid)
+        if s in idx:
+            idx[s].append(i)
+        else:
+            missing += 1
+    print(f"[split_csv] fixed leak-free split: train {len(idx['train'])} "
+          f"val {len(idx['val'])} test {len(idx['test'])} (unmapped {missing})")
+
+    def mk(indices):
+        return DataLoader(dataset, batch_size=batch_size,
+                          sampler=SubsetRandomSampler(indices), num_workers=num_workers,
+                          collate_fn=collate_fn, pin_memory=pin_memory)
+    return mk(idx["train"]), mk(idx["val"]), mk(idx["test"])
 
 
 def run_regression(args, model, criterion, optimizer, scheduler,
