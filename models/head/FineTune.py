@@ -80,10 +80,18 @@ def run(cfg, out_dir, device):
 
     def split_indices(s):  # dataset indices that are SC and in split s
         return [i for i, cid in enumerate(df_ids)
-                if id2split.get(cid) == s and is_sc[id2row[cid]]] if True else []
-    loaders = {s: DataLoader(Subset(ds, split_indices(s)), batch_size=bs,
-                             shuffle=(s == "train"), collate_fn=collate)
-               for s in ("train", "val", "test")}
+                if id2split.get(cid) == s and is_sc[id2row[cid]]]
+    # CIFDataV4 rebuilds each structure's graph on access, so the encode loop is
+    # CPU-data-loading-bound; parallel workers overlap graph-building with GPU compute.
+    nw = cfg.get("ft_num_workers", 4)
+    nw_map = {"train": nw, "val": max(1, nw // 2), "test": 0}
+
+    def mk_loader(s):
+        w = nw_map[s]
+        return DataLoader(Subset(ds, split_indices(s)), batch_size=bs,
+                          shuffle=(s == "train"), collate_fn=collate, num_workers=w,
+                          persistent_workers=(w > 0), pin_memory=(str(device) != "cpu"))
+    loaders = {s: mk_loader(s) for s in ("train", "val", "test")}
     # sanity: the first train batch's ids must resolve in our static map (order/id alignment)
     _b = next(iter(loaders["train"]))
     assert all(c in id2row for c in _b[3]), "cif-id alignment broken"
@@ -145,20 +153,23 @@ def run(cfg, out_dir, device):
 
     def fit_phase(head, params, lr, wd, epochs, patience, y_z, tag, log):
         opt = torch.optim.AdamW(params, lr=lr, weight_decay=wd)
-        best, best_state, bad = np.inf, None, 0
+        best, best_state, bad, best_ep = np.inf, None, 0, -1
         for ep in range(epochs):
             tr = epoch_pass(head, True, opt, y_z)
             v = val_z_mae(head, y_z)
             if v < best - 1e-6:
-                best, bad = v, 0
+                best, bad, best_ep = v, 0, ep
                 best_state = (copy.deepcopy(model.state_dict()), copy.deepcopy(head.state_dict()))
             else:
                 bad += 1
             log.append({"phase": tag, "epoch": ep, "train_loss": tr, "val_z_mae": v})
+            if ep % 20 == 0 or bad >= patience:
+                print(f"[ft] {tag} ep{ep:3d} val_z_mae {v:.4f} (best {best:.4f}@{best_ep})", flush=True)
             if bad >= patience:
                 break
         if best_state is not None:
             model.load_state_dict(best_state[0]); head.load_state_dict(best_state[1])
+        print(f"[ft] {tag} DONE: best val_z_mae {best:.4f} @ep{best_ep} ({ep + 1} epochs)", flush=True)
         return best
 
     seed_preds, seed_logs, te_ids = [], [], None
@@ -174,7 +185,8 @@ def run(cfg, out_dir, device):
             p.requires_grad = False
         head._frozen_enc = True
         fit_phase(head, head.parameters(), cfg["tc_lr"], cfg["tc_weight_decay"],
-                  cfg.get("ft_warmup_epochs", 60), cfg.get("ft_patience", 30), y_z, "warmup", log)
+                  cfg.get("ft_warmup_epochs", 60), cfg.get("ft_patience", 30), y_z,
+                  f"s{seed}-warmup", log)
 
         # ---- phase B: unfreeze the top blocks, fine-tune at a tiny encoder LR ----
         k = cfg.get("ft_unfreeze_blocks", 1)
@@ -189,7 +201,7 @@ def run(cfg, out_dir, device):
                    {"params": enc_params, "lr": cfg.get("ft_encoder_lr", 1e-5),
                     "weight_decay": cfg.get("ft_encoder_wd", 1e-4)}],
             cfg["tc_lr"], 0.0, cfg.get("ft_epochs", 200), cfg.get("ft_patience", 30),
-            y_z, "finetune", log)
+            y_z, f"s{seed}-finetune", log)
 
         # ---- test predictions for this seed ----
         model.eval(); head.eval()
