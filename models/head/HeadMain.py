@@ -40,6 +40,10 @@ from models.head.HeadModel import Standardizer, TcHead
 DEFAULTS = {
     "split_seed": 123, "val_frac": 0.1, "test_frac": 0.2,
     "pca_k": 64, "hidden": 64, "dropout": 0.2,
+    # Pooling of the per-atom embedding into one structure vector (see HeadModel):
+    # "meanmax" (parameter-free, PCA on [mean||max]), "deepsets", or "attention".
+    # pool_dim sizes the learned pools (out width = 2*pool_dim); ignored by meanmax.
+    "pooling": "meanmax", "pool_dim": 32,
     "class_pretrain": True, "class_epochs": 300, "class_patience": 30,
     "class_lr": 3e-3, "class_weight_decay": 1e-4,
     "tc_epochs": 2000, "tc_patience": 100, "tc_lr": 3e-3,
@@ -180,8 +184,10 @@ def run(config_path):
     _prepare_transfer_inputs(cfg, device)
 
     # ---------------- data ----------------
+    pooling = cfg["pooling"]
+    learned_pool = pooling != "meanmax"
     data = assemble(cfg["index_path"], cfg["embed_dir"], cfg["descriptors"],
-                    cfg["metadata_csv"])
+                    cfg["metadata_csv"], pooling=pooling)
     split = make_splits(data, cfg["split_seed"], cfg["val_frac"], cfg["test_frac"])
     pd_rows = zip(data["ids"], split, data["label"], data["family"])
     with open(os.path.join(out_dir, "splits.csv"), "w") as f:
@@ -196,6 +202,25 @@ def run(config_path):
     sc_mask = {s: _to_t((split == s) & is_sc.cpu().numpy(), device) for s in
                ("train", "val", "test")}
     all_mask = {s: _to_t(split == s, device) for s in ("train", "val", "test")}
+
+    # ----- learned-pool inputs: raw per-atom embeddings, gathered per split -----
+    # gather() picks the atoms of a structure subset (boolean mask over structures)
+    # and renumbers their segment ids 0..n_sub-1 so the pools aggregate per structure.
+    # phys[mask] is row-aligned with this gather (both ascending by structure index).
+    atom_emb = _to_t(data["atom_emb"], device).float() if learned_pool else None
+    atom_ptr = data["atom_ptr"] if learned_pool else None
+
+    def gather(mask_t):
+        sel = np.where(mask_t.cpu().numpy())[0]
+        lengths = atom_ptr[sel + 1] - atom_ptr[sel]
+        atom_idx = np.concatenate([np.arange(atom_ptr[s], atom_ptr[s + 1]) for s in sel]) \
+            if len(sel) else np.zeros(0, dtype=np.int64)
+        seg = np.repeat(np.arange(len(sel)), lengths)
+        return (atom_emb[_to_t(atom_idx, device).long()],
+                _to_t(seg, device).long(), len(sel))
+
+    sc_atoms = {s: gather(sc_mask[s]) for s in ("train", "val", "test")} if learned_pool else None
+    enc_dim_head = data["atom_dim"] if learned_pool else None  # per-atom width for learned pools
 
     test_np = sc_mask["test"].cpu().numpy()
     fam_te, grp_te = data["family"][test_np], data["group"][test_np]
@@ -229,16 +254,31 @@ def run(config_path):
     if cfg["class_pretrain"] and not do_class:
         print("[class] skipped: no non-SC rows with embeddings yet")
 
+    if learned_pool and do_class:
+        raise NotImplementedError(
+            "class pretraining with a learned pool needs all_mask atom gathers; "
+            "not wired (the SC-only packs make do_class False anyway).")
+
+    def head_fwd(m, key):
+        """Forward the head on SC split `key`, routing meanmax vs learned pooling."""
+        if learned_pool:
+            emb_s, seg_s, n_s = sc_atoms[key]
+            return m(emb_s, phys[sc_mask[key]], seg=seg_s, n=n_s)
+        return m(enc[sc_mask[key]], phys[sc_mask[key]])
+
     seed_preds, seed_logs = [], []
     for seed in range(cfg["n_seeds"]):
         torch.manual_seed(seed)
-        model = TcHead(enc.shape[1], phys.shape[1], cfg["pca_k"],
-                       cfg["hidden"], cfg["dropout"]).to(device)
+        model = TcHead(enc_dim_head if learned_pool else enc.shape[1], phys.shape[1],
+                       cfg["pca_k"], cfg["hidden"], cfg["dropout"],
+                       pooling=pooling, pool_dim=cfg["pool_dim"]).to(device)
         metrics["fresh_params"] = model.n_fresh_params()
         model.fit_target(tc[sc_mask["train"]].cpu())
         # PCA + standardizers fit on the widest training pool this seed sees.
+        # (Learned pools have no PCA — they train on the raw per-atom embeddings.)
         fit_mask = all_mask["train"] if do_class else sc_mask["train"]
-        model.pca.fit(enc[fit_mask].cpu())
+        if not learned_pool:
+            model.pca.fit(enc[fit_mask].cpu())
         model.phys_std.fit(phys[fit_mask].cpu())
         model.to(device)
 
@@ -274,11 +314,11 @@ def run(config_path):
                    "lr": cfg["tc_lr"] * (cfg["trunk_lr_factor"] if do_class else 1.0)}]
 
         def tc_loss(m, _):
-            _logits, z = m(enc[sc_mask["train"]], phys[sc_mask["train"]])
+            _logits, z = head_fwd(m, "train")
             return F.l1_loss(z, y_z[sc_mask["train"]])
 
         def tc_val(m):
-            _logits, z = m(enc[sc_mask["val"]], phys[sc_mask["val"]])
+            _logits, z = head_fwd(m, "val")
             return F.l1_loss(z, y_z[sc_mask["val"]]).item()
 
         val_mae_z, ep = train_stage(
@@ -289,7 +329,7 @@ def run(config_path):
             if seed == 0 else None)
         model.eval()
         with torch.no_grad():
-            _logits, z_te = model(enc[sc_mask["test"]], phys[sc_mask["test"]])
+            _logits, z_te = head_fwd(model, "test")
         seed_preds.append(z_te.cpu())
         seed_logs.append({"seed": seed, "val_mae_z": val_mae_z, "best_epoch": ep})
         if seed == 0:

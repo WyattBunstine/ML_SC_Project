@@ -43,18 +43,26 @@ def load_family_metadata(metadata_csv: str) -> pd.DataFrame:
 
 
 def assemble(index_path: str, embed_dir: str, descriptors_path: str,
-             metadata_csv: str, prefix_map: str = "database/MP:database/datafiles/MP"):
+             metadata_csv: str, prefix_map: str = "database/MP:database/datafiles/MP",
+             pooling: str = "meanmax"):
     """Build the head's design matrices. Returns a dict of aligned arrays.
 
     Rows missing an embedding or a descriptor are dropped (counted); this keeps
     the assembly robust while the background embed pass is still filling in.
-    """
+
+    `enc` ([mean||max], n x 2D) is ALWAYS built — it feeds the ridge probe, which
+    stays a pooling-independent control. When `pooling` is a learned pool the raw
+    per-atom embeddings are also packed CSR-style ('atom_emb' (sum N_i, D) +
+    'atom_ptr' (n+1,)) so the head can pool them with trainable parameters; padding
+    to max-atoms would be ~93% waste (mean 11 atoms, max 162)."""
     df = pd.read_pickle(index_path)
     desc_blob = pd.read_pickle(descriptors_path)
     desc_table = desc_blob["table"]
     meta = load_family_metadata(metadata_csv)
+    need_atoms = pooling != "meanmax"
 
     ids, enc_rows, phys_rows, tc, label, family, doped = [], [], [], [], [], [], []
+    atom_list = []
     missing_embed = missing_desc = 0
     for row in df.itertuples():
         emb_path = os.path.join(embed_dir, row.id + ".npy")
@@ -67,6 +75,8 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
             continue
         emb = np.load(emb_path)
         enc_rows.append(np.concatenate([emb.mean(0), emb.max(0)]).astype(np.float32))
+        if need_atoms:
+            atom_list.append(emb.astype(np.float32))
         phys_rows.append(vec)
         ids.append(row.id)
         tc.append(float(row.tc) if not pd.isna(row.tc) else np.nan)
@@ -90,6 +100,12 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
         "missing_embed": missing_embed,
         "missing_desc": missing_desc,
     }
+    if need_atoms:
+        counts = np.array([a.shape[0] for a in atom_list], dtype=np.int64)
+        data["atom_emb"] = (np.concatenate(atom_list, axis=0) if atom_list
+                            else np.zeros((0, 0), np.float32))
+        data["atom_ptr"] = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+        data["atom_dim"] = int(atom_list[0].shape[1]) if atom_list else 0
     print(f"head dataset: {len(ids)} rows "
           f"(SC {int((data['label'] == 1).sum())}, non-SC {int((data['label'] == 0).sum())}); "
           f"dropped {missing_embed} missing-embedding, {missing_desc} missing-descriptor")
