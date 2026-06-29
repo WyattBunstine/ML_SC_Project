@@ -60,6 +60,9 @@ DEFAULTS = {
     # folded into the descriptor vector (e.g. raw mean||max beside a learned gps
     # DeepSets pool — does the encoder add signal orthogonal to composition?).
     "aux_meanmax_dir": None,
+    # Fine-tune escalation (models/head/FineTune.py): unfreeze the encoder's top blocks
+    # and train end-to-end on T_c after a head warmup. Defaults live in FineTune.run.
+    "finetune": False,
 }
 
 
@@ -198,6 +201,11 @@ def run(config_path):
 
     # ---------- reproduce the frozen-encoder artifacts from the config (no-op if cached) ----
     _prepare_transfer_inputs(cfg, device)
+
+    # ---------- fine-tune escalation: encoder in the loop, gradients flow into it ----------
+    if cfg.get("finetune"):
+        from models.head.FineTune import run as ft_run
+        return ft_run(cfg, out_dir, device)
 
     # ---------------- data ----------------
     pooling = cfg["pooling"]
