@@ -56,6 +56,10 @@ DEFAULTS = {
     # `train-head` reproduces embed-gps + descriptors + head. Absent (e.g. the MACE
     # configs, which point embed_dir at a prebuilt dir) -> the artifacts must pre-exist.
     "checkpoint": None, "embed_source": None,
+    # Complementarity arm: a second per-atom embedding dir whose [mean||max] is
+    # folded into the descriptor vector (e.g. raw mean||max beside a learned gps
+    # DeepSets pool — does the encoder add signal orthogonal to composition?).
+    "aux_meanmax_dir": None,
 }
 
 
@@ -91,6 +95,18 @@ def _prepare_transfer_inputs(cfg, device):
             from models.head.embed_gps import embed_raw
             print(f"[transfer] RAW node-feature embedding {source} -> {embed_dir}")
             embed_raw(source, embed_dir, feature_args=feat, device=device)
+    aux = cfg.get("aux_meanmax_dir")
+    if aux and not (os.path.isdir(aux) and glob.glob(os.path.join(aux, "*.npy"))):
+        import sys
+        for _p in (os.path.join("models", "common"), os.path.join("models", "GPSTransformer")):
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
+        from models.head.embed_gps import embed_raw
+        source = cfg.get("embed_source") or cfg["index_path"]
+        feat = (torch.load(cfg["checkpoint"], map_location="cpu").get("args", {})
+                if cfg.get("checkpoint") else {})
+        print(f"[transfer] building aux RAW mean||max embeddings {source} -> {aux}")
+        embed_raw(source, aux, feature_args=feat, device=device)
     if not os.path.exists(cfg["descriptors"]):
         from models.head.descriptors import build_descriptor_table
         print(f"[transfer] building descriptors from {cfg['index_path']} -> {cfg['descriptors']}")
@@ -187,7 +203,8 @@ def run(config_path):
     pooling = cfg["pooling"]
     learned_pool = pooling != "meanmax"
     data = assemble(cfg["index_path"], cfg["embed_dir"], cfg["descriptors"],
-                    cfg["metadata_csv"], pooling=pooling)
+                    cfg["metadata_csv"], pooling=pooling,
+                    aux_meanmax_dir=cfg.get("aux_meanmax_dir"))
     split = make_splits(data, cfg["split_seed"], cfg["val_frac"], cfg["test_frac"])
     pd_rows = zip(data["ids"], split, data["label"], data["family"])
     with open(os.path.join(out_dir, "splits.csv"), "w") as f:

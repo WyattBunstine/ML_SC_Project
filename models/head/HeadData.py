@@ -44,7 +44,7 @@ def load_family_metadata(metadata_csv: str) -> pd.DataFrame:
 
 def assemble(index_path: str, embed_dir: str, descriptors_path: str,
              metadata_csv: str, prefix_map: str = "database/MP:database/datafiles/MP",
-             pooling: str = "meanmax"):
+             pooling: str = "meanmax", aux_meanmax_dir: str = None):
     """Build the head's design matrices. Returns a dict of aligned arrays.
 
     Rows missing an embedding or a descriptor are dropped (counted); this keeps
@@ -54,7 +54,12 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
     stays a pooling-independent control. When `pooling` is a learned pool the raw
     per-atom embeddings are also packed CSR-style ('atom_emb' (sum N_i, D) +
     'atom_ptr' (n+1,)) so the head can pool them with trainable parameters; padding
-    to max-atoms would be ~93% waste (mean 11 atoms, max 162)."""
+    to max-atoms would be ~93% waste (mean 11 atoms, max 162).
+
+    `aux_meanmax_dir`: a SECOND per-atom embedding dir whose [mean||max] is appended
+    to each physical-descriptor row (the complementarity test — e.g. raw mean||max
+    folded in beside a learned gps DeepSets pool, to ask whether the encoder adds
+    signal orthogonal to composition). Rows missing the aux embedding are dropped."""
     df = pd.read_pickle(index_path)
     desc_blob = pd.read_pickle(descriptors_path)
     desc_table = desc_blob["table"]
@@ -63,7 +68,7 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
 
     ids, enc_rows, phys_rows, tc, label, family, doped = [], [], [], [], [], [], []
     atom_list = []
-    missing_embed = missing_desc = 0
+    missing_embed = missing_desc = missing_aux = 0
     for row in df.itertuples():
         emb_path = os.path.join(embed_dir, row.id + ".npy")
         if not os.path.exists(emb_path):
@@ -73,6 +78,15 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
         if vec is None:
             missing_desc += 1
             continue
+        if aux_meanmax_dir is not None:
+            aux_path = os.path.join(aux_meanmax_dir, row.id + ".npy")
+            if not os.path.exists(aux_path):
+                missing_aux += 1
+                continue
+            aux = np.load(aux_path)
+            vec = np.concatenate(
+                [np.asarray(vec, dtype=np.float32),
+                 aux.mean(0).astype(np.float32), aux.max(0).astype(np.float32)])
         emb = np.load(emb_path)
         enc_rows.append(np.concatenate([emb.mean(0), emb.max(0)]).astype(np.float32))
         if need_atoms:
@@ -108,7 +122,8 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
         data["atom_dim"] = int(atom_list[0].shape[1]) if atom_list else 0
     print(f"head dataset: {len(ids)} rows "
           f"(SC {int((data['label'] == 1).sum())}, non-SC {int((data['label'] == 0).sum())}); "
-          f"dropped {missing_embed} missing-embedding, {missing_desc} missing-descriptor")
+          f"dropped {missing_embed} missing-embedding, {missing_desc} missing-descriptor"
+          + (f", {missing_aux} missing-aux" if aux_meanmax_dir is not None else ""))
     return data
 
 

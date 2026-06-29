@@ -1,0 +1,21 @@
+{
+  "name": "gps_tc_3dsc_baseline_combo",
+  "checkpoint": "model_data/2026-06-26/gps_mt_04_dos_full/gps_mt_04_dos_full_2026-06-26_11-48-33/result_model_best.pth.tar",
+  "embed_source": "database/datafiles/MP/SC_pack_baseline",
+  "index_path": "database/datafiles/MP/SC_MP_V4_baseline.pickle",
+  "embed_dir": "database/datafiles/MP/embeddings/gps_tc_baseline",
+  "descriptors": "database/datafiles/MP/descriptors_baseline.pickle",
+  "metadata_csv": "database/datafiles/MP/3DSC_MP.csv",
+  "split_seed": 123,
+  "val_frac": 0.1,
+  "test_frac": 0.2,
+  "pca_k": 64,
+  "hidden": 64,
+  "dropout": 0.2,
+  "class_pretrain": false,
+  "n_seeds": 7,
+  "device": "cpu",
+  "pooling": "deepsets",
+  "pool_dim": 32,
+  "aux_meanmax_dir": "database/datafiles/MP/embeddings/raw_baseline"
+}
