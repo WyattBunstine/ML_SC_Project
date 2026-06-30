@@ -3,14 +3,19 @@
 Reference list of published machine-learning models for superconducting critical
 temperature (T_c) regression, kept so we don't refetch. Captured 2026-06-30.
 
-**Read the comparability notes before ranking anything against our numbers.** Different
-datasets (3DSC vs SuperCon), splits (random vs grouped), and metrics (MAE vs RMSE vs MSLE)
-make raw numbers misleading. MSLE is a log/relative metric dominated by *low*-T_c materials;
-MAE in Kelvin is dominated by *high*-T_c cuprates. A model can win one and lose the other.
+**Read the comparability notes before ranking anything against our numbers.** The single
+most important fact: headline numbers across this literature are **not comparable**, because
+they differ in (a) dataset (composition-only SuperCon vs structure-augmented 3DSC), (b) metric
+(MAE/RMSE in K vs MSLE in log-space vs R²), and (c) — most consequentially — **split protocol**:
+a **random** split leaks doped variants of the same parent compound across train/test and
+inflates scores; a **grouped** split (by chemical system / parent) is the honest, harder setting.
+**Be skeptical of any R² ≳ 0.95 or RMSE ≲ 6 K unless the split is explicitly grouped** — those
+are almost always random-split numbers inflated by doped-variant leakage. The split is flagged
+for every entry below.
 
 ---
 
-## Our benchmarks (for reference — 3DSC_MP, parent-grouped leak-free split, 1154-row test)
+## Our benchmarks (3DSC_MP, parent-grouped leak-free split, 1154-row test)
 
 | model | MAE (K) | RMSE (K) | R² | MSLE | cuprate MAE (K) | notes |
 |---|---|---|---|---|---|---|
@@ -20,70 +25,81 @@ MAE in Kelvin is dominated by *high*-T_c cuprates. A model can win one and lose 
 | ORIG CGCNN (random/leaky split) | 4.04 | — | — | — | ~24.8 | leakage-inflated, NOT comparable |
 
 Split = parent-grouped (doped variants of one MP parent kept together), seed 123, 70/10/20.
-Training loss = L1 in log1p(K) space; reported MAE is in Kelvin.
+Loss = L1 in log1p(K); reported MAE in Kelvin. Our split is leak-free but slightly *less* strict
+than the 3DSC paper's chemical-system grouping.
 
 ---
 
-## Literature
+## A. Structure-based, on 3DSC (our dataset — the directly comparable group)
 
-### Most directly comparable (3DSC dataset — same as ours)
+**3DSC — a dataset of superconductors including crystal structures** — *the reference protocol*
+- Sommer, Willa, Schmalian, Friederich — 2023, *Scientific Data* 10, 816
+- DOI [10.1038/s41597-023-02721-y](https://doi.org/10.1038/s41597-023-02721-y) · arXiv [2212.06071](https://arxiv.org/abs/2212.06071) · [PMC10663493](https://pmc.ncbi.nlm.nih.gov/articles/PMC10663493/)
+- Dataset: **3DSC_MP** (5,759 SuperCon ↔ 5,773 MP structures — *our dataset*); 3DSC_ICSD (9,150 ↔ 86,490)
+- Model: **XGBoost** on MAGPIE + disordered-SOAP (DSOAP)
+- Metric: **MSLE only** (no MAE/RMSE/R²). Test MSLE **0.748 ± 0.010** (3DSC_MP, structure) vs 0.776 (composition); 1.085 ± 0.073 (3DSC_ICSD). Illustratively MSLE 0.748 ≈ abs error ~1.2 / 6.4 / 58 K at T_c = 1 / 10 / 100 K. Structure helps mainly cuprates; gains within error for most families.
+- Split: ✅ **GROUPED by chemical system** (Meredig-style, all-train or all-test), 80:20, **100 reps**. The gold-standard honest protocol; STRICTER than our parent-grouping.
+- vs us: their XGBoost MSLE 0.748 **beats** our FT 0.848 on the log metric, on a harder split. They report no K-scale error, so no MAE/RMSE head-to-head. The one genuinely competitive same-dataset, honest-split result. (To make it airtight: re-eval our FT with chemical-system grouping + report MSLE.)
 
-**3DSC — a dataset of superconductors including crystal structures**
-- Authors / year: Sommer, Willa, Schmalian, Friederich — 2023
-- Venue: *Scientific Data* (Nature)
-- DOI: [10.1038/s41597-023-02721-y](https://doi.org/10.1038/s41597-023-02721-y) · arXiv: [2212.06071](https://arxiv.org/abs/2212.06071) · [PMC10663493](https://pmc.ncbi.nlm.nih.gov/articles/PMC10663493)
-- Dataset: **3DSC_MP** (5,759 SuperCon entries ↔ 5,773 Materials Project structures — *this is our dataset*); also 3DSC_ICSD (9,150 ↔ 86,490 ICSD structures)
-- Model: **XGBoost** on MAGPIE (composition) + **DSOAP** (disordered SOAP, structure) features
-- Metric: **MSLE = 0.748 ± 0.010** (test, structure features) on 3DSC_MP; 0.776 ± 0.010 chemical-formula-only. They do NOT report MAE/RMSE. Illustrative translation: MSLE 0.748 ≈ abs error 1.16 / 6.37 / 58.47 K at T_c = 1 / 10 / 100 K.
-- Split: **grouped by chemical system** (Meredig et al. style — all materials sharing a chemical system are entirely in train or entirely in test), 80:20, **100 repetitions**. This is leak-free and STRICTER than our parent-grouping.
-- Relevance: the canonical 3DSC benchmark. On MSLE their XGBoost (0.748) is **better than our FT (0.848)** — on a harder split. But it's a log-error metric (rewards low-T_c relative accuracy) and a composition+SOAP gradient-boost, not a structure GNN. They report no MAE, so no absolute-K head-to-head.
+**SuperVision-ALIGNN** (this IS the source of the "ALIGNN on 3DSC" figure)
+- HuggingFace `shreyaspullehf/supervision-alignn-tc-prediction`
+- Dataset: 3DSC_MP (5,773); Model: ALIGNN
+- Metrics: **MAE 5.34 K, RMSE 10.27 K, R² 0.719**
+- Split: ⚠️ **random 70/15/15** (leaky)
+- vs us: our FT RMSE 10.41 / R² 0.706 ≈ ALIGNN's 10.27 / 0.719 — but **ALIGNN is on a random (leaky) split and ours is leak-free**, so matching it on a harder task means we're effectively stronger; and our MAE 4.44 < their 5.34.
 
-**ALIGNN on 3DSC** — ⚠️ SOURCE UNIDENTIFIED (from a search summary; NOT the 3DSC paper itself, which used XGBoost. The HuggingFace `shreyaspullehf/supervision-alignn-tc-prediction` repo was checked and is UNRELATED. Exact source still not found.)
-- Reported: MAE 5.34 K, RMSE 10.27 K, R² 0.7186 — fine-tuned ALIGNN on 3D crystal-structure graphs
-- **Corroboration:** our FT encoder on 3DSC_MP gets RMSE 10.41, R² 0.706 — almost identical to this ALIGNN (10.27, 0.72). So structure GNNs on 3DSC cluster around RMSE ≈ 10.3, R² ≈ 0.71, which makes the 5.34/10.27/0.72 figure plausible as a real 3DSC benchmark. Our FT MAE 4.44 < their 5.34 (but verify their split before claiming the win).
-- TODO: confirm the exact source/paper + split.
+**Electronegativity-informed CGCNN (mCGCNN-EΔEN)**
+- ACS *Inorg. Chem.*, DOI [10.1021/acs.inorgchem.6c01169](https://doi.org/10.1021/acs.inorgchem.6c01169)
+- Dataset: 3DSC; Metrics: **RMSE 8.02 K, R² 0.824**
+- Split: ⚠️ **not confirmed** (likely random — better RMSE/R² than ALIGNN/ours; verify before trusting)
 
-### Highest reported (but different dataset + unverifiable split — treat with caution)
+**SOAP-descriptor model** — *JPCC* 2022, DOI [10.1021/acs.jpcc.2c01904](https://doi.org/10.1021/acs.jpcc.2c01904)
+- Dataset: 5,713 structure-matched compounds; Metric: **R² 0.929** (SOAP) vs 0.863 (no structure); R² only
+- Split: ⚠️ cross-validated, **effectively NOT grouped-by-system** (so leaky-ish)
 
-**Crystal structure graph neural networks for high-performance superconducting critical temperature prediction**
-- Authors / year: J. Zhang, X. Lin, K. Hu et al. (HIT Shenzhen) — 2024
-- Venue: *Science China Materials* 67, 3253–3261
-- DOI: [10.1007/s40843-024-3026-8](https://doi.org/10.1007/s40843-024-3026-8)
-- Dataset: **their own SuperCon→ICSD matched set, ~5,713 entries** (NOT 3DSC — corroborated by the same first author's 2026 ACS Omega review). ICSD also used as a screening pool (found 76 candidates with T_c ≥ 77 K).
-- Model: a "crystal structure graph neural network" — **specific architecture name not confirmed** (paywalled; not stated to be CGCNN/MEGNet/ALIGNN).
-- Metrics: **R² = 0.962, RMSE = 6.192 K** (CONFIRMED from publisher summary); claims to "outperform all previously reported models." **MAE not reported.**
-- Split: **UNKNOWN** — paywalled, no accessible source states random vs grouped, and no leakage discussion found.
-- ⚠️ **Caution:** this is the best headline number found, but (a) different dataset (SuperCon→ICSD, not 3DSC), (b) split method unverifiable, (c) **R² 0.962 is a large outlier** vs the R² ≈ 0.71 cluster that every honest 3DSC structure-GNN (ALIGNN, our FT) lands in — strongly suggesting an easier dataset and/or a non-grouped (leaky) split. Not a fair comparison to our parent-grouped 3DSC numbers without the methods section. (The "92.9%/86.3%" accuracy figures seen in some snippets are search-engine confabulation — disregard.)
+## B. Composition-only (SuperCon — different, usually larger dataset)
 
-### Our project lineage (SuperCon — different, larger dataset)
+**Stanev et al. 2018** — *the canonical baseline*
+- npj *Comput. Mater.* 4, 29; DOI [10.1038/s41524-018-0085-8](https://doi.org/10.1038/s41524-018-0085-8) · arXiv [1709.02727](https://arxiv.org/abs/1709.02727)
+- Dataset: ~16,400 SuperCon (~12,400 finite T_c; ~5,700 cuprates); Model: Random Forest on MAGPIE+AFLOW
+- Metric: predicts **ln(T_c)** for T_c > 10 K. **R² ≈ 0.88** overall (low-T_c 0.85, cuprate <0.8, Fe-based 0.74). ⚠️ **Reports NO RMSE/MAE in Kelvin** — any "Stanev K-error" is not from the paper.
+- Split: ⚠️ random 85/15 (+ RF out-of-bag)
 
-**Identifying New Classes of High Temperature Superconductors With Convolutional Neural Networks**
-- Authors / year: Quinn, McQueen — 2022 (the "MQCNN" / cnn_supercon work; McQueen = JHU)
-- Venue: *Frontiers in Electronic Materials*
-- DOI: [10.3389/femat.2022.893797](https://doi.org/10.3389/femat.2022.893797)
-- Dataset: **SuperCon** (~33,000 entries), crystal structures assigned by correlation with Materials Project + structural DBs
-- Model: CNN (image-like representation), both classification and regression
-- Metrics: classification accuracy > 95%; **regression R² > 0.92, MAE ≈ 5.6 K**
-- Split: not clearly specified (likely random) → possible leakage; not stated.
-- Relevance: our project's lineage. Apples-to-oranges with our 3DSC number — different dataset (SuperCon, ~6× larger), composition-image CNN, different/unstated split.
+**Roter & Dordevic 2020**
+- *Physica C* 575, 1353689; arXiv [2002.07266](https://arxiv.org/abs/2002.07266)
+- Dataset: ~30,000 SuperCon (+~3,000 non-SC); Model: SVD/PCA element vectors + Bagged Tree
+- Metrics: **R² ≈ 0.93, RMSE ≈ 8.91 K** (all ~30k); Split: ⚠️ random
+- 📌 Notable: estimates **~20% of SuperCon entries are mislabeled** — a field-wide data-quality ceiling and an argument for cleaning.
 
-### Other (pending precise numbers from the broad sweep — URLs captured)
+**Quinn & McQueen 2022** — *our project lineage (MQCNN / cnn_supercon; McQueen = JHU)*
+- *Front. Electron. Mater.*; DOI [10.3389/femat.2022.893797](https://doi.org/10.3389/femat.2022.893797)
+- Dataset: >10,000 SuperCon superconductors (regression); Model: CNN
+- Metrics: combined **R² ≈ 0.92, MAE = 5.6 K** (per-class MAE 1.6–8.0, R² 0.82–0.89)
+- Split: ⚠️ random 75/10/15
 
-- **Stanev et al. 2018**, *npj Computational Materials* — SuperCon, random forest on composition. Commonly cited RMSE ≈ 9.5 K (VERIFY). DOI: 10.1038/s41524-018-0085-8
-- **Konno et al. 2021** — deep learning on periodic-table representation of composition (SuperCon). (VERIFY metric)
-- **"Predicting the critical temperature of superconductors ... with a balanced dataset"**, *J. Appl. Phys.* 2026 — has an RMSE/MAE/R² cross-validation table. [pubs.aip.org/.../3377287](https://pubs.aip.org/aip/jap/article/139/2/023903/3377287)
-- **"Predicting superconducting transition temperature through advanced ML and feature engineering"**, *Scientific Reports* 2024 — [10.1038/s41598-024-54440-y](https://doi.org/10.1038/s41598-024-54440-y) (likely SuperCon, composition)
-- **"Accelerating superconductor discovery through tempered deep learning of the electron-phonon spectral function"**, arXiv [2401.16611](https://arxiv.org/abs/2401.16611) (2024) — predicts e-ph spectral function α²F → relevant to our Phase-3 λ/ω_log idea
-- **Closed-loop superconducting materials discovery**, *npj Comp Mater* 2023 — [10.1038/s41524-023-01131-3](https://doi.org/10.1038/s41524-023-01131-3)
-- **Data-Driven Superconductivity: a Review of ML Methods**, *J. Supercond. Nov. Magn.* 2026 — [10.1007/s10948-026-07175-y](https://doi.org/10.1007/s10948-026-07175-y) (survey — good for a numbers table)
-- **"Learning Superconductivity" benchmark**, NeurIPS 2024 (datasets/benchmarks track) — a curated T_c benchmark with (reportedly) leakage-aware splits; notably does NOT cite Zhang 2024. Worth pulling for standardized splits + baseline numbers. (VERIFY exact title/metrics)
-- **Zhang et al. review**, *ACS Omega* 2026, 11(22) 31853 — [10.1021/acsomega.6c01100](https://doi.org/10.1021/acsomega.6c01100) — "ML for Superconductor Discovery" survey; first-authored by Zhang (self-describes the 5,713 SuperCon→ICSD set above)
+**Konno et al. 2021** — PRB 103, 014509 ("reading the periodic table" CNN). Primarily a **classification** model (above/below a T_c threshold); not a clean K-scale regression benchmark.
+
+## C. Highest reported — but different dataset + unverifiable split (treat with caution)
+
+**Crystal-structure GNN — Zhang et al. 2024**
+- *Science China Materials* 67, 3253–3261; DOI [10.1007/s40843-024-3026-8](https://doi.org/10.1007/s40843-024-3026-8)
+- Dataset: their **own SuperCon→ICSD matched set, ~5,713** (NOT 3DSC; corroborated by Zhang's own 2026 ACS Omega review)
+- Model: "crystal structure graph neural network" — specific architecture **not named** (an "ALIGNN" attribution in search snippets is unverified)
+- Metrics: **R² = 0.962, RMSE = 6.192 K** (verified, publisher summary); claims SOTA. **MAE not reported.**
+- Split: ⚠️ **UNKNOWN** — fully paywalled (Unpaywall: no OA), methods unreachable; no leakage discussion findable.
+- ⚠️ The best headline number found, but: different dataset, unverifiable split, and **R² 0.962 is a large outlier** vs the R² ≈ 0.71–0.82 cluster of honest 3DSC structure models — consistent with (not proof of) a random/leaky split. Do NOT use as a grouped-split target. (The "92.9%/86.3%" accuracy and "LightGBM MAE 2.93 K" figures seen in some snippets are confabulations / from other studies — disregard.)
+
+## Other references
+- **"Learning Superconductivity" benchmark**, NeurIPS 2024 (datasets/benchmarks) — curated T_c benchmark, reportedly leakage-aware splits; does NOT cite Zhang 2024. Worth pulling for standardized splits. (VERIFY title/metrics)
+- **ML for Superconductor Discovery** review (Zhang, first author), *ACS Omega* 2026 11(22) 31853 — [10.1021/acsomega.6c01100](https://doi.org/10.1021/acsomega.6c01100)
+- **Closed-loop superconducting materials discovery**, npj *Comput. Mater.* 2023 — [10.1038/s41524-023-01131-3](https://doi.org/10.1038/s41524-023-01131-3)
+- **Tempered deep learning of the electron-phonon spectral function** (predicts α²F → relevant to our Phase-3 λ/ω_log idea), arXiv [2401.16611](https://arxiv.org/abs/2401.16611) (2024)
 
 ---
 
 ## Comparability cheatsheet
 
-- **Metric**: MSLE (3DSC paper) ≠ MAE (us, Quinn) ≠ RMSE (most SuperCon work). RMSE ≈ 1.5–2× MAE for these skewed distributions. MSLE rewards low-T_c relative accuracy; MAE rewards high-T_c absolute accuracy (cuprates).
-- **Dataset**: 3DSC_MP (5.8k, structures) is ours and the 3DSC paper's. SuperCon (~33k, composition ± assigned structures) is Quinn/Stanev/most others — larger, composition-driven, often easier on MAE.
-- **Split**: random splits LEAK on these datasets (duplicate/doped near-siblings) — worth ≈ 1.9 K of false optimism for us (4.04 leaky → 5.92 leak-free, ORIG). The 3DSC paper's chemical-system grouping is the gold standard; our parent-grouping is leak-free but slightly less strict. Always check the split before trusting a low number.
-- **To make the XGBoost comparison airtight**: re-evaluate our FT with chemical-system grouping + report MSLE (and ideally 100 split reps).
+- **Metric**: MSLE (3DSC paper) ≠ MAE (us, Quinn) ≠ RMSE (Roter, ALIGNN) ≠ R²-on-ln T_c (Stanev). RMSE ≈ 1.5–2× MAE on these skewed distributions. MSLE rewards low-T_c *relative* accuracy; MAE/RMSE in K reward high-T_c *absolute* accuracy (cuprates).
+- **Split is the decider**: random splits LEAK on these datasets (duplicate/doped near-siblings) — worth ≈ 1.9 K of false optimism for us (ORIG 4.04 leaky → 5.92 leak-free). 3DSC's chemical-system grouping is the gold standard; our parent-grouping is leak-free, slightly less strict. **Honest, grouped-split structure results are scarce — basically just the 3DSC XGBoost (MSLE 0.748).** ALIGNN/mCGCNN/JPCC/Zhang are all random or unverified.
+- **Data ceiling**: ~20% of SuperCon entries estimated mislabeled (Roter & Dordevic) — caps achievable accuracy.
+- **Bottom line vs us**: On 3DSC with an honest split, nothing clearly beats our FT (4.44 K MAE / cuprate 14.7). The only fair competitor is the 3DSC XGBoost, which wins on MSLE (0.748 vs 0.848) but reports no K-error. Every flashier number (R² ≥ 0.92, RMSE ≤ 8 K) rides on a random or unverified split. **To close the one open comparison: re-eval our FT with chemical-system grouping + report MSLE.**
