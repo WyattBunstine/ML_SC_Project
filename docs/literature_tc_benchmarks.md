@@ -19,7 +19,8 @@ for every entry below.
 
 | model | MAE (K) | RMSE (K) | R² | MSLE | cuprate MAE (K) | notes |
 |---|---|---|---|---|---|---|
-| GPS encoder, **fine-tuned** (top block, 7-seed) | **4.44** | 10.41 | 0.706 | 0.848 | 14.73 | our best |
+| GPS encoder, **fine-tuned** (top block, 7-seed) | **4.44** | 10.41 | 0.706 | 0.848 | 14.73 | our best (parent-grouped, L1 loss) |
+| GPS encoder, FT — **3DSC protocol** (chemsys split + MSLE loss) | 5.47 | 11.67 | — | **0.779** | 20.32 | for direct XGBoost comparison ↓ |
 | GPS encoder, frozen + head | 5.68 | — | — | — | 23.4 | best frozen |
 | ORIG CGCNN from scratch (leak-free) | 5.92 | 16.13 | 0.173 | 1.396 | 24.81 | single seed |
 | ORIG CGCNN (random/leaky split) | 4.04 | — | — | — | ~24.8 | leakage-inflated, NOT comparable |
@@ -39,7 +40,7 @@ than the 3DSC paper's chemical-system grouping.
 - Model: **XGBoost** on MAGPIE + disordered-SOAP (DSOAP)
 - Metric: **MSLE only** (no MAE/RMSE/R²). Test MSLE **0.748 ± 0.010** (3DSC_MP, structure) vs 0.776 (composition); 1.085 ± 0.073 (3DSC_ICSD). Illustratively MSLE 0.748 ≈ abs error ~1.2 / 6.4 / 58 K at T_c = 1 / 10 / 100 K. Structure helps mainly cuprates; gains within error for most families.
 - Split: ✅ **GROUPED by chemical system** (Meredig-style, all-train or all-test), 80:20, **100 reps**. The gold-standard honest protocol; STRICTER than our parent-grouping.
-- vs us: their XGBoost MSLE 0.748 **beats** our FT 0.848 on the log metric, on a harder split. They report no K-scale error, so no MAE/RMSE head-to-head. The one genuinely competitive same-dataset, honest-split result. (To make it airtight: re-eval our FT with chemical-system grouping + report MSLE.)
+- vs us: **DIRECT TEST DONE (2026-06-30).** Re-ran our FT under their exact protocol — chemical-system grouped split + MSLE loss, 7-seed: **MSLE 0.779 vs their 0.748** (MAE 5.47, RMSE 11.67, cuprate 20.32). So the XGBoost still edges us by ~4% on the log metric on its own turf. Caveats: ours is a SINGLE chem-system split vs their 100 reps (split variance ~±0.02–0.04, so possibly within noise); and the MSLE objective traded away our absolute-K/cuprate strength (MAE 4.44→5.47, cuprate 14.73→20.32). Net: roughly comparable; XGBoost wins on the low-T_c-dominated log metric, our GNN wins on absolute-K/cuprate MAE (which they don't report). Strong composition+SOAP gradient boost = recurring "composition is a hard baseline" lesson.
 
 **SuperVision-ALIGNN** (this IS the source of the "ALIGNN on 3DSC" figure)
 - HuggingFace `shreyaspullehf/supervision-alignn-tc-prediction`
@@ -102,4 +103,4 @@ than the 3DSC paper's chemical-system grouping.
 - **Metric**: MSLE (3DSC paper) ≠ MAE (us, Quinn) ≠ RMSE (Roter, ALIGNN) ≠ R²-on-ln T_c (Stanev). RMSE ≈ 1.5–2× MAE on these skewed distributions. MSLE rewards low-T_c *relative* accuracy; MAE/RMSE in K reward high-T_c *absolute* accuracy (cuprates).
 - **Split is the decider**: random splits LEAK on these datasets (duplicate/doped near-siblings) — worth ≈ 1.9 K of false optimism for us (ORIG 4.04 leaky → 5.92 leak-free). 3DSC's chemical-system grouping is the gold standard; our parent-grouping is leak-free, slightly less strict. **Honest, grouped-split structure results are scarce — basically just the 3DSC XGBoost (MSLE 0.748).** ALIGNN/mCGCNN/JPCC/Zhang are all random or unverified.
 - **Data ceiling**: ~20% of SuperCon entries estimated mislabeled (Roter & Dordevic) — caps achievable accuracy.
-- **Bottom line vs us**: On 3DSC with an honest split, nothing clearly beats our FT (4.44 K MAE / cuprate 14.7). The only fair competitor is the 3DSC XGBoost, which wins on MSLE (0.748 vs 0.848) but reports no K-error. Every flashier number (R² ≥ 0.92, RMSE ≤ 8 K) rides on a random or unverified split. **To close the one open comparison: re-eval our FT with chemical-system grouping + report MSLE.**
+- **Bottom line vs us**: On 3DSC, every flashier number (R² ≥ 0.92, RMSE ≤ 8 K) rides on a random/unverified split. The only fair competitor on an honest split is the **3DSC XGBoost**, and the direct same-protocol test (chemsys split + MSLE, 2026-06-30) gives **XGBoost 0.748 vs our FT 0.779 MSLE** — XGBoost edges us ~4% on the log metric (within ~split-noise of being a tie). But our GNN leads on absolute-K MAE / cuprates (4.44 / 14.7 parent-grouped), which they don't report. Roughly comparable models with opposite strengths; a strong composition+SOAP gradient boost remains hard to beat on MSLE. Remaining rigor step: a few chem-system split seeds to pin our MSLE spread (single split so far).
