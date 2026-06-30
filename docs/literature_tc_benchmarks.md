@@ -38,7 +38,7 @@ Training loss = L1 in log1p(K) space; reported MAE is in Kelvin.
 - Split: **grouped by chemical system** (Meredig et al. style — all materials sharing a chemical system are entirely in train or entirely in test), 80:20, **100 repetitions**. This is leak-free and STRICTER than our parent-grouping.
 - Relevance: the canonical 3DSC benchmark. On MSLE their XGBoost (0.748) is **better than our FT (0.848)** — on a harder split. But it's a log-error metric (rewards low-T_c relative accuracy) and a composition+SOAP gradient-boost, not a structure GNN. They report no MAE, so no absolute-K head-to-head.
 
-**ALIGNN on 3DSC** — ⚠️ SOURCE UNVERIFIED (from a search summary; possibly the HuggingFace `shreyaspullehf/supervision-alignn-tc-prediction` model or a secondary paper, NOT the 3DSC paper itself, which used XGBoost)
+**ALIGNN on 3DSC** — ⚠️ SOURCE UNIDENTIFIED (from a search summary; NOT the 3DSC paper itself, which used XGBoost. The HuggingFace `shreyaspullehf/supervision-alignn-tc-prediction` repo was checked and is UNRELATED. Exact source still not found.)
 - Reported: MAE 5.34 K, RMSE 10.27 K, R² 0.7186 — fine-tuned ALIGNN on 3D crystal-structure graphs
 - **Corroboration:** our FT encoder on 3DSC_MP gets RMSE 10.41, R² 0.706 — almost identical to this ALIGNN (10.27, 0.72). So structure GNNs on 3DSC cluster around RMSE ≈ 10.3, R² ≈ 0.71, which makes the 5.34/10.27/0.72 figure plausible as a real 3DSC benchmark. Our FT MAE 4.44 < their 5.34 (but verify their split before claiming the win).
 - TODO: confirm the exact source/paper + split.
@@ -76,6 +76,8 @@ Training loss = L1 in log1p(K) space; reported MAE is in Kelvin.
 - **"Accelerating superconductor discovery through tempered deep learning of the electron-phonon spectral function"**, arXiv [2401.16611](https://arxiv.org/abs/2401.16611) (2024) — predicts e-ph spectral function α²F → relevant to our Phase-3 λ/ω_log idea
 - **Closed-loop superconducting materials discovery**, *npj Comp Mater* 2023 — [10.1038/s41524-023-01131-3](https://doi.org/10.1038/s41524-023-01131-3)
 - **Data-Driven Superconductivity: a Review of ML Methods**, *J. Supercond. Nov. Magn.* 2026 — [10.1007/s10948-026-07175-y](https://doi.org/10.1007/s10948-026-07175-y) (survey — good for a numbers table)
+- **"Learning Superconductivity" benchmark**, NeurIPS 2024 (datasets/benchmarks track) — a curated T_c benchmark with (reportedly) leakage-aware splits; notably does NOT cite Zhang 2024. Worth pulling for standardized splits + baseline numbers. (VERIFY exact title/metrics)
+- **Zhang et al. review**, *ACS Omega* 2026, 11(22) 31853 — [10.1021/acsomega.6c01100](https://doi.org/10.1021/acsomega.6c01100) — "ML for Superconductor Discovery" survey; first-authored by Zhang (self-describes the 5,713 SuperCon→ICSD set above)
 
 ---
 
