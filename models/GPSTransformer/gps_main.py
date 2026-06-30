@@ -240,14 +240,16 @@ def main():
             sys.exit("multitask training requires a POSITIONED pack (real frac_coords / "
                      "lattice); this pack's lattice is all-zero (e.g. packed_v1). Re-pack "
                      "with positions + forces (packed_v4).")
-        # Target-normalization stds: compute on rank 0 over the full train split and
-        # broadcast, so every replica scales the loss identically.
-        if dist_info.is_main:
-            target_stats = compute_target_stats(
-                dataset, list(sc_idx), max_samples=args.get("target_stat_samples", 2000),
-                seed=args.get("split_seed", 123))
-        else:
-            target_stats = None
+        # Target-normalization stds for the multitask loss (so every replica scales
+        # identically). Computed on a seeded sample of the train split.
+        # Compute on EVERY rank (deterministic: a seeded sample of a deterministic dataset),
+        # so no rank sits idle inside the broadcast collective while rank 0 scans -- that
+        # asymmetric wait (2000 sequential reads, minutes under IO contention) exceeded the
+        # NCCL watchdog and aborted the energy-only rung. The broadcast then only pins
+        # bitwise-identical loss scaling; all ranks reach it together, so it returns at once.
+        target_stats = compute_target_stats(
+            dataset, list(sc_idx), max_samples=args.get("target_stat_samples", 2000),
+            seed=args.get("split_seed", 123))
         target_stats = broadcast_object(target_stats, dist_info, src=0)
         weights = {**_DEFAULT_LOSS_WEIGHTS, **args.get("loss_weights", {})}
         run_multitask(args, model, optimizer, scheduler, loaders, target_stats, weights,

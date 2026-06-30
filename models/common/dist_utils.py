@@ -16,6 +16,7 @@ the single-GPU / single-process path is byte-identical and the non-distributed c
 never pays a distributed cost.
 """
 import os
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -56,7 +57,11 @@ def init_distributed():
     # <= #GPUs). Otherwise gloo on CPU — the correctness test runs 2 ranks on a 1-GPU box,
     # where binding rank 1 to a nonexistent GPU ordinal would crash.
     use_nccl = torch.cuda.is_available() and torch.cuda.device_count() >= world_size
-    dist.init_process_group(backend="nccl" if use_nccl else "gloo")
+    # 30-min collective timeout (default is 10 min): a rank can spend several minutes on
+    # pre-collective setup work (e.g. the target-stat dataset scan) while peers wait inside
+    # a broadcast; the default watchdog aborted the energy-only rung mid-broadcast.
+    dist.init_process_group(backend="nccl" if use_nccl else "gloo",
+                            timeout=timedelta(minutes=30))
     if use_nccl:
         torch.cuda.set_device(local_rank)
     return DistInfo(True, rank, local_rank, world_size, gpu_per_rank=use_nccl)
