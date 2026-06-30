@@ -28,7 +28,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from models.head.HeadData import assemble, family_mae_report, make_splits
+from models.head.HeadData import assemble, chemsys_groups, family_mae_report, make_splits
 from models.head.HeadModel import TcHead
 
 
@@ -59,13 +59,20 @@ def run(cfg, out_dir, device):
 
     bs = cfg.get("ft_batch_size", 64)
     pool_dim = cfg["pool_dim"]
+    # Loss/early-stop objective in z (= standardized log1p) space: "l1" (default) or
+    # "msle" (squared log error -> MSE in z-space, which equals MSLE up to a constant,
+    # matching the 3DSC XGBoost objective).
+    loss_type = cfg.get("loss", "l1")
     # ---- static tables (descriptors, tc, family) + the leak-free parent-grouped split ----
     # pooling="meanmax" just so assemble doesn't pack the per-atom CSR we don't need here;
     # we only consume phys / tc / family / ids, and the encoder supplies embeddings live.
     data = assemble(cfg["index_path"], cfg["embed_dir"], cfg["descriptors"],
                     cfg["metadata_csv"], pooling="meanmax",
                     aux_meanmax_dir=cfg.get("aux_meanmax_dir"))
-    split = make_splits(data, cfg["split_seed"], cfg["val_frac"], cfg["test_frac"])
+    # Split grouping: "parent" (default, doped variants together) or "chemsys" (whole
+    # chemical systems held out — the 3DSC paper's stricter protocol).
+    grp = chemsys_groups(data["ids"]) if cfg.get("split_group") == "chemsys" else None
+    split = make_splits(data, cfg["split_seed"], cfg["val_frac"], cfg["test_frac"], groups=grp)
     ids = list(data["ids"])
     id2row = {i: r for r, i in enumerate(ids)}
     id2split = {i: s for i, s in zip(ids, split)}
@@ -138,7 +145,7 @@ def run(cfg, out_dir, device):
         for inp, _t, _l, cif_ids in loaders["train"]:
             opt.zero_grad()
             z, rows = forward_batch(head, inp, cif_ids, grad_encoder=train and not head._frozen_enc)
-            loss = F.l1_loss(z, y_z[rows])
+            loss = F.mse_loss(z, y_z[rows]) if loss_type == "msle" else F.l1_loss(z, y_z[rows])
             loss.backward(); opt.step(); tot += loss.item()
         return tot
 
@@ -148,7 +155,9 @@ def run(cfg, out_dir, device):
         num = den = 0.0
         for inp, _t, _l, cif_ids in loaders["val"]:
             z, rows = forward_batch(head, inp, cif_ids, grad_encoder=False)
-            num += (z - y_z[rows]).abs().sum().item(); den += len(rows)
+            d = z - y_z[rows]
+            num += (d * d).sum().item() if loss_type == "msle" else d.abs().sum().item()
+            den += len(rows)
         return num / max(den, 1)
 
     def fit_phase(head, params, lr, wd, epochs, patience, y_z, tag, log):
@@ -227,7 +236,13 @@ def run(cfg, out_dir, device):
     head_K = acc / len(seed_preds)
     rows = [id2row[c] for c in te_ids]
     tc_te = data["tc"][rows]; fam_te = data["family"][rows]; grp_te = data["group"][rows]
+    # Global MSLE / RMSE on test (MSLE = the 3DSC paper's metric; head_K already clamped >=0).
+    _t = np.asarray(tc_te, float); _p = np.maximum(np.asarray(head_K, float), 0.0)
+    msle = float(np.mean((np.log1p(_t) - np.log1p(_p)) ** 2))
+    rmse = float(np.sqrt(np.mean((_t - _p) ** 2)))
     metrics = {"finetune": True, "n_seeds": len(seed_preds), "seeds": seed_logs,
+               "split_group": cfg.get("split_group", "parent"), "loss": loss_type,
+               "msle": msle, "rmse_K": rmse,
                "unfrozen_blocks": cfg.get("ft_unfreeze_blocks", 1),
                "encoder_params_unfrozen": sum(p.numel() for blk in list(model.blocks)[-cfg.get("ft_unfreeze_blocks", 1):] for p in blk.parameters()),
                "head": family_mae_report(tc_te, head_K, fam_te, grp_te)}
@@ -237,8 +252,8 @@ def run(cfg, out_dir, device):
         f.write("id,family,group,tc_true_K,tc_head_K\n")
         for i, c in enumerate(te_ids):
             f.write(f"{c},{fam_te[i]},{grp_te[i]},{tc_te[i]:.3f},{head_K[i]:.3f}\n")
-    print(f"[finetune] {len(seed_preds)}-seed ensemble overall test MAE "
-          f"{metrics['head']['overall']['mae_K']:.2f} K (unfroze top {cfg.get('ft_unfreeze_blocks',1)} block(s), "
-          f"{metrics['encoder_params_unfrozen']} enc params)")
+    print(f"[finetune] {len(seed_preds)}-seed ensemble: MAE {metrics['head']['overall']['mae_K']:.2f} K | "
+          f"RMSE {rmse:.2f} | MSLE {msle:.3f} | cuprate MAE {metrics['head'].get('family/Cuprate',{}).get('mae_K',float('nan')):.2f} "
+          f"[split={metrics['split_group']}, loss={loss_type}, top {cfg.get('ft_unfreeze_blocks',1)} block(s)]")
     print(f"run dir: {out_dir}")
     return metrics

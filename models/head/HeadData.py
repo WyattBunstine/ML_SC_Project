@@ -137,19 +137,38 @@ def _parent_id(cif_id: str) -> str:
     return m.group(1) if m else str(cif_id)
 
 
-def make_splits(data, seed: int = 123, val_frac: float = 0.1, test_frac: float = 0.2):
+def chemsys_groups(ids):
+    """Chemical-system group key per id: the sorted element set parsed from the formula
+    prefix of the cif id (e.g. 'Cu1La2O4.015-MP-mp-...' -> 'Cu-La-O'). Used for the 3DSC
+    paper's grouped-by-chemical-system split — a stricter extrapolation test than parent
+    grouping (whole element systems are held out, not just doped variants of one parent)."""
+    from pymatgen.core import Composition
+    out = []
+    for cid in ids:
+        formula = str(cid).split("-MP-")[0]
+        try:
+            out.append("-".join(sorted(set(e.symbol for e in Composition(formula).elements))))
+        except Exception:
+            out.append(str(cid))   # unparseable -> singleton group
+    return np.asarray(out)
+
+
+def make_splits(data, seed: int = 123, val_frac: float = 0.1, test_frac: float = 0.2,
+                groups=None):
     """Per-row split assignment ('train'/'val'/'test'), SC stratified by family and
-    GROUPED BY MP PARENT — every doped variant of a parent lands in the same split, so a
-    near-identical doped structure can't leak across train/test (62% of the SC set is
-    shared-parent variants). Whole groups are greedily packed into test->val->train per
-    family to hit the row-fraction targets. Non-SC negatives have singleton groups, so
-    their split is the usual per-row one."""
+    GROUPED — every member of a group lands in the same split, so near-identical
+    structures can't leak across train/test. Default group = MP parent (every doped
+    variant of a parent together; 62% of the SC set is shared-parent variants). Pass
+    `groups` (an array of group keys per id, e.g. chemsys_groups(...)) to group differently,
+    e.g. by chemical system to match the 3DSC paper. Whole groups are greedily packed into
+    test->val->train per family to hit the row-fraction targets."""
     import random
     from collections import defaultdict
 
     n = len(data["ids"])
     split = np.empty(n, dtype=object)
-    groups = np.array([_parent_id(i) for i in data["ids"]])
+    groups = (np.asarray(groups) if groups is not None
+              else np.array([_parent_id(i) for i in data["ids"]]))
 
     def grouped_three_way(idx, label):
         g2rows = defaultdict(list)
