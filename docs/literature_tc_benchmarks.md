@@ -19,7 +19,8 @@ for every entry below.
 
 | model | MAE (K) | RMSE (K) | R² | MSLE | cuprate MAE (K) | notes |
 |---|---|---|---|---|---|---|
-| GPS encoder, **fine-tuned** (top block, 7-seed) | **4.44** | 10.41 | 0.706 | 0.848 | 14.73 | our best (parent-grouped, L1 loss) |
+| GPS encoder FT — **forces-w2** pretrain (7-seed) | **4.18** | 9.93 | — | 0.780 | 13.44 | **our best** (parent-grouped, L1 loss) |
+| GPS encoder FT — rung-04 pretrain (7-seed) | 4.44 | 10.41 | 0.706 | 0.848 | 14.73 | prior champion |
 | GPS encoder, FT — **3DSC protocol** (chemsys split + MSLE loss) | 5.47 | 11.67 | — | **0.779** | 20.32 | for direct XGBoost comparison ↓ |
 | GPS encoder, frozen + head | 5.68 | — | — | — | 23.4 | best frozen |
 | ORIG CGCNN from scratch (leak-free) | 5.92 | 16.13 | 0.173 | 1.396 | 24.81 | single seed |
