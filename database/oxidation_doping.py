@@ -16,6 +16,8 @@ existing explicit-oxidation path uses them (occupancy-weighted per site):
 Validated on canonical superconductors + audited across the full 3DSC set — see
 scripts/oxidation_doping_prototype.py (the permanent gate, which imports this module).
 """
+import functools
+
 from pymatgen.core import Composition, Element
 
 # Anions get their definite negative oxidation; everything else is a cation we either pin
@@ -47,9 +49,17 @@ def _first_positive_common(common) -> float | None:
     return float(common[0]) if common else None
 
 
+# Oxide-context override where pymatgen's common_oxidation_states lists a LOWER state first
+# but the element is virtually always higher in an oxide (Hg2+ not Hg2^2+, Tl3+ not Tl1+,
+# GeO2 Ge4+). Only a fallback: the primary path takes oxidations from the parent via
+# oxi_state_guesses (data-driven), which already yields these correctly for framework ions.
+_OXIDE_PREF = {"Hg": 2.0, "Tl": 3.0, "Ge": 4.0}
+
+
 def _pinned_cation_oxi(sym: str) -> float:
-    """Definite oxidation for a fixed-valence cation. Group 3 + lanthanoids -> +3,
-    alkali -> +1, alkaline-earth -> +2; otherwise the element's first positive common state."""
+    """Definite oxidation for a fixed-valence cation (FALLBACK for ions absent from the
+    parent oxi_state_guesses). Group 3 + lanthanoids -> +3, alkali -> +1, alkaline-earth
+    -> +2, oxide-preferred override, else the element's first positive common state."""
     el = Element(sym)
     if el.is_alkali:
         return 1.0
@@ -57,30 +67,68 @@ def _pinned_cation_oxi(sym: str) -> float:
         return 2.0
     if el.is_lanthanoid or el.group == 3:
         return 3.0
+    if sym in _OXIDE_PREF:
+        return _OXIDE_PREF[sym]
     v = _first_positive_common(el.common_oxidation_states)
     return v if v is not None else 0.0
 
 
-def _dopant_oxi(sym: str, replaced_host: str | None) -> float:
+def _dopant_oxi(sym: str, replaced_host: str | None, host_oxi: float | None = None) -> float:
     """Oxidation of a dopant element. Single common state -> that. Multiple (e.g. Ce 3/4)
     -> the aliovalent one that DIFFERS from the host it replaces, i.e. the state that
-    actually creates doping (Ce->4 replacing Nd->3 = electron doping)."""
+    actually creates doping (Ce->4 replacing Nd->3 = electron doping). `host_oxi` is the
+    replaced host's oxidation from the parent reference when available (else pinned)."""
     common = Element(sym).common_oxidation_states
     if not common:
         return _pinned_cation_oxi(sym)
     if len(common) == 1 or replaced_host is None:
         v = _first_positive_common(common)
         return v if v is not None else float(common[0])
-    host_oxi = _pinned_cation_oxi(replaced_host)
+    if host_oxi is None:
+        host_oxi = _pinned_cation_oxi(replaced_host)
+    # A redox TM substituting on another redox-TM site (Co->Fe, Ni->Cu) is typically
+    # ISOVALENT — the doping is band-filling, not a formal-oxidation change — so it takes
+    # the state nearest the host's, NOT the aliovalent one (which is right for a lanthanide
+    # like Ce->Nd creating electron doping).
+    if _is_redox_candidate(sym) and replaced_host is not None and _is_redox_candidate(replaced_host):
+        return float(min(common, key=lambda c: abs(c - host_oxi)))
     aliovalent = [c for c in common if abs(c - host_oxi) > 1e-9 and c > 0]
     return float(aliovalent[0]) if aliovalent else _first_positive_common(common)
+
+
+@functools.lru_cache(maxsize=8192)
+def _oxide_reference_key(items):
+    """(cached) Most-probable integer oxidation per element for an integer cell, via
+    pymatgen's ICSD-probability charge-balancing. `items` is a sorted ((sym, int_amt), ...).
+    Returns a frozenset of (sym, oxi) or empty when it can't balance."""
+    amts = {s: a for s, a in items if a > 0}
+    if not amts:
+        return frozenset()
+    try:
+        guesses = Composition(amts).oxi_state_guesses(target_charge=0)
+    except Exception:                                # noqa: BLE001 — fractional / no balance
+        return frozenset()
+    return frozenset((str(k), float(v)) for k, v in guesses[0].items()) if guesses else frozenset()
+
+
+def _parent_reference_oxi(parent: dict) -> dict:
+    """Data-driven reference oxidation per PARENT (undoped) element from oxi_state_guesses.
+    This is the general fix: it yields Ru+5/Cu+2 (ruthenocuprate), Hg+2, Tl+3, Fe+2/As-3
+    (Fe-based) with NO per-element hardcoding — every fixed ion (incl. a second redox TM)
+    gets its physically-correct state, so only the true doping residual lands on the center.
+    {} when the parent isn't a clean integer cell (-> per-element fallbacks)."""
+    items = tuple(sorted((s, round(v)) for s, v in parent.items() if round(v) > 0))
+    return {s: o for s, o in _oxide_reference_key(items)}
 
 
 def assign_oxidation(doped_comp: dict, parent_comp: dict):
     """Per-element oxidation for a doped composition. Returns (element_oxi, info).
 
-    info: redox_element, redox_oxi, charge_imbalance, source, and `flags`
-    (intermetallic / no_redox_center / multi_redox_candidate / out_of_range_pinned)."""
+    Fixed ions take their most-probable oxidation from the PARENT (oxi_state_guesses,
+    data-driven & general); the doping residual is absorbed by the redox-active transition
+    metal, chosen as the first candidate whose charge-balance solve lands in a physical
+    range (a 'flip to another TM' guard against a false center). info: redox_element,
+    redox_oxi, charge_imbalance, source, flags."""
     doped = {str(k): float(v) for k, v in doped_comp.items()}
     parent = {str(k): float(v) for k, v in parent_comp.items()}
     flags = []
@@ -90,55 +138,75 @@ def assign_oxidation(doped_comp: dict, parent_comp: dict):
         return ({e: 0.0 for e in doped},
                 {"redox_element": None, "source": "intermetallic", "flags": ["intermetallic"]})
 
-    dopants = [e for e in doped if e not in parent]  # elements only in the doped cell
+    ref = _parent_reference_oxi(parent)              # {el: oxi} from the parent, or {}
+    dopants = [e for e in doped if e not in parent]
     host_drops = {e: parent.get(e, 0.0) - doped.get(e, 0.0)
                   for e in parent if e not in ANION_OXI}
     replaced_host = max(host_drops, key=host_drops.get) if host_drops else None
 
+    def fixed_oxi(e):
+        """Oxidation of a non-center ion: anion pinned, parent ion from the ref guess,
+        dopant aliovalent, else per-element fallback."""
+        if e in ANION_OXI:
+            return ANION_OXI[e]
+        if e in ref:                                 # data-driven parent reference (general)
+            return ref[e]
+        if e in dopants:
+            return _dopant_oxi(e, replaced_host, ref.get(replaced_host))
+        return _pinned_cation_oxi(e)
+
     host_redox = [e for e in doped if e not in dopants and _is_redox_candidate(e)]
-    # Priority: non-coinage before Ag/Au; then most ABUNDANT host TM (the majority TM
-    # forms the framework — Cu over Ti, majority Fe over minority Co, Mo over Ag in
-    # Chevrel); then higher group (later 3d = more redox-active); then symbol.
+    # Priority: non-coinage before Ag/Au; most ABUNDANT host TM (the framework/active layer —
+    # Cu in a ruthenocuprate, majority Fe over minority Co); then higher group; then symbol.
     host_redox.sort(key=lambda s: (s in COINAGE, -doped[s], -Element(s).group, s))
     if len(host_redox) > 1:
         flags.append(f"multi_redox_candidate:{host_redox}")
-    redox = host_redox[0] if host_redox else None
 
-    element_oxi, fixed_charge = {}, 0.0
-    for e, amt in doped.items():
-        if e == redox:
-            continue
-        if e in ANION_OXI:
-            oxi = ANION_OXI[e]
-        elif e in dopants:
-            oxi = _dopant_oxi(e, replaced_host)
-        else:
-            oxi = _pinned_cation_oxi(e)
-        element_oxi[e] = oxi
-        fixed_charge += amt * oxi
+    def _assign_with_center(center):
+        eo, fixed = {}, 0.0
+        for e, amt in doped.items():
+            if e == center:
+                continue
+            o = fixed_oxi(e)
+            eo[e] = o
+            fixed += amt * o
+        return eo, fixed
 
-    if redox is None:                                # ionic but no TM to absorb charge
+    if not host_redox:                               # ionic but no TM to absorb charge
+        eo, fixed = _assign_with_center(None)
         flags.append("no_redox_center")
-        return (element_oxi, {"redox_element": None, "charge_imbalance": fixed_charge,
-                              "source": "pinned_only", "flags": flags})
+        return (eo, {"redox_element": None, "charge_imbalance": fixed,
+                     "source": "pinned_only", "flags": flags})
 
-    redox_oxi = -fixed_charge / doped[redox]         # solve neutrality (fractional ok)
-    common = Element(redox).common_oxidation_states
-    lo, hi = (min(common), max(common)) if common else (0, 6)
-    if not (lo - 1.0 <= redox_oxi <= hi + 1.0):
-        # Implausible solve (false redox center, or a tiny redox amount dividing a large
-        # charge): DON'T emit a garbage oxidation — pin the center to its common state and
-        # accept a residual imbalance, flagged. Keeps the channel sane on the ~8% edge cases.
-        pinned = float(common[0]) if common else 0.0
-        element_oxi[redox] = pinned
-        flags.append(f"out_of_range_pinned:{redox}={redox_oxi:.2f}->{pinned:g}")
-        return (element_oxi, {"redox_element": redox, "redox_oxi": pinned,
-                              "charge_imbalance": fixed_charge + pinned * doped[redox],
-                              "source": "redox_pinned_fallback", "flags": flags})
-    element_oxi[redox] = redox_oxi
-    return (element_oxi, {"redox_element": redox, "redox_oxi": redox_oxi,
-                          "charge_imbalance": fixed_charge, "source": "redox_balance",
-                          "flags": flags})
+    # Try each redox candidate as the doping-absorbing center; accept the first whose solve
+    # is physical. With a correct parent reference the majority TM balances first pass; the
+    # flip only triggers when the primary center would go unphysical (false-center guard).
+    for cand in host_redox:
+        eo, fixed = _assign_with_center(cand)
+        solve = -fixed / doped[cand]
+        # Plausibility from the ICSD-observed range (wider than common_oxidation_states) so
+        # cluster compounds like Chevrel Mo (~+2.33) aren't wrongly rejected, while true
+        # garbage (a false center, e.g. Ag=+11) still is.
+        states = Element(cand).icsd_oxidation_states or Element(cand).common_oxidation_states
+        lo, hi = (min(states), max(states)) if states else (0, 6)
+        if lo - 1.0 <= solve <= hi + 1.0:
+            eo[cand] = solve
+            if cand != host_redox[0]:
+                flags.append(f"redox_center_flipped:{host_redox[0]}->{cand}")
+            return (eo, {"redox_element": cand, "redox_oxi": solve,
+                         "charge_imbalance": fixed + solve * doped[cand],
+                         "source": "redox_balance", "flags": flags})
+
+    # No candidate balances in range -> pin the primary center, accept a residual (flagged).
+    cand = host_redox[0]
+    eo, fixed = _assign_with_center(cand)
+    common = Element(cand).common_oxidation_states
+    pinned = float(common[0]) if common else 0.0
+    eo[cand] = pinned
+    flags.append(f"out_of_range_pinned:{cand}={-fixed/doped[cand]:.2f}->{pinned:g}")
+    return (eo, {"redox_element": cand, "redox_oxi": pinned,
+                 "charge_imbalance": fixed + pinned * doped[cand],
+                 "source": "redox_pinned_fallback", "flags": flags})
 
 
 def site_oxidation_states(structure, parent_comp):
