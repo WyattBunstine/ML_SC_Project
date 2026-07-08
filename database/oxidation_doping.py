@@ -7,11 +7,19 @@ that should carry the charge-doping signal (the cuprate/pnictide T_c order param
 This computes oxidation states the right way and decorates the structure so the builder's
 existing explicit-oxidation path uses them (occupancy-weighted per site):
 
-  RULE: pin every fixed-valence ion to its definite oxidation; identify the host
-  transition-metal redox center (group 4-11, coinage metals deprioritized); solve that
-  center's oxidation by charge balance over the fractional doped composition. Reduces to
-  clean nominal states for an ordered/undoped cell; carries the doping-induced hole/electron
-  onto the redox center for a doped one. Implausible solves are pinned (never garbage).
+  RULE: take each FIXED ion's oxidation from pymatgen `oxi_state_guesses` on the PARENT
+  (undoped, integer) cell — data-driven, context-aware, no per-element hardcoding: Ru+5/Cu+2
+  (ruthenocuprate), Hg+2, Tl+3 in oxides but Tl+1 in tellurides, Fe+2/As-3 (pnictide).
+  Identify the host TM redox center (group 4-11, most abundant, coinage deprioritized) and
+  solve ITS oxidation by charge balance over the fractional doped composition, so only the
+  doping residual lands on the center (Cu 2.15 for LSCO). Guards: flip to another TM if the
+  primary center's solve is unphysical (ICSD-range check — accepts Chevrel Mo~2.33);
+  ISOVALENT substitution for a TM doping onto a TM site (Co->Fe, Ni->Cu stay +2, not
+  aliovalent); implausible solves pinned (never garbage). Reduces to clean nominal states
+  for an ordered cell; carries the doping hole/electron onto the redox center for a doped one.
+
+  (Superseded the old "pin every fixed ion to its lowest positive common oxidation" rule,
+  which mis-assigned Hg+1/Tl+1/Ge+2 and let a 2nd redox TM (Ru) corrupt Cu to 2.6-3.0.)
 
 Validated on canonical superconductors + audited across the full 3DSC set — see
 scripts/oxidation_doping_prototype.py (the permanent gate, which imports this module).
