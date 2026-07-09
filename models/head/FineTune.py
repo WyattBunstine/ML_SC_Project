@@ -219,8 +219,12 @@ def run(cfg, out_dir, device):
             for inp, _t, _l, cif_ids in loaders["test"]:
                 z, _rows = forward_batch(head, inp, cif_ids, grad_encoder=False)
                 zs.append(z); bids += list(cif_ids)
-        seed_preds.append((bids, head.z_to_kelvin(torch.cat(zs)).cpu().numpy()))
+        k_pred = head.z_to_kelvin(torch.cat(zs)).cpu().numpy()
+        seed_preds.append((bids, k_pred))
+        # per-seed single-model test MAE (the ensemble is the headline; this shows spread)
+        seed_true = np.array([data["tc"][id2row[c]] for c in bids])
         seed_logs.append({"seed": seed, "val_z_mae": val_z,
+                          "test_mae_K": float(np.abs(seed_true - k_pred).mean()),
                           "unfrozen_blocks": k})
         if seed == 0:
             with open(os.path.join(out_dir, "ft_log_seed0.csv"), "w", newline="") as f:
