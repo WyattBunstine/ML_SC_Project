@@ -44,7 +44,8 @@ def load_family_metadata(metadata_csv: str) -> pd.DataFrame:
 
 def assemble(index_path: str, embed_dir: str, descriptors_path: str,
              metadata_csv: str, prefix_map: str = "database/MP:database/datafiles/MP",
-             pooling: str = "meanmax", aux_meanmax_dir: str = None):
+             pooling: str = "meanmax", aux_meanmax_dir: str = None,
+             require_embed: bool = True):
     """Build the head's design matrices. Returns a dict of aligned arrays.
 
     Rows missing an embedding or a descriptor are dropped (counted); this keeps
@@ -65,15 +66,21 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
     desc_table = desc_blob["table"]
     meta = load_family_metadata(metadata_csv)
     need_atoms = pooling != "meanmax"
+    # FineTune encodes the graphs live and never reads `enc`; it passes require_embed=False
+    # so rows without a precomputed embedding (e.g. the ICSD/NEMAD expansion) aren't dropped.
+    need_embed = require_embed or need_atoms
 
     ids, enc_rows, phys_rows, tc, label, family, doped = [], [], [], [], [], [], []
     atom_list = []
     missing_embed = missing_desc = missing_aux = 0
     for row in df.itertuples():
-        emb_path = os.path.join(embed_dir, row.id + ".npy")
-        if not os.path.exists(emb_path):
-            missing_embed += 1
-            continue
+        emb = None
+        if need_embed:
+            emb_path = os.path.join(embed_dir, row.id + ".npy")
+            if not os.path.exists(emb_path):
+                missing_embed += 1
+                continue
+            emb = np.load(emb_path)
         vec = desc_table.get(row.id)
         if vec is None:
             missing_desc += 1
@@ -87,10 +94,10 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
             vec = np.concatenate(
                 [np.asarray(vec, dtype=np.float32),
                  aux.mean(0).astype(np.float32), aux.max(0).astype(np.float32)])
-        emb = np.load(emb_path)
-        enc_rows.append(np.concatenate([emb.mean(0), emb.max(0)]).astype(np.float32))
-        if need_atoms:
-            atom_list.append(emb.astype(np.float32))
+        if emb is not None:
+            enc_rows.append(np.concatenate([emb.mean(0), emb.max(0)]).astype(np.float32))
+            if need_atoms:
+                atom_list.append(emb.astype(np.float32))
         phys_rows.append(vec)
         ids.append(row.id)
         tc.append(float(row.tc) if not pd.isna(row.tc) else np.nan)
@@ -150,6 +157,33 @@ def chemsys_groups(ids):
             out.append("-".join(sorted(set(e.symbol for e in Composition(formula).elements))))
         except Exception:
             out.append(str(cid))   # unparseable -> singleton group
+    return np.asarray(out)
+
+
+def parent_composition_groups(ids):
+    """Provenance-independent parent-family key: reduced formula of the ROUNDED cation
+    composition (oxygen + fractional dopants collapsed to the parent stoichiometry). All
+    doping variants of a family group together regardless of MP/ICSD/3DSC origin, so e.g.
+    'YBa2Cu3O6.5-ICSD-63321' and 'YBa2Cu3O6.9-MP-mp-20674' share the 'Ba2Cu3Y1' group.
+    Needed once the set mixes MP- and ICSD-parented rows, where _parent_id's -MP- tag
+    would otherwise put ICSD variants in singleton groups and leak them across folds."""
+    import re
+    from math import gcd
+    from functools import reduce
+    from pymatgen.core import Composition
+    out = []
+    for cid in ids:
+        formula = re.split(r"-MP-|-ICSD-", str(cid))[0]
+        try:
+            d = Composition(formula).get_el_amt_dict()
+            cats = {e: round(v) for e, v in d.items() if e != "O" and round(v) > 0}
+            if not cats:
+                out.append(str(cid)); continue
+            g = reduce(gcd, cats.values())
+            cats = {e: v // g for e, v in cats.items()}
+            out.append("".join(f"{e}{cats[e]}" for e in sorted(cats)))
+        except Exception:
+            out.append(str(cid))
     return np.asarray(out)
 
 

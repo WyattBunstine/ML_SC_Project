@@ -74,7 +74,9 @@ ANGLE_FEA_LEN = int(len(ANGLE_RBF_CENTERS))
 DIHEDRAL_FEA_LEN = ANGLE_FEA_LEN
 # Multitask DOS target: per-structure total density of states sampled on a FIXED energy
 # grid (E_F-aligned). The fetch (Download_MP_dos) and the model's `n_energy` must match this.
-DOS_N_ENERGY = 256
+# Narrow +/-1 eV window (128 bins) — see Download_MP_dos: concentrates the DOS loss on the
+# SC-relevant near-E_F states instead of the wide -10..+5 eV window.
+DOS_N_ENERGY = 128
 
 
 def _angle_rbf(cos_vals) -> np.ndarray:
@@ -221,6 +223,77 @@ for _z in range(1, 119):
         _RICH_TABLE[_z] = _rich_node_features_for_Z(_z)
     except Exception:                                     # noqa: BLE001 -> zeros
         pass
+
+
+# ---- valence SUBSHELL occupancy: element-AGNOSTIC orbital-character handle ----
+# [n_s, n_p, n_d, n_f] of the ION at each site (occupancy-weighted oxidation). Encodes
+# electronic CONFIGURATION, not element identity: Cu2+ and Ni1+ both read [0,0,9,0] (d9),
+# while a d2 site [0,0,2,0] and a p2 site [2,2,0,0] stay distinct, and f-electron
+# (heavy-fermion) systems are visible (Ce3+ = [0,0,0,1]). d/f-block CATIONS collapse
+# valence into the (n-1)d / (n-2)f shell (Ni+ = 3d9, not 3d8 4s1). Computed at LOAD time
+# from the stored Z + oxidation_state (no graph rebuild). Opt-in via use_valence_features;
+# concat order [base | rich | valence | dihedral], mirrored across every assembly site.
+VALENCE_NODE_FEA_LEN = 4
+_L = {"s": 0, "p": 1, "d": 2, "f": 3}
+_NOBLE_Z = [2, 10, 18, 36, 54, 86]
+
+
+def _valence_orbitals(el):
+    """{(n, l): valence occupancy} = neutral orbitals BEYOND the preceding noble-gas core
+    (so Ce's 4f/5d/6s count as valence, its 1s-5p Xe core does not — robust across the
+    Aufbau/Madelung ordering that a simple 'highest n' rule gets wrong for f-block)."""
+    cfg = {(n, l): occ for (n, l, occ) in el.full_electronic_structure}
+    prev = max([z for z in _NOBLE_Z if z < el.Z], default=0)
+    noble = ({(n, l): occ for (n, l, occ) in PmgElement.from_Z(prev).full_electronic_structure}
+             if prev else {})
+    return {(n, l): occ - noble.get((n, l), 0)
+            for (n, l), occ in cfg.items() if occ - noble.get((n, l), 0) > 0}
+
+
+_VAL_NEUTRAL = np.zeros((119, 4), dtype=np.float32)   # neutral valence [s,p,d,f] per Z
+_REMOVE_ORDER = [[] for _ in range(119)]              # l-indices in cation removal order
+_GROUP_TABLE = np.zeros(119, dtype=np.float32)
+_IS_DFBLOCK = np.zeros(119, dtype=bool)               # d-block: valence collapses into d
+for _z in range(1, 119):
+    try:
+        _el = PmgElement.from_Z(_z)
+        _vo = _valence_orbitals(_el)
+        if _el.block in ("s", "p"):   # main group: filled (n-1)d / (n-2)f are inert core,
+            _vo = {k: v for k, v in _vo.items() if k[1] in ("s", "p")}  # keep only ns/np
+        for (_n, _l), _occ in _vo.items():
+            _VAL_NEUTRAL[_z, _L[_l]] += _occ
+        # remove ns/np before (n-1)d before (n-2)f -> sort valence orbitals by (n desc, l desc)
+        _REMOVE_ORDER[_z] = [_L[_l] for (_n, _l), _occ
+                             in sorted(_vo.items(), key=lambda kv: (kv[0][0], _L[kv[0][1]]), reverse=True)]
+        _GROUP_TABLE[_z] = float(_el.group or 0)
+        _IS_DFBLOCK[_z] = (_el.block == "d")
+    except Exception:                                 # noqa: BLE001
+        pass
+
+
+def valence_node_features(z_array, ox_array):
+    """(N,) Z + (N,) oxidation_state -> (N, 4): valence subshell occupancy [n_s,n_p,n_d,n_f]
+    of the ion. d-block cations collapse valence into d (group-ox); main-group removes the
+    outer np then ns; anions fill the outer p then s. Cu2+ ~ Ni1+ ~ [0,0,9,0]."""
+    z = np.clip(np.asarray(z_array, dtype=int), 0, 118)
+    ox = np.asarray(ox_array, dtype=np.float32)
+    out = np.zeros((len(z), 4), dtype=np.float32)
+    for i in range(len(z)):
+        zi = int(z[i]); oxi = float(ox[i])
+        if _IS_DFBLOCK[zi] and oxi > 0:               # TM cation: all valence electrons in d
+            out[i, 2] = max(0.0, min(10.0, _GROUP_TABLE[zi] - oxi)); continue
+        occ = _VAL_NEUTRAL[zi].copy()
+        if oxi > 0:                                   # cation: strip in (n desc, l desc) order
+            r = oxi
+            for li in _REMOVE_ORDER[zi]:
+                if r <= 1e-9: break
+                t = min(occ[li], r); occ[li] -= t; r -= t
+        elif oxi < 0:                                 # anion: fill outer p then s
+            a = -oxi
+            t = min(6.0 - occ[1], a); occ[1] += t; a -= t
+            occ[0] += min(2.0 - occ[0], a)
+        out[i] = occ
+    return out
 
 
 def rich_node_features(z_array):
@@ -473,6 +546,7 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
     edge_dim = NBR_FEA_LEN + (ANGLE_FEA_LEN if use_ang else 0)
 
     use_rich = getattr(dataset, "use_rich_node_features", False)
+    use_val = getattr(dataset, "use_valence_features", False)
     use_dih = getattr(dataset, "use_dihedrals", False)
     node_rows, edge_rows, poly_rows = [], [], []
     zero_ang = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
@@ -481,8 +555,10 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
         dih = dihedral_node_features(graph, len(graph["nodes"])) if use_dih else None
         for ni, n in enumerate(graph["nodes"]):
             feat = _node_to_fea(n)
-            if use_rich:        # match the assemble-time concat order: [base | rich | dih]
+            if use_rich:        # match the assemble-time concat order: [base | rich | val | dih]
                 feat = np.concatenate([feat, rich_node_features([n["Z"]])[0]])
+            if use_val:
+                feat = np.concatenate([feat, valence_node_features([n["Z"]], [feat[1]])[0]])
             if use_dih:
                 feat = np.concatenate([feat, dih[ni]])
             node_rows.append(feat)
@@ -507,6 +583,7 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
 
     # nan-safe mean/std via the shared helper (see rows_meanstd).
     node_dim = (NODE_FEA_LEN + (RICH_NODE_FEA_LEN if use_rich else 0)
+                + (VALENCE_NODE_FEA_LEN if use_val else 0)
                 + (DIHEDRAL_FEA_LEN if use_dih else 0))
     return {
         "node": rows_meanstd(node_rows, node_dim),
@@ -724,7 +801,8 @@ def _extract_ragged(graph):
 
 def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
                      use_poly_edges, use_bond_angles, build_angle_bias,
-                     use_rich_node_features=False, use_dihedrals=False):
+                     use_rich_node_features=False, use_dihedrals=False,
+                     use_valence_features=False):
     """Truncate/pad a ragged extraction into the model's padded sample tensors.
 
     Replicates the historical _build_sample behavior exactly: closest-first
@@ -796,6 +874,12 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
         # Concat element features looked up from the stored Z (atom_fea[:, 0]).
         rich = torch.from_numpy(rich_node_features(atom_fea[:, 0].numpy()))
         atom_fea = torch.cat([atom_fea, rich], dim=1)
+    if use_valence_features:
+        # valence subshell occupancy [n_s,n_p,n_d,n_f] from stored Z (col 0) + oxidation
+        # (col 1). Order [base | rich | valence | dihedral] — every stats path mirrors this.
+        val = torch.from_numpy(valence_node_features(atom_fea[:, 0].numpy(),
+                                                     atom_fea[:, 1].numpy()))
+        atom_fea = torch.cat([atom_fea, val], dim=1)
     if use_dihedrals:
         # Concat the per-atom 4-body torsion summary (zeros on a dihedral-less pack).
         # Order is [base | rich | dihedral] -- the stats paths mirror this exactly.
@@ -868,7 +952,9 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
     magmom, m_m = _t(r["magmom"])          # (N,1)
     stress, m_s = _t(r["stress"])          # (3,3) raw kBar ...
     stress = stress * STRESS_KBAR_TO_EVA3  # ... -> eV/A^3, model units (see constant above)
-    dos, m_dos = _t(r["dos"])              # (DOS_N_ENERGY,) per-structure total DOS
+    dos, m_dos = _t(r["dos"])              # (DOS_N_ENERGY,) total DOS on the +/-1 eV grid
+    dos = dos / max(int(r["n_atoms"]), 1)  # -> per-atom (intensive) DOS: removes the size
+                                           # confound + matches the model's segment-MEAN head
     energy_t, m_e = _scalar(energy)        # (1,)
     bandgap_t, m_bg = _scalar(bandgap)     # (1,)
     targets = {"forces": forces, "magmom": magmom, "stress": stress, "dos": dos,
@@ -880,8 +966,8 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
 
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_poly_edges, use_bond_angles, build_angle_bias=False,
-                  use_rich_node_features=False, use_dihedrals=False,
-                  multitask=False, bandgap=float("nan")):
+                  use_rich_node_features=False, use_valence_features=False,
+                  use_dihedrals=False, multitask=False, bandgap=float("nan")):
     """Build one fully-padded crystal sample from its graph JSON on disk.
 
     Module-level (not a method) so it is picklable by a ``spawn`` multiprocessing
@@ -899,7 +985,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
     # backend's __getitem__, which also returns the whole _assemble_sample tuple.
     sample = _assemble_sample(ragged, max_num_nbr, max_num_poly_nbr,
                               use_poly_edges, use_bond_angles, build_angle_bias,
-                              use_rich_node_features, use_dihedrals)
+                              use_rich_node_features, use_dihedrals,
+                              use_valence_features)
 
     if multitask:
         targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap)
@@ -955,9 +1042,10 @@ class CIFDataV4(Dataset):
                  use_bond_angles: bool = False, use_poly_edges: bool = True,
                  build_angle_bias: bool = False, use_rich_node_features: bool = False,
                  use_dihedrals: bool = False, multitask: bool = False,
-                 frame_subsample: int = 1):
+                 frame_subsample: int = 1, use_valence_features: bool = False):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
+        self.use_valence_features = use_valence_features
         self.use_dihedrals = use_dihedrals
         # When True, __getitem__ returns (input, targets_dict, masks_dict, cif_id) for
         # the masked multitask trainer instead of (input, target_scalar, label, cif_id).
@@ -1089,6 +1177,7 @@ class CIFDataV4(Dataset):
             sample = _build_sample(rec, self.max_num_nbr, self.max_num_poly_nbr,
                                    self.use_poly_edges, self.use_bond_angles,
                                    self.build_angle_bias, self.use_rich_node_features,
+                                   self.use_valence_features,
                                    self.use_dihedrals, self.multitask,
                                    self._bandgap_by_id.get(str(rec[0]), float("nan")))
             if dev.type != "cpu":
@@ -1121,7 +1210,8 @@ class CIFDataV4(Dataset):
         result = _build_sample(self.data[idx], self.max_num_nbr,
                                self.max_num_poly_nbr, self.use_poly_edges,
                                self.use_bond_angles, self.build_angle_bias,
-                               self.use_rich_node_features, self.use_dihedrals,
+                               self.use_rich_node_features, self.use_valence_features,
+                               self.use_dihedrals,
                                self.multitask,
                                self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")))
 
