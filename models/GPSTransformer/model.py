@@ -462,7 +462,9 @@ class GPSCrystalNet(nn.Module):
         if "bandgap" in self.tasks:
             out["bandgap"] = self._segment_mean(self.heads["bandgap"](h), seg, B).squeeze(-1)
         if "dos" in self.tasks:
-            out["dos"] = self._segment_sum(self.heads["dos"](h), seg, B)    # (B, n_energy)
+            # per-atom (intensive) DOS: mean over atoms, not sum — removes the system-size
+            # confound (total DOS ~ #atoms). Paired with a per-atom DOS target (/ n_atoms).
+            out["dos"] = self._segment_mean(self.heads["dos"](h), seg, B)   # (B, n_energy)
         return out
 
     def _recompute_angle(self, d, static_angle):

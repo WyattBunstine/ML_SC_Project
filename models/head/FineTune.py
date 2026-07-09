@@ -28,7 +28,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from models.head.HeadData import assemble, chemsys_groups, family_mae_report, make_splits
+from models.head.HeadData import (assemble, chemsys_groups, family_mae_report,
+                                  make_splits, parent_composition_groups)
 from models.head.HeadModel import TcHead
 
 
@@ -47,6 +48,7 @@ def _encoder(checkpoint_path, index_path, device):
         max_num_nbr=a.get("max_num_nbr", 14), max_num_poly_nbr=a.get("max_num_poly_nbr", 16),
         use_poly_edges=a.get("use_poly_edges", True), use_bond_angles=a.get("use_bond_angles", False),
         use_rich_node_features=a.get("use_rich_node_features", False),
+        use_valence_features=a.get("use_valence_features", False),
         use_dihedrals=a.get("use_dihedrals", False))
     sa, sn, _, sp, _, _ = ds[0][0][:6]
     model = GPSCrystalNet.from_args(a, (sa.shape[-1], sn.shape[-1], sp.shape[-1]))
@@ -68,12 +70,25 @@ def run(cfg, out_dir, device):
     # we only consume phys / tc / family / ids, and the encoder supplies embeddings live.
     data = assemble(cfg["index_path"], cfg["embed_dir"], cfg["descriptors"],
                     cfg["metadata_csv"], pooling="meanmax",
-                    aux_meanmax_dir=cfg.get("aux_meanmax_dir"))
-    # Split grouping: "parent" (default, doped variants together) or "chemsys" (whole
-    # chemical systems held out — the 3DSC paper's stricter protocol).
-    grp = chemsys_groups(data["ids"]) if cfg.get("split_group") == "chemsys" else None
+                    aux_meanmax_dir=cfg.get("aux_meanmax_dir"), require_embed=False)
+    # Split grouping: "parent" (default, doped variants of one MP parent together),
+    # "chemsys" (whole chemical systems — the 3DSC paper's stricter protocol), or
+    # "parent_comp" (rounded-cation parent formula — provenance-independent, required
+    # once the set mixes MP- and ICSD-parented rows so families don't leak across folds).
+    sg = cfg.get("split_group")
+    grp = (chemsys_groups(data["ids"]) if sg == "chemsys"
+           else parent_composition_groups(data["ids"]) if sg == "parent_comp"
+           else None)
     split = make_splits(data, cfg["split_seed"], cfg["val_frac"], cfg["test_frac"], groups=grp)
     ids = list(data["ids"])
+    # Optional zero-shot family hold-out: force the listed ids into TEST (and out of
+    # train/val) so the model gets ZERO exposure to that family — e.g. the oxide
+    # nickelates, to test whether cuprate-learned physics transfers Cu->Ni.
+    if cfg.get("holdout_ids_csv"):
+        import pandas as _pd
+        _ho = set(_pd.read_csv(cfg["holdout_ids_csv"])["id"].astype(str))
+        _n = sum(1 for r, i in enumerate(ids) if i in _ho and (split.__setitem__(r, "test") or True))
+        print(f"[ft] holdout: {_n} ids forced into test (zero train/val exposure)")
     id2row = {i: r for r, i in enumerate(ids)}
     id2split = {i: s for i, s in zip(ids, split)}
     is_sc = data["label"] == 1

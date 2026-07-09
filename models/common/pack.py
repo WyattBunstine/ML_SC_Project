@@ -33,6 +33,7 @@ from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_target
                       _select_target_key, build_data_rows, subsample_frames_by_group,
                       rows_meanstd,
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
+                      valence_node_features, VALENCE_NODE_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN,
                       DIHEDRAL_FEA_LEN, DOS_N_ENERGY)
 
@@ -228,7 +229,8 @@ class PackedCIFDataV4(Dataset):
                  graph_cache_size=0, random_seed=123, target_column=None,
                  use_bond_angles=False, use_poly_edges=True,
                  build_angle_bias=False, use_rich_node_features=False,
-                 use_dihedrals=False, multitask=False, frame_subsample=1):
+                 use_dihedrals=False, multitask=False, frame_subsample=1,
+                 use_valence_features=False):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
         if self._header["version"] != PACK_VERSION:
@@ -269,6 +271,7 @@ class PackedCIFDataV4(Dataset):
         self.use_poly_edges = use_poly_edges
         self.build_angle_bias = build_angle_bias
         self.use_rich_node_features = use_rich_node_features
+        self.use_valence_features = use_valence_features
         self.use_dihedrals = use_dihedrals
         self.multitask = multitask
 
@@ -396,7 +399,7 @@ class PackedCIFDataV4(Dataset):
         sample = _assemble_sample(r, self.max_num_nbr, self.max_num_poly_nbr,
                                   self.use_poly_edges, self.use_bond_angles,
                                   self.build_angle_bias, self.use_rich_node_features,
-                                  self.use_dihedrals)
+                                  self.use_dihedrals, self.use_valence_features)
         if self.multitask:
             bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
             targets, masks = _assemble_targets(r, energy=target, bandgap=bg)
@@ -426,8 +429,10 @@ class PackedCIFDataV4(Dataset):
         for i in idx:
             r = self._ragged(self.data[i][2])
             node = np.asarray(r["atom_fea"], dtype=np.float32)
-            if self.use_rich_node_features:   # match the assemble-time order: [base | rich | dih]
+            if self.use_rich_node_features:   # match assemble order: [base | rich | val | dih]
                 node = np.concatenate([node, rich_node_features(node[:, 0])], axis=1)
+            if self.use_valence_features:
+                node = np.concatenate([node, valence_node_features(node[:, 0], node[:, 1])], axis=1)
             if self.use_dihedrals:
                 node = np.concatenate([node, np.asarray(r["dih_node"], dtype=np.float32)], axis=1)
             node_rows.append(node)
@@ -459,6 +464,7 @@ class PackedCIFDataV4(Dataset):
             return np.concatenate(rows, axis=0) if rows else np.zeros((0, width), np.float32)
 
         node_dim = (NODE_FEA_LEN + (RICH_NODE_FEA_LEN if self.use_rich_node_features else 0)
+                    + (VALENCE_NODE_FEA_LEN if self.use_valence_features else 0)
                     + (DIHEDRAL_FEA_LEN if self.use_dihedrals else 0))
         return {
             "node": rows_meanstd(_cat(node_rows, node_dim), node_dim),

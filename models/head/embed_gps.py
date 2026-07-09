@@ -54,6 +54,7 @@ def embed_index(checkpoint_path, index_path, out_dir, device="cpu", batch_size=6
         use_bond_angles=args.get("use_bond_angles", False),
         build_angle_bias=True,
         use_rich_node_features=args.get("use_rich_node_features", False),
+        use_valence_features=args.get("use_valence_features", False),
         use_dihedrals=args.get("use_dihedrals", False))
 
     sa, sn, _, sp, _, _ = dataset[0][0][:6]
@@ -102,6 +103,7 @@ def embed_raw(index_path, out_dir, feature_args=None, device="cpu", batch_size=6
         use_bond_angles=args.get("use_bond_angles", False),
         build_angle_bias=True,
         use_rich_node_features=args.get("use_rich_node_features", False),
+        use_valence_features=args.get("use_valence_features", False),
         use_dihedrals=args.get("use_dihedrals", False))
 
     loader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_pool_geom)

@@ -21,9 +21,11 @@ import os
 
 import numpy as np
 
-# Fixed E_F-aligned energy grid (eV relative to the Fermi level). N_ENERGY MUST match
+# Narrow E_F-aligned window: the SC-relevant DOS lives at the Fermi level (BCS N(E_F)),
+# so we target +/-1 eV at fine resolution (~0.0157 eV/bin) instead of the old -10..+5 eV,
+# where ~92% of the loss fell on states far from E_F. N_ENERGY MUST match
 # models/common/data.DOS_N_ENERGY (and the model's n_energy) for the target to line up.
-DOS_EMIN, DOS_EMAX, N_ENERGY = -10.0, 5.0, 256
+DOS_EMIN, DOS_EMAX, N_ENERGY = -1.0, 1.0, 128
 DOS_GRID = np.linspace(DOS_EMIN, DOS_EMAX, N_ENERGY)
 
 
