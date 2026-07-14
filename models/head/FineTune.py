@@ -97,11 +97,18 @@ def run(cfg, out_dir, device):
     # ---- encoder + graph dataset; align dataset order to the static tables by cif id ----
     model, ds, collate = _encoder(cfg["checkpoint"], cfg["index_path"], device)
     enc_dim = model.atom_fea_len
-    df_ids = list(__import__("pandas").read_pickle(cfg["index_path"])["id"])
-    assert len(df_ids) == len(ds), "dataset/index length mismatch"
+    # Loader positions MUST be computed in the DATASET's OWN id order: CIFDataV4
+    # seed-shuffles its rows at load (build_data_rows), so index-pickle order does
+    # not match dataset positions. Mapping split labels through the INDEX order
+    # scrambled every fold's actual membership — parent grouping and the nickelate
+    # holdout were silently voided (caught 2026-07-14: 30/43 forced-test ids were
+    # missing from predictions; test overlap with the intended fold was chance-level).
+    ds_ids = [rec[0] for rec in ds.data]
+    assert len(ds_ids) == len(id2split) and set(ds_ids) == set(id2split), \
+        "dataset/static-table id mismatch"
 
     def split_indices(s):  # dataset indices that are SC and in split s
-        return [i for i, cid in enumerate(df_ids)
+        return [i for i, cid in enumerate(ds_ids)
                 if id2split.get(cid) == s and is_sc[id2row[cid]]]
     # CIFDataV4 rebuilds each structure's graph on access, so the encode loop is
     # CPU-data-loading-bound; parallel workers overlap graph-building with GPU compute.
@@ -138,7 +145,7 @@ def run(cfg, out_dir, device):
         return z, rows
 
     # target / phys normalizers fit ONCE on SC-train (shared across seeds & phases)
-    tr_rows = [id2row[c] for c in df_ids if id2split.get(c) == "train" and is_sc[id2row[c]]]
+    tr_rows = [id2row[c] for c in ds_ids if id2split.get(c) == "train" and is_sc[id2row[c]]]
     tc_tr = tc_t[tr_rows].cpu()
 
     def make_head(seed):
