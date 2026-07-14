@@ -234,6 +234,15 @@ def make_splits(data, seed: int = 123, val_frac: float = 0.1, test_frac: float =
             continue
         tr, va, te = grouped_three_way(idx, label)
         split[tr], split[va], split[te] = "train", "val", "test"
+    # HARD LEAK GUARD: every group must live entirely within one split. grouped_three_way
+    # packs whole groups so this always holds — but assert it so a future regression (or a
+    # miswired `groups`) can never silently leak near-identical structures across train/test.
+    g2splits = defaultdict(set)
+    for i in range(n):
+        g2splits[groups[i]].add(split[i])
+    leaked = [g for g, s in g2splits.items() if len(s) > 1]
+    assert not leaked, (f"make_splits LEAK: {len(leaked)} group(s) span multiple folds "
+                        f"(e.g. {leaked[:3]}); grouping was not respected.")
     return split
 
 
