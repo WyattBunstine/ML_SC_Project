@@ -23,3 +23,10 @@ Pipeline:
 Pairs with the per-atom DOS target (`/n_atoms`) + `segment_sum→mean` head reconditioning
 (`models/common/data.py`, `models/GPSTransformer/model.py`), and feeds the valence re-pretrain
 config `configs/gps_mt_ablation_suite/09_forces_w2_valence.json` (`n_energy=128`, `dos_pack_ef1`).
+
+Both pieces are config-gated so they ablate independently (a 2×2 with the historic 06 run):
+`dos_per_atom` (false = legacy extensive total-DOS target + segment-SUM head) and `n_energy`
+(must match the pack's stored grid; the reader raises on mismatch). Cells:
+06 = neither · `10_forces_w2_valence_only` (legacy `dos_pack`, 256, extensive) = valence only ·
+`11_forces_w2_dos_ef1_only` = new DOS only · 09 = both.
+Smoke any cell: `python scripts/dos_rebuild/smoke_dos_pack.py <config> <pack_dir>`.

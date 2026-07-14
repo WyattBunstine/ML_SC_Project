@@ -43,10 +43,10 @@
     "grad_clip": 0.5,
     "weight_decay": 1e-05,
     "lr_milestones": [
-        30,
-        50
+        40,
+        80
     ],
-    "epochs": 60,
+    "epochs": 100,
     "print_split": 200,
     "out_file": "result",
     "slurm": {

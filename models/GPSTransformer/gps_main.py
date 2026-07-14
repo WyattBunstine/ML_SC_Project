@@ -29,7 +29,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
 from data import (load_cif_dataset, get_sc_nonsc_loaders,  # noqa: E402
                   compute_feature_stats, resolve_split_by, collate_pool_geom,
-                  collate_pool_multitask, DOS_N_ENERGY, ConcatMTDataset)
+                  collate_pool_multitask, ConcatMTDataset)
 from train import (Normalizer, run_regression,  # noqa: E402
                    compute_target_stats, run_multitask, _DEFAULT_LOSS_WEIGHTS)
 from dist_utils import (init_distributed, cleanup, broadcast_model,  # noqa: E402
@@ -91,10 +91,10 @@ def main():
     # need amp off and the per-target collate. Single-target GPS path is unchanged.
     multitask = bool(args.get("tasks"))
     args["differentiable_geometry"] = multitask   # recorded in metadata
-    if multitask and "dos" in args["tasks"] and args.get("n_energy", 256) != DOS_N_ENERGY:
-        sys.exit(f"n_energy ({args.get('n_energy', 256)}) must equal DOS_N_ENERGY "
-                 f"({DOS_N_ENERGY}) when the 'dos' task is active: the dos head width must "
-                 "match the per-structure DOS target grid.")
+    # n_energy (the dos head/target width) is validated by the DATA layer against what
+    # the store actually holds: the pack reader raises on a stored-width mismatch and
+    # the graph backend only serves the current DOS_N_ENERGY grid — so a stale config
+    # fails loudly at dataset open, per union member, instead of via a global constant.
 
     # The GPS local channel always uses the bond-angle bias -> build it. index_path may be
     # a LIST for a multitask masked-union (e.g. packed_v4 + the DOS pack): each pack supplies
@@ -118,6 +118,11 @@ def main():
         use_dihedrals=args.get("use_dihedrals", False),
         # Multitask: __getitem__ yields (input, targets_dict, masks_dict, cif_id).
         multitask=multitask,
+        # DOS target width + treatment: n_energy must match the DOS pack's stored grid
+        # (128 = ±1 eV dos_pack_ef1, 256 = legacy dos_pack); dos_per_atom False restores
+        # the legacy extensive total-DOS target + segment-SUM head (ablation cell 10).
+        n_energy=args.get("n_energy", 256),
+        dos_per_atom=args.get("dos_per_atom", True),
         # Thin near-duplicate consecutive MPtrj frames: keep 1-in-N per material
         # (no-op on single-frame materials like the DOS pack). Near-linear epoch
         # speedup; 1 = off (every frame).
@@ -195,7 +200,7 @@ def main():
                 "gps_global", "gps_global_heads", "gps_ffn_mult", "local_transformer",
                 "per_atom_head", "use_bond_edges", "shell_aggregation", "use_angle_bias",
                 "use_dist_bias", "use_rich_node_features", "use_valence_features", "use_dihedrals",
-                "tasks", "differentiable_geometry", "n_energy",
+                "tasks", "differentiable_geometry", "n_energy", "dos_per_atom",
                 "atom_pooling", "use_poly_edges")},
             "training": {k: args.get(k) for k in (
                 "optim", "learning_rate", "weight_decay", "lr_milestones",

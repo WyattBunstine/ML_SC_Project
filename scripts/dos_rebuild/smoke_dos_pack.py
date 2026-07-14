@@ -18,8 +18,11 @@ from data import load_cif_dataset, collate_pool_multitask
 from train import _build_cart_strain, _mt_loss, compute_target_stats
 from model import GPSCrystalNet
 
-cfg = json.load(open("configs/gps_mt_ablation_suite/04_dos_full.json"))
-PACK = "database/datafiles/MP/dos_pack"
+# argv: [config_json] [pack_dir] — defaults exercise the ±1 eV valence rung (09).
+CFG_PATH = sys.argv[1] if len(sys.argv) > 1 else "configs/gps_mt_ablation_suite/09_forces_w2_valence.json"
+PACK = sys.argv[2] if len(sys.argv) > 2 else "database/datafiles/MP/dos_pack_ef1"
+cfg = json.load(open(CFG_PATH))
+print(f"config: {CFG_PATH}\npack:   {PACK}")
 
 ds = load_cif_dataset(
     PACK,
@@ -28,8 +31,11 @@ ds = load_cif_dataset(
     use_bond_angles=cfg.get("use_bond_angles", False),
     use_poly_edges=cfg["use_poly_edges"], build_angle_bias=True,
     use_rich_node_features=cfg.get("use_rich_node_features", False),
+    use_valence_features=cfg.get("use_valence_features", False),
     use_dihedrals=cfg.get("use_dihedrals", False),
     multitask=True,
+    n_energy=cfg.get("n_energy"),
+    dos_per_atom=cfg.get("dos_per_atom", True),
 )
 print(f"dataset: {len(ds)} samples (multitask)")
 

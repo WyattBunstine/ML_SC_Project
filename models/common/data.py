@@ -929,7 +929,7 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
 STRESS_KBAR_TO_EVA3 = -1.0 / 1602.1766208
 
 
-def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
+def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom=True):
     """Build the (targets, masks) dicts for masked multitask training.
 
     Per-atom: forces (N,3), magmom (N,1) (from the ragged extraction). Per-structure:
@@ -952,9 +952,13 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
     magmom, m_m = _t(r["magmom"])          # (N,1)
     stress, m_s = _t(r["stress"])          # (3,3) raw kBar ...
     stress = stress * STRESS_KBAR_TO_EVA3  # ... -> eV/A^3, model units (see constant above)
-    dos, m_dos = _t(r["dos"])              # (DOS_N_ENERGY,) total DOS on the +/-1 eV grid
-    dos = dos / max(int(r["n_atoms"]), 1)  # -> per-atom (intensive) DOS: removes the size
-                                           # confound + matches the model's segment-MEAN head
+    dos, m_dos = _t(r["dos"])              # (n_energy,) total DOS on the fixed E_F grid
+    if dos_per_atom:
+        dos = dos / max(int(r["n_atoms"]), 1)  # -> per-atom (intensive) DOS: removes the
+                                               # size confound + matches the segment-MEAN
+                                               # head. False -> legacy extensive total DOS
+                                               # (segment-SUM head), for the old-window
+                                               # ablation cell.
     energy_t, m_e = _scalar(energy)        # (1,)
     bandgap_t, m_bg = _scalar(bandgap)     # (1,)
     targets = {"forces": forces, "magmom": magmom, "stress": stress, "dos": dos,
@@ -967,7 +971,8 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan")):
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_poly_edges, use_bond_angles, build_angle_bias=False,
                   use_rich_node_features=False, use_valence_features=False,
-                  use_dihedrals=False, multitask=False, bandgap=float("nan")):
+                  use_dihedrals=False, multitask=False, bandgap=float("nan"),
+                  dos_per_atom=True):
     """Build one fully-padded crystal sample from its graph JSON on disk.
 
     Module-level (not a method) so it is picklable by a ``spawn`` multiprocessing
@@ -989,7 +994,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                               use_valence_features)
 
     if multitask:
-        targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap)
+        targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap,
+                                           dos_per_atom=dos_per_atom)
         return (sample, targets, masks, cif_id)
     target = torch.FloatTensor([float(target)])
     label = torch.LongTensor([int(label)])
@@ -1042,11 +1048,19 @@ class CIFDataV4(Dataset):
                  use_bond_angles: bool = False, use_poly_edges: bool = True,
                  build_angle_bias: bool = False, use_rich_node_features: bool = False,
                  use_dihedrals: bool = False, multitask: bool = False,
-                 frame_subsample: int = 1, use_valence_features: bool = False):
+                 frame_subsample: int = 1, use_valence_features: bool = False,
+                 n_energy: int = None, dos_per_atom: bool = True):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
         self.use_valence_features = use_valence_features
         self.use_dihedrals = use_dihedrals
+        # DOS target width: graph JSONs carry the CURRENT fetch grid only (DOS_N_ENERGY),
+        # so this backend can't serve a different width — fail loudly, don't mis-shape.
+        # (Old-grid DOS lives only in old PACKS; use the packed backend for those.)
+        if multitask and n_energy not in (None, DOS_N_ENERGY):
+            raise ValueError(f"CIFDataV4 (graph backend) serves DOS on the current "
+                             f"{DOS_N_ENERGY}-bin grid; requested n_energy={n_energy}.")
+        self.dos_per_atom = dos_per_atom
         # When True, __getitem__ returns (input, targets_dict, masks_dict, cif_id) for
         # the masked multitask trainer instead of (input, target_scalar, label, cif_id).
         self.multitask = multitask
@@ -1179,7 +1193,8 @@ class CIFDataV4(Dataset):
                                    self.build_angle_bias, self.use_rich_node_features,
                                    self.use_valence_features,
                                    self.use_dihedrals, self.multitask,
-                                   self._bandgap_by_id.get(str(rec[0]), float("nan")))
+                                   self._bandgap_by_id.get(str(rec[0]), float("nan")),
+                                   dos_per_atom=self.dos_per_atom)
             if dev.type != "cpu":
                 sample = _sample_to_device(sample, dev)
             built.append(sample)
@@ -1213,7 +1228,8 @@ class CIFDataV4(Dataset):
                                self.use_rich_node_features, self.use_valence_features,
                                self.use_dihedrals,
                                self.multitask,
-                               self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")))
+                               self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")),
+                               dos_per_atom=self.dos_per_atom)
 
         # Store the built sample for reuse on later epochs (LRU-bounded).
         self._item_cache[idx] = result
