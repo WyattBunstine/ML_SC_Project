@@ -13,7 +13,7 @@
 #   ./scripts/deploy.sh build-mptrj               # build MPtrj cgv4 graphs on the cluster (CPU job)
 #   ./scripts/deploy.sh augment-positions         # backfill frac_coords+lattice onto MPtrj graphs (CPU job)
 #   ./scripts/deploy.sh pack-mptrj [out_dir]      # pack graphs into the fast columnar training format
-#   ./scripts/deploy.sh sync-dos-pack             # rsync the LOCAL DOS pack (database/datafiles/MP/dos_pack) to scratch (rung 04 union member)
+#   ./scripts/deploy.sh sync-dos-pack [name]      # rsync a LOCAL DOS pack (database/datafiles/MP/<name>, default dos_pack) to scratch MP/<name>
 #   ./scripts/deploy.sh status                    # squeue for your jobs
 #   ./scripts/deploy.sh logs <jobid>              # tail a running job's log
 #   ./scripts/deploy.sh fetch                     # rsync model_data/ + logs back here
@@ -195,22 +195,28 @@ sync_data() {
 # database/Download_MP_dos.py). Resumable/idempotent: rsync skips unchanged files.
 # ---------------------------------------------------------------------------
 sync_dos_pack() {
-    if [ ! -f "${LOCAL_MP_DOS_PACK}/pack_header.json" ]; then
-        echo "ERROR: no DOS pack at ${LOCAL_MP_DOS_PACK} (missing pack_header.json)." >&2
-        echo "  Build it first: python main.py fetch-dos --index database/datafiles/MP_Energy/MP_Energy_V4.pickle" >&2
-        echo "                  python main.py pack-dataset --index database/datafiles/MP_Energy/MP_Energy_V4.pickle --out ${LOCAL_MP_DOS_PACK}" >&2
+    # Optional arg: pack dir NAME under database/datafiles/MP/ (default dos_pack).
+    # e.g. `deploy.sh sync-dos-pack dos_pack_ef1` ships the ±1 eV/128-bin rebuild
+    # (rung 09) to scratch MP/dos_pack_ef1 without touching the rung-04 dos_pack.
+    local pack_name="${1:-dos_pack}"
+    local local_pack="database/datafiles/MP/${pack_name}"
+    local remote_pack="${SCRATCH_PATH}/ML_SC_Proj/MP/${pack_name}"
+    if [ ! -f "${local_pack}/pack_header.json" ]; then
+        echo "ERROR: no DOS pack at ${local_pack} (missing pack_header.json)." >&2
+        echo "  Build it first: python main.py fetch-dos --index <index.pickle>" >&2
+        echo "                  python main.py pack-dataset --index <index.pickle> --out ${local_pack} --derive-mp-id" >&2
         exit 1
     fi
     # Guard against shipping a pack with no DOS labels (e.g. a fetch that never ran).
-    if ! grep -q '"has_dos": *true' "${LOCAL_MP_DOS_PACK}/pack_header.json"; then
-        echo "ERROR: ${LOCAL_MP_DOS_PACK}/pack_header.json has has_dos != true — fetch-dos before packing." >&2
+    if ! grep -q '"has_dos": *true' "${local_pack}/pack_header.json"; then
+        echo "ERROR: ${local_pack}/pack_header.json has has_dos != true — fetch-dos before packing." >&2
         exit 1
     fi
-    echo ">> Syncing DOS pack ${LOCAL_MP_DOS_PACK} -> ${SSH}:${SCRATCH_MP_DOS_PACK} ..."
-    ssh "${SSH}" "mkdir -p '${SCRATCH_MP_DOS_PACK}'"
+    echo ">> Syncing DOS pack ${local_pack} -> ${SSH}:${remote_pack} ..."
+    ssh "${SSH}" "mkdir -p '${remote_pack}'"
     rsync -a --info=progress2 --partial \
-        "${LOCAL_MP_DOS_PACK}/" "${SSH}:${SCRATCH_MP_DOS_PACK}/"
-    echo ">> DOS pack sync complete. Rung 04 (configs/gps_mt_ablation_suite/04_dos_full.json) can now run."
+        "${local_pack}/" "${SSH}:${remote_pack}/"
+    echo ">> DOS pack sync complete: ${remote_pack}"
 }
 
 # ---------------------------------------------------------------------------
@@ -779,7 +785,7 @@ case "${cmd}" in
     augment-positions) augment_positions ;;
     augment-physics) augment_physics ;;
     pack-mptrj)  pack_mptrj "$@" ;;
-    sync-dos-pack) sync_dos_pack ;;
+    sync-dos-pack) sync_dos_pack "$@" ;;
     status)    status ;;
     logs)      logs "$@" ;;
     fetch)     fetch ;;

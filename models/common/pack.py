@@ -174,7 +174,10 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
     # (NaN where the frame lacked them).
     if stresses:
         meta["stress"] = list(np.stack(stresses))
-    if doses:
+    # Only persist the dos column when at least one sample has a REAL spectrum: an
+    # all-NaN column is pure fill whose width fossilizes the pack-time grid and
+    # spuriously trips the reader's width check when the grid later changes.
+    if doses and phys_any["dos"]:
         meta["dos"] = list(np.stack(doses))
     # Opt-in material-split key for single-structure-per-material packs (the DOS
     # pack): id IS the material id, so mp_id = id minus a trailing .cif. Only when
@@ -230,7 +233,7 @@ class PackedCIFDataV4(Dataset):
                  use_bond_angles=False, use_poly_edges=True,
                  build_angle_bias=False, use_rich_node_features=False,
                  use_dihedrals=False, multitask=False, frame_subsample=1,
-                 use_valence_features=False):
+                 use_valence_features=False, n_energy=None, dos_per_atom=True):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
         if self._header["version"] != PACK_VERSION:
@@ -274,6 +277,12 @@ class PackedCIFDataV4(Dataset):
         self.use_valence_features = use_valence_features
         self.use_dihedrals = use_dihedrals
         self.multitask = multitask
+        # DOS target width served by this reader: packs store whatever grid was current
+        # at pack time (128-bin ±1 eV now; 256-bin -10..+5 eV in the legacy dos_pack), so
+        # the configured n_energy selects which packs are compatible. NaN fills (DOS-less
+        # packs in a union) use the same width so collate can stack across members.
+        self.n_energy = int(n_energy) if n_energy else DOS_N_ENERGY
+        self.dos_per_atom = dos_per_atom
 
         meta = pd.read_pickle(os.path.join(pack_dir, "meta.pickle"))
         # Multitask union members may lack the configured scalar target (the DOS
@@ -292,8 +301,25 @@ class PackedCIFDataV4(Dataset):
         # scalar. Absent column -> None -> NaN target -> masked off.
         self._stress = (np.stack(meta["stress"].to_numpy()).astype(np.float32).reshape(-1, 3, 3)
                         if "stress" in meta.columns else None)
-        self._dos = (np.stack(meta["dos"].to_numpy()).astype(np.float32).reshape(-1, DOS_N_ENERGY)
+        # Stack at the STORED width and validate it against the configured grid — a
+        # blind reshape(-1, n_energy) on a mismatched pack would silently re-split
+        # rows (e.g. a legacy 256-bin pack read as 128 doubles the row count).
+        self._dos = (np.stack(meta["dos"].to_numpy()).astype(np.float32)
                      if "dos" in meta.columns else None)
+        # A DOS-less pack may still CARRY a dos column: legacy writers NaN-filled every
+        # sample at the pack-time grid width (packed_v4/MPtrj holds a 256-wide all-NaN
+        # column). That fill is not data — width-validating it against a newer grid
+        # would spuriously reject the pack (it did: rungs 09/11 vs packed_v4). The
+        # header's has_dos records whether ANY finite dos exists: false -> drop the
+        # column and serve NaN fills at the configured width like any DOS-less member.
+        if self._dos is not None and not self._header.get("has_dos", True):
+            self._dos = None
+        if self._dos is not None and self.multitask and self._dos.shape[1] != self.n_energy:
+            raise ValueError(
+                f"pack {pack_dir} stores {self._dos.shape[1]}-bin DOS but the config "
+                f"requests n_energy={self.n_energy} — point index_path at the matching "
+                f"pack (128 = ±1 eV dos_pack_ef1, 256 = legacy -10..+5 eV dos_pack) or "
+                f"fix n_energy.")
         # Coerce non-numeric cells (e.g. '' for missing) to NaN before float cast.
         self._bandgap = (pd.to_numeric(meta["bandgap"], errors="coerce")
                          .to_numpy().astype(np.float32)
@@ -361,7 +387,7 @@ class PackedCIFDataV4(Dataset):
         stress = (self._stress[pos] if self._stress is not None
                   else np.full((3, 3), np.nan, dtype=np.float32))
         dos = (self._dos[pos] if self._dos is not None
-               else np.full(DOS_N_ENERGY, np.nan, dtype=np.float32))
+               else np.full(self.n_energy, np.nan, dtype=np.float32))
         lattice = (self._lattice[pos] if self._lattice is not None
                    else np.zeros((3, 3), dtype=np.float32))
         return {
@@ -402,7 +428,8 @@ class PackedCIFDataV4(Dataset):
                                   self.use_dihedrals, self.use_valence_features)
         if self.multitask:
             bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
-            targets, masks = _assemble_targets(r, energy=target, bandgap=bg)
+            targets, masks = _assemble_targets(r, energy=target, bandgap=bg,
+                                               dos_per_atom=self.dos_per_atom)
             return (sample, targets, masks, cif_id)
         return (sample, torch.FloatTensor([float(target)]),
                 torch.LongTensor([int(label)]), cif_id)

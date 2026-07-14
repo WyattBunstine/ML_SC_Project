@@ -278,7 +278,7 @@ class GPSCrystalNet(nn.Module):
                  local_transformer=True, per_atom_head=True,
                  use_bond_edges=True, shell_aggregation="attention", use_angle_bias=True,
                  use_dist_bias=False, dist_cutoff=8.0, n_dist_rbf=16,
-                 classification=False, tasks=None, n_energy=256,
+                 classification=False, tasks=None, n_energy=256, dos_per_atom=True,
                  differentiable_geometry=False):
         super().__init__()
         if atom_pooling not in self._POOLINGS:
@@ -338,6 +338,10 @@ class GPSCrystalNet(nn.Module):
         self.atom_fea_len = atom_fea_len
         self.h_fea_len = h_fea_len
         self.n_energy = n_energy
+        # DOS readout: True -> segment-MEAN (intensive per-atom DOS, pairs with the
+        # /n_atoms target); False -> segment-SUM (legacy extensive total DOS, pairs
+        # with the raw target — the old-window ablation cell).
+        self.dos_per_atom = dos_per_atom
         # Conservative-autograd multi-task mode: a set of per-atom heads on the
         # invariant h, forces/stress via autograd of the EXTENSIVE energy. None ->
         # the single-scalar readout below stays bit-identical (MPNN/run_regression).
@@ -366,7 +370,7 @@ class GPSCrystalNet(nn.Module):
         else:
             # One per-atom MLP per active task. energy -> extensive sum; bandgap ->
             # intensive segment-mean; magmom -> per-atom; dos -> per-atom Softplus
-            # spectral vector summed to an extensive structure DOS.
+            # spectral vector pooled to the structure DOS (mean/sum per dos_per_atom).
             self.heads = nn.ModuleDict()
             if "energy" in self.tasks:
                 self.heads["energy"] = self._build_head(1)
@@ -464,7 +468,9 @@ class GPSCrystalNet(nn.Module):
         if "dos" in self.tasks:
             # per-atom (intensive) DOS: mean over atoms, not sum — removes the system-size
             # confound (total DOS ~ #atoms). Paired with a per-atom DOS target (/ n_atoms).
-            out["dos"] = self._segment_mean(self.heads["dos"](h), seg, B)   # (B, n_energy)
+            # dos_per_atom=False -> legacy extensive sum against the raw total-DOS target.
+            _dos_pool = self._segment_mean if self.dos_per_atom else self._segment_sum
+            out["dos"] = _dos_pool(self.heads["dos"](h), seg, B)            # (B, n_energy)
         return out
 
     def _recompute_angle(self, d, static_angle):
@@ -553,6 +559,7 @@ class GPSCrystalNet(nn.Module):
             tasks=(set(args["tasks"]) if multitask else None),
             differentiable_geometry=multitask,
             n_energy=args.get("n_energy", 256),
+            dos_per_atom=args.get("dos_per_atom", True),
         )
 
     def _encode(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
