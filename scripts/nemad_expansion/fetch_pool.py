@@ -15,8 +15,11 @@ import os, sys, pandas as pd
 key = os.environ.get("MP_API_KEY") or sys.exit("error: set MP_API_KEY (env-only)")
 from mp_api.client import MPRester
 
-systems=[l.strip() for l in open("database/datafiles/NE_SCDB/need_systems.txt") if l.strip()]
-print(f"fetching {len(systems)} chemical systems", flush=True)
+# argv: [systems_file] [out_pickle] — defaults are the original SC-expansion paths.
+SYSTEMS = sys.argv[1] if len(sys.argv) > 1 else "database/datafiles/NE_SCDB/need_systems.txt"
+OUT = sys.argv[2] if len(sys.argv) > 2 else "database/datafiles/NE_SCDB/mp_crystal_pool.pickle"
+systems=[l.strip() for l in open(SYSTEMS) if l.strip()]
+print(f"fetching {len(systems)} chemical systems -> {OUT}", flush=True)
 CH=200
 rows=[]
 with MPRester(key) as mpr:
@@ -31,5 +34,5 @@ with MPRester(key) as mpr:
                              reduced=cd, eah=float(d.energy_above_hull) if d.energy_above_hull is not None else 9.9))
         print(f"  {i+len(chunk)}/{len(systems)} systems -> {len(rows)} materials", flush=True)
 df=pd.DataFrame(rows).drop_duplicates("material_id")
-df.to_pickle("database/datafiles/NE_SCDB/mp_crystal_pool.pickle")
-print(f"DONE: {len(df)} unique MP materials -> mp_crystal_pool.pickle", flush=True)
+df.to_pickle(OUT)
+print(f"DONE: {len(df)} unique MP materials -> {OUT}", flush=True)
