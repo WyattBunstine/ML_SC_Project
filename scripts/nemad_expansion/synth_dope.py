@@ -66,8 +66,8 @@ def synth_dope_one(structure, target_formula, symprec=0.1):
     return st, "doped"
 
 if __name__ == "__main__":
-    import re, os
-    key=re.search(r'MPRester\(["\']([A-Za-z0-9]{28,34})["\']', open("test.py").read()).group(1)
+    import os
+    key = os.environ.get("MP_API_KEY") or sys.exit("error: set MP_API_KEY (env-only)")
     from mp_api.client import MPRester
     m=pd.read_csv("database/datafiles/NE_SCDB/nemad_matches.csv")
     # diverse test cases across families/tiers

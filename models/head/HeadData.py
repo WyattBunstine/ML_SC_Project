@@ -148,11 +148,15 @@ def chemsys_groups(ids):
     """Chemical-system group key per id: the sorted element set parsed from the formula
     prefix of the cif id (e.g. 'Cu1La2O4.015-MP-mp-...' -> 'Cu-La-O'). Used for the 3DSC
     paper's grouped-by-chemical-system split — a stricter extrapolation test than parent
-    grouping (whole element systems are held out, not just doped variants of one parent)."""
+    grouping (whole element systems are held out, not just doped variants of one parent).
+    Strips BOTH provenance tags (-MP- and -ICSD-, like parent_composition_groups): an
+    unstripped ICSD id fails Composition parsing and falls back to a SINGLETON group,
+    which would leak ICSD variants of one chemical system across folds on V6+."""
+    import re
     from pymatgen.core import Composition
     out = []
     for cid in ids:
-        formula = str(cid).split("-MP-")[0]
+        formula = re.split(r"-MP-|-ICSD-", str(cid))[0]
         try:
             out.append("-".join(sorted(set(e.symbol for e in Composition(formula).elements))))
         except Exception:

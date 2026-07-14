@@ -800,7 +800,7 @@ def _extract_ragged(graph):
 
 
 def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
-                     use_poly_edges, use_bond_angles, build_angle_bias,
+                     use_poly_edges, use_bond_angles, build_angle_bias, *,
                      use_rich_node_features=False, use_dihedrals=False,
                      use_valence_features=False):
     """Truncate/pad a ragged extraction into the model's padded sample tensors.
@@ -969,7 +969,7 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom
 
 
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
-                  use_poly_edges, use_bond_angles, build_angle_bias=False,
+                  use_poly_edges, use_bond_angles, build_angle_bias=False, *,
                   use_rich_node_features=False, use_valence_features=False,
                   use_dihedrals=False, multitask=False, bandgap=float("nan"),
                   dos_per_atom=True):
@@ -988,10 +988,15 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
     # Pass the FULL assemble tuple through (now includes frac_coords + lattice);
     # collate_pool slices [:6], collate_pool_geom uses [6:]. Must match the packed
     # backend's __getitem__, which also returns the whole _assemble_sample tuple.
+    # Feature flags are KEYWORD-ONLY on both assembly functions: they historically
+    # declared use_dihedrals/use_valence_features in OPPOSITE positional order — a
+    # transposed positional call is type- and shape-silent (both bools) and would
+    # train on the wrong features with no error.
     sample = _assemble_sample(ragged, max_num_nbr, max_num_poly_nbr,
                               use_poly_edges, use_bond_angles, build_angle_bias,
-                              use_rich_node_features, use_dihedrals,
-                              use_valence_features)
+                              use_rich_node_features=use_rich_node_features,
+                              use_dihedrals=use_dihedrals,
+                              use_valence_features=use_valence_features)
 
     if multitask:
         targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap,
@@ -1190,10 +1195,12 @@ class CIFDataV4(Dataset):
         for i, rec in enumerate(self.data):
             sample = _build_sample(rec, self.max_num_nbr, self.max_num_poly_nbr,
                                    self.use_poly_edges, self.use_bond_angles,
-                                   self.build_angle_bias, self.use_rich_node_features,
-                                   self.use_valence_features,
-                                   self.use_dihedrals, self.multitask,
-                                   self._bandgap_by_id.get(str(rec[0]), float("nan")),
+                                   self.build_angle_bias,
+                                   use_rich_node_features=self.use_rich_node_features,
+                                   use_valence_features=self.use_valence_features,
+                                   use_dihedrals=self.use_dihedrals,
+                                   multitask=self.multitask,
+                                   bandgap=self._bandgap_by_id.get(str(rec[0]), float("nan")),
                                    dos_per_atom=self.dos_per_atom)
             if dev.type != "cpu":
                 sample = _sample_to_device(sample, dev)
@@ -1225,10 +1232,11 @@ class CIFDataV4(Dataset):
         result = _build_sample(self.data[idx], self.max_num_nbr,
                                self.max_num_poly_nbr, self.use_poly_edges,
                                self.use_bond_angles, self.build_angle_bias,
-                               self.use_rich_node_features, self.use_valence_features,
-                               self.use_dihedrals,
-                               self.multitask,
-                               self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")),
+                               use_rich_node_features=self.use_rich_node_features,
+                               use_valence_features=self.use_valence_features,
+                               use_dihedrals=self.use_dihedrals,
+                               multitask=self.multitask,
+                               bandgap=self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")),
                                dos_per_atom=self.dos_per_atom)
 
         # Store the built sample for reuse on later epochs (LRU-bounded).
@@ -1315,6 +1323,49 @@ def load_cif_dataset(index_path, **kwargs):
         from pack import PackedCIFDataV4
         return PackedCIFDataV4(index_path, **kwargs)
     return CIFDataV4(index_path=index_path, **kwargs)
+
+
+def load_cif_dataset_from_args(index_path, args, **overrides):
+    """Open a dataset with the feature flags recorded in a checkpoint's ``args`` (or a
+    training config) — the SINGLE enumeration of the feature-flag list, so every
+    consumer (embed_index / embed_raw / FineTune / smoke scripts) builds samples in
+    the same feature space as the encoder was trained with. A flag added here reaches
+    all of them at once; the per-consumer copies this replaces drifted (e.g.
+    use_valence_features had to be retro-patched into embed_index). ``overrides``
+    pass straight through to load_cif_dataset (e.g. multitask=True, n_energy=...)."""
+    kw = dict(
+        target_column=None, build_angle_bias=True,
+        max_num_nbr=args.get("max_num_nbr", 14),
+        max_num_poly_nbr=args.get("max_num_poly_nbr", 16),
+        use_poly_edges=args.get("use_poly_edges", True),
+        use_bond_angles=args.get("use_bond_angles", False),
+        use_rich_node_features=args.get("use_rich_node_features", False),
+        use_valence_features=args.get("use_valence_features", False),
+        use_dihedrals=args.get("use_dihedrals", False),
+    )
+    kw.update(overrides)
+    return load_cif_dataset(index_path, **kw)
+
+
+def dataset_ids(dataset):
+    """The dataset's cif ids in POSITION order. Rows are seed-shuffled at load
+    (build_data_rows), so index-pickle order NEVER matches dataset positions — join
+    external tables through these ids (or positions_for_ids), never by index order.
+    (Mapping split labels through index order scrambled every FineTune fold's actual
+    membership until 2026-07-14.) Works on CIFDataV4/PackedCIFDataV4/ConcatMTDataset."""
+    return [rec[0] for rec in dataset.data]
+
+
+def positions_for_ids(dataset, ids, strict=True):
+    """Dataset POSITIONS for ``ids`` (order-preserving) — the safe join between an
+    external, index-ordered table and this dataset's rows. ``strict`` raises if any
+    id doesn't resolve (a silent drop here is how fold membership goes wrong)."""
+    pos = {rec[0]: i for i, rec in enumerate(dataset.data)}
+    missing = [i for i in ids if i not in pos]
+    if strict and missing:
+        raise KeyError(f"{len(missing)} id(s) not in dataset (e.g. {missing[:3]}); "
+                       "external table and dataset disagree — refusing a silent drop.")
+    return [pos[i] for i in ids if i in pos]
 
 
 def collate_pool(dataset_list):

@@ -603,8 +603,12 @@ def run_multitask(args, model, optimizer, scheduler, loaders, stats, weights,
         # layout that __iter__ then reuses, so this doesn't re-shuffle).
         max_steps = all_reduce_min_int(len(train_loader), dist_info) if dist_info else None
         if max_steps == 0:                            # a shard too small to form one batch
-            print(f">> WARNING: epoch {epoch} has 0 synced steps (a rank's shard yielded no "
-                  "batch); skipping training this epoch. Reduce world_size or max_atoms_per_batch.")
+            # The synced min is identical on every rank, so ALL ranks skip together —
+            # no collective inside the skipped region runs on a subset of ranks.
+            if is_main:
+                print(f">> WARNING: epoch {epoch} has 0 synced steps (a rank's shard yielded "
+                      "no batch); skipping this epoch. Reduce world_size or max_atoms_per_batch.")
+            continue
         tr_loss, tr_maes, data_s, tr_s = _train_mt(
             train_loader, model, optimizer, epoch, stats, weights, args,
             dist_info=dist_info, max_steps=max_steps)

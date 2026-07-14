@@ -170,13 +170,13 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
     lat_stack = np.stack(lattices) if lattices else np.zeros((0, 9), dtype=np.float32)
     if lattices:
         meta["lattice"] = list(lat_stack)
-    # Per-sample stress (3x3 -> 9) + total DOS (DOS_N_ENERGY,), aligned with kept_pos
-    # (NaN where the frame lacked them).
-    if stresses:
+    # Per-sample physics meta columns (stress 3x3 -> 9, total DOS (DOS_N_ENERGY,)),
+    # aligned with kept_pos. Persisted ONLY when at least one sample has a REAL value
+    # (phys_any) — an all-NaN column is pure fill whose width fossilizes the pack-time
+    # grid and spuriously trips the reader's width check when the grid later changes
+    # (the packed_v4 256-bin dos trap). Rule applies to every physics meta column.
+    if stresses and phys_any["stress"]:
         meta["stress"] = list(np.stack(stresses))
-    # Only persist the dos column when at least one sample has a REAL spectrum: an
-    # all-NaN column is pure fill whose width fossilizes the pack-time grid and
-    # spuriously trips the reader's width check when the grid later changes.
     if doses and phys_any["dos"]:
         meta["dos"] = list(np.stack(doses))
     # Opt-in material-split key for single-structure-per-material packs (the DOS
@@ -297,29 +297,38 @@ class PackedCIFDataV4(Dataset):
         # Per-sample lattice (3x3), meta-order; None for legacy packs without it.
         self._lattice = (np.stack(meta["lattice"].to_numpy()).astype(np.float32).reshape(-1, 3, 3)
                          if "lattice" in meta.columns else None)
-        # Multitask per-sample meta (meta-order, indexed by pos): stress (3x3) + bandgap
-        # scalar. Absent column -> None -> NaN target -> masked off.
-        self._stress = (np.stack(meta["stress"].to_numpy()).astype(np.float32).reshape(-1, 3, 3)
-                        if "stress" in meta.columns else None)
-        # Stack at the STORED width and validate it against the configured grid — a
-        # blind reshape(-1, n_energy) on a mismatched pack would silently re-split
-        # rows (e.g. a legacy 256-bin pack read as 128 doubles the row count).
-        self._dos = (np.stack(meta["dos"].to_numpy()).astype(np.float32)
-                     if "dos" in meta.columns else None)
-        # A DOS-less pack may still CARRY a dos column: legacy writers NaN-filled every
-        # sample at the pack-time grid width (packed_v4/MPtrj holds a 256-wide all-NaN
-        # column). That fill is not data — width-validating it against a newer grid
-        # would spuriously reject the pack (it did: rungs 09/11 vs packed_v4). The
-        # header's has_dos records whether ANY finite dos exists: false -> drop the
-        # column and serve NaN fills at the configured width like any DOS-less member.
-        if self._dos is not None and not self._header.get("has_dos", True):
-            self._dos = None
-        if self._dos is not None and self.multitask and self._dos.shape[1] != self.n_energy:
-            raise ValueError(
-                f"pack {pack_dir} stores {self._dos.shape[1]}-bin DOS but the config "
-                f"requests n_energy={self.n_energy} — point index_path at the matching "
-                f"pack (128 = ±1 eV dos_pack_ef1, 256 = legacy -10..+5 eV dos_pack) or "
-                f"fix n_energy.")
+        # Multitask per-sample PHYSICS meta columns (meta-order, indexed by pos).
+        # A column is loaded only when the header's has_X says the pack actually HAS
+        # that target: legacy writers NaN-filled every sample (packed_v4/MPtrj holds a
+        # 256-wide all-NaN dos column), and that fill is not data — width-validating
+        # it against a newer grid spuriously rejected the pack (rungs 09/11), and
+        # stacking it first cost ~1.5 GB of transient RSS per rank. The has_X check
+        # comes BEFORE the stack; absent/dropped -> None -> NaN fill -> masked off.
+        # has_X missing (pre-flag packs) -> trust the column, as before.
+        def _phys_col(name, has_key):
+            if name not in meta.columns or not self._header.get(has_key, True):
+                return None
+            return np.stack(meta[name].to_numpy()).astype(np.float32)
+
+        _st = _phys_col("stress", "has_stress")
+        self._stress = _st.reshape(-1, 3, 3) if _st is not None else None
+        # DOS is stacked at its STORED width — a blind reshape(-1, n_energy) on a
+        # mismatched pack would silently re-split rows (a legacy 256-bin pack read as
+        # 128 doubles the row count). The width contract, enforced UNCONDITIONALLY
+        # (not just multitask — _ragged serves r["dos"] to any reader):
+        #   n_energy given  -> stored width must match, else raise;
+        #   n_energy absent -> ADOPT the stored width (the pack is self-describing),
+        #                      so casual readers get the true grid, never a mis-shape.
+        self._dos = _phys_col("dos", "has_dos")
+        if self._dos is not None:
+            stored = int(self._dos.shape[1])
+            if n_energy and stored != int(n_energy):
+                raise ValueError(
+                    f"pack {pack_dir} stores {stored}-bin DOS but the config requests "
+                    f"n_energy={int(n_energy)} — point index_path at the matching pack "
+                    f"(128 = ±1 eV dos_pack_ef1, 256 = legacy -10..+5 eV dos_pack) or "
+                    f"fix n_energy.")
+            self.n_energy = stored
         # Coerce non-numeric cells (e.g. '' for missing) to NaN before float cast.
         self._bandgap = (pd.to_numeric(meta["bandgap"], errors="coerce")
                          .to_numpy().astype(np.float32)
@@ -424,8 +433,10 @@ class PackedCIFDataV4(Dataset):
         r = self._ragged(pos)
         sample = _assemble_sample(r, self.max_num_nbr, self.max_num_poly_nbr,
                                   self.use_poly_edges, self.use_bond_angles,
-                                  self.build_angle_bias, self.use_rich_node_features,
-                                  self.use_dihedrals, self.use_valence_features)
+                                  self.build_angle_bias,
+                                  use_rich_node_features=self.use_rich_node_features,
+                                  use_dihedrals=self.use_dihedrals,
+                                  use_valence_features=self.use_valence_features)
         if self.multitask:
             bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
             targets, masks = _assemble_targets(r, energy=target, bandgap=bg,

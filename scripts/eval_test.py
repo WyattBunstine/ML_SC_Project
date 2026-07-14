@@ -145,7 +145,10 @@ class MPNNAdapter(ModelAdapter):
             self.normalizer.load_state_dict(self.ckpt["normalizer"])
 
     def id_to_index(self):
-        return {rec[0]: i for i, rec in enumerate(self.dataset.data)}
+        # Via the shared order contract (data.dataset_ids): rows are seed-shuffled at
+        # load, so positions must always come from the dataset's own id order.
+        from data import dataset_ids
+        return {cid: i for i, cid in enumerate(dataset_ids(self.dataset))}
 
     def split_indices(self, split):
         if split == "all":
