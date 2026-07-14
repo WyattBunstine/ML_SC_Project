@@ -22,6 +22,7 @@ import copy
 import csv
 import json
 import os
+import random
 import sys
 
 import numpy as np
@@ -34,22 +35,18 @@ from models.head.HeadModel import TcHead
 
 
 def _encoder(checkpoint_path, index_path, device):
-    """Rebuild + load the pretrained encoder and the matching graph dataset (same
-    feature flags the encoder was trained with), exactly as embed_gps does."""
+    """Rebuild + load the pretrained encoder and the matching graph dataset. The
+    feature-flag enumeration lives in ONE place (data.load_cif_dataset_from_args,
+    shared with embed_index/embed_raw/smoke) so this dataset is always built in the
+    exact feature space the encoder was trained with — no per-consumer drift."""
     for _p in (os.path.join("models", "common"), os.path.join("models", "GPSTransformer")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
-    from data import load_cif_dataset, collate_pool_geom
+    from data import load_cif_dataset_from_args, collate_pool_geom
     from model import GPSCrystalNet
     ckpt = torch.load(checkpoint_path, map_location=device)
     a = ckpt.get("args", {})
-    ds = load_cif_dataset(
-        index_path, target_column=None, build_angle_bias=True,
-        max_num_nbr=a.get("max_num_nbr", 14), max_num_poly_nbr=a.get("max_num_poly_nbr", 16),
-        use_poly_edges=a.get("use_poly_edges", True), use_bond_angles=a.get("use_bond_angles", False),
-        use_rich_node_features=a.get("use_rich_node_features", False),
-        use_valence_features=a.get("use_valence_features", False),
-        use_dihedrals=a.get("use_dihedrals", False))
+    ds = load_cif_dataset_from_args(index_path, a)
     sa, sn, _, sp, _, _ = ds[0][0][:6]
     model = GPSCrystalNet.from_args(a, (sa.shape[-1], sn.shape[-1], sp.shape[-1]))
     model.load_state_dict(ckpt["state_dict"])
@@ -87,7 +84,11 @@ def run(cfg, out_dir, device):
     if cfg.get("holdout_ids_csv"):
         import pandas as _pd
         _ho = set(_pd.read_csv(cfg["holdout_ids_csv"])["id"].astype(str))
-        _n = sum(1 for r, i in enumerate(ids) if i in _ho and (split.__setitem__(r, "test") or True))
+        _n = 0
+        for r, i in enumerate(ids):
+            if i in _ho:
+                split[r] = "test"
+                _n += 1
         print(f"[ft] holdout: {_n} ids forced into test (zero train/val exposure)")
     id2row = {i: r for r, i in enumerate(ids)}
     id2split = {i: s for i, s in zip(ids, split)}
@@ -103,7 +104,8 @@ def run(cfg, out_dir, device):
     # scrambled every fold's actual membership — parent grouping and the nickelate
     # holdout were silently voided (caught 2026-07-14: 30/43 forced-test ids were
     # missing from predictions; test overlap with the intended fold was chance-level).
-    ds_ids = [rec[0] for rec in ds.data]
+    from data import dataset_ids
+    ds_ids = dataset_ids(ds)
     assert len(ds_ids) == len(id2split) and set(ds_ids) == set(id2split), \
         "dataset/static-table id mismatch"
 
@@ -121,9 +123,8 @@ def run(cfg, out_dir, device):
                           shuffle=(s == "train"), collate_fn=collate, num_workers=w,
                           persistent_workers=(w > 0), pin_memory=(str(device) != "cpu"))
     loaders = {s: mk_loader(s) for s in ("train", "val", "test")}
-    # sanity: the first train batch's ids must resolve in our static map (order/id alignment)
-    _b = next(iter(loaders["train"]))
-    assert all(c in id2row for c in _b[3]), "cif-id alignment broken"
+    # (No first-batch spin-up check here: the ds_ids set-equality assert above already
+    # guarantees every dataset id resolves in the static tables.)
 
     phys_t = torch.as_tensor(phys_np, device=device)
     tc_t = torch.as_tensor(data["tc"], device=device).float()
@@ -156,7 +157,61 @@ def run(cfg, out_dir, device):
         head.phys_std.fit(phys_t[tr_rows].cpu()); head.to(device)
         return head
 
-    y_z_all = None  # filled per-head (depends on its target norm, but norm is shared → constant)
+    # ---- phase-A embedding cache: the FROZEN encoder's per-atom h for train+val ----
+    # Warmup never updates the encoder (it is reset to base_state each seed and stays
+    # frozen + eval throughout phase A), so its per-atom embeddings are bit-identical
+    # across every warmup epoch AND every seed. Encode train/val ONCE here and train
+    # the head on cached tensors — removes ~(warmup_epochs x n_seeds) redundant full
+    # encoder passes + per-access JSON graph rebuilds. Phase B fine-tunes the encoder,
+    # so it keeps encoding live through the loaders.
+    @torch.no_grad()
+    def _encode_cached(split):
+        model.eval()
+        cache = {}
+        for inp, _t, _l, cif_ids in loaders[split]:
+            inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in inp)
+            seg = inp[6].to(device).long()
+            h = model.encode(*inp)
+            for c, cid in enumerate(cif_ids):
+                cache[cid] = h[seg == c]
+        return cache
+
+    h_cache = {"train": _encode_cached("train"), "val": _encode_cached("val")}
+    train_ids_sc = [ds_ids[i] for i in split_indices("train")]
+    val_ids_sc = [ds_ids[i] for i in split_indices("val")]
+
+    def _cached_forward(head, split, bids):
+        h = torch.cat([h_cache[split][c] for c in bids])
+        counts = torch.tensor([h_cache[split][c].shape[0] for c in bids], device=device)
+        seg = torch.repeat_interleave(torch.arange(len(bids), device=device), counts)
+        phys_b, rows = batch_static(bids)
+        _logits, z = head(h, phys_b, seg=seg, n=len(bids))
+        return z, rows
+
+    def warmup_epoch(head, opt, y_z, rng):
+        head.train(); model.eval()
+        order = list(train_ids_sc)
+        rng.shuffle(order)
+        tot = 0.0
+        for b0 in range(0, len(order), bs):
+            bids = order[b0:b0 + bs]
+            opt.zero_grad()
+            z, rows = _cached_forward(head, "train", bids)
+            loss = F.mse_loss(z, y_z[rows]) if loss_type == "msle" else F.l1_loss(z, y_z[rows])
+            loss.backward(); opt.step(); tot += loss.item()
+        return tot
+
+    @torch.no_grad()
+    def warmup_val(head, y_z):
+        head.eval()
+        num = den = 0.0
+        for b0 in range(0, len(val_ids_sc), bs):
+            bids = val_ids_sc[b0:b0 + bs]
+            z, rows = _cached_forward(head, "val", bids)
+            d = z - y_z[rows]
+            num += (d * d).sum().item() if loss_type == "msle" else d.abs().sum().item()
+            den += len(rows)
+        return num / max(den, 1)
 
     def epoch_pass(head, train, opt, y_z):
         head.train()
@@ -182,12 +237,15 @@ def run(cfg, out_dir, device):
             den += len(rows)
         return num / max(den, 1)
 
-    def fit_phase(head, params, lr, wd, epochs, patience, y_z, tag, log):
+    def fit_phase(head, params, lr, wd, epochs, patience, y_z, tag, log,
+                  epoch_fn=None, val_fn=None):
+        # epoch_fn/val_fn: the cached-embedding warmup path (phase A); default = the
+        # live-encoding loaders path (phase B, where the encoder is training).
         opt = torch.optim.AdamW(params, lr=lr, weight_decay=wd)
         best, best_state, bad, best_ep = np.inf, None, 0, -1
         for ep in range(epochs):
-            tr = epoch_pass(head, True, opt, y_z)
-            v = val_z_mae(head, y_z)
+            tr = epoch_fn(head, opt, y_z) if epoch_fn else epoch_pass(head, True, opt, y_z)
+            v = val_fn(head, y_z) if val_fn else val_z_mae(head, y_z)
             if v < best - 1e-6:
                 best, bad, best_ep = v, 0, ep
                 best_state = (copy.deepcopy(model.state_dict()), copy.deepcopy(head.state_dict()))
@@ -211,13 +269,16 @@ def run(cfg, out_dir, device):
         y_z = head.target_to_z(tc_t)            # tc_t and head buffers both on `device`
         log = []
 
-        # ---- phase A: head warmup (encoder frozen) ----
+        # ---- phase A: head warmup (encoder frozen; cached embeddings, no re-encode) ----
         for p in model.parameters():
             p.requires_grad = False
         head._frozen_enc = True
+        _rng = random.Random(seed)                     # deterministic warmup batch order
         fit_phase(head, head.parameters(), cfg["tc_lr"], cfg["tc_weight_decay"],
                   cfg.get("ft_warmup_epochs", 60), cfg.get("ft_patience", 30), y_z,
-                  f"s{seed}-warmup", log)
+                  f"s{seed}-warmup", log,
+                  epoch_fn=lambda h_, o_, y_: warmup_epoch(h_, o_, y_, _rng),
+                  val_fn=warmup_val)
 
         # ---- phase B: unfreeze the top blocks, fine-tune at a tiny encoder LR ----
         k = cfg.get("ft_unfreeze_blocks", 1)
@@ -227,8 +288,12 @@ def run(cfg, out_dir, device):
                 p.requires_grad = True
                 enc_params.append(p)
         head._frozen_enc = False
+        # The head KEEPS its warmup weight decay in phase B (each param group sets its
+        # own; the optimizer-level default would otherwise silently zero it, leaving
+        # the head unregularized during exactly the highest-capacity phase).
         val_z = fit_phase(
-            head, [{"params": head.parameters(), "lr": cfg["tc_lr"]},
+            head, [{"params": head.parameters(), "lr": cfg["tc_lr"],
+                    "weight_decay": cfg["tc_weight_decay"]},
                    {"params": enc_params, "lr": cfg.get("ft_encoder_lr", 1e-5),
                     "weight_decay": cfg.get("ft_encoder_wd", 1e-4)}],
             cfg["tc_lr"], 0.0, cfg.get("ft_epochs", 200), cfg.get("ft_patience", 30),

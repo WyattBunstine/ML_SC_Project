@@ -178,16 +178,20 @@ def main():
     model = GPSCrystalNet.from_args(
         args, (orig_atom_fea_len, nbr_fea_len, poly_fea_len))
 
-    # Feature-normalization stats are computed ONCE on rank 0 (over the full train
-    # split) and propagated to every replica by broadcast_model below (they live in
-    # model buffers), so all ranks normalize identically and no rank duplicates the work.
-    if args.get("normalize_features", True) and dist_info.is_main:
+    # Feature-normalization stats: computed on EVERY rank (deterministic — a seeded
+    # sample of a deterministic dataset), exactly like compute_target_stats below and
+    # for the same reason: a rank-0-only scan (up to 4000 graph reads, minutes under
+    # IO contention) would leave the other ranks blocked inside the broadcast_model
+    # collective long enough to trip the NCCL watchdog — the failure mode that aborted
+    # the energy-only rung. broadcast_model still pins the (bitwise-identical) buffers.
+    if args.get("normalize_features", True):
         stats = compute_feature_stats(dataset, list(sc_idx),
                                       max_graphs=args.get("feature_stat_graphs", 4000),
                                       seed=args.get("split_seed", 123))
         model.set_feature_stats(stats["node"], stats["edge"],
                                 stats["poly"] if model.use_poly_edges else None)
-        print("Installed per-feature input normalization")
+        if dist_info.is_main:
+            print("Installed per-feature input normalization")
 
     total = sum(p.numel() for p in model.parameters())
     if dist_info.is_main:

@@ -8,12 +8,13 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_HERE))) # repo root (data
 # 3DSC repo (for synthetic_doping internals); override with THREEDSC_REPO env var.
 THREEDSC_REPO = _os.environ.get("THREEDSC_REPO", _os.path.expanduser("~/Downloads/old_files/3DSC-main"))
 
-import re, os, json, warnings
+import os, sys, json, warnings
 warnings.filterwarnings("ignore")
 from mp_api.client import MPRester
 from pymatgen.io.cif import CifWriter
 
-key = re.search(r'MPRester\(["\']([A-Za-z0-9]{28,34})["\']', open("test.py").read()).group(1)
+# Env-only key, per claude.md — never scraped from a local file.
+key = os.environ.get("MP_API_KEY") or sys.exit("error: set MP_API_KEY (env-only)")
 mids = json.load(open("database/datafiles/MP/dos_rebuild/dos_missing_graphs.json"))
 outdir = "database/datafiles/MP/dos_rebuild/cifs"; os.makedirs(outdir, exist_ok=True)
 done = {f[:-4] for f in os.listdir(outdir) if f.endswith(".cif")}

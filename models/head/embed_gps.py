@@ -33,7 +33,7 @@ def embed_index(checkpoint_path, index_path, out_dir, device="cpu", batch_size=6
                 resume=True):
     """Save <id>.npy (per-atom encoder h, (N_atoms, atom_fea_len)) for every structure in
     the index, from a pretrained GPS checkpoint. Resumable (skips existing .npy)."""
-    from data import load_cif_dataset, collate_pool_geom
+    from data import load_cif_dataset_from_args, collate_pool_geom
     from torch.utils.data import DataLoader
 
     os.makedirs(out_dir, exist_ok=True)
@@ -41,21 +41,10 @@ def embed_index(checkpoint_path, index_path, out_dir, device="cpu", batch_size=6
     args = ckpt.get("args", {})
 
     # The transfer dataset must produce the SAME feature space the encoder was trained
-    # on (the feature flags below come from the checkpoint). target_column is NOT
-    # inherited: the pretraining target (e.g. formation_energy_per_atom) is irrelevant
-    # to an encoder-only embedding pass and is absent from the transfer index — let the
-    # transfer index resolve its own natural target (value/tc) so this never crashes.
-    dataset = load_cif_dataset(
-        index_path,
-        max_num_nbr=args.get("max_num_nbr", 14),
-        max_num_poly_nbr=args.get("max_num_poly_nbr", 16),
-        target_column=None,
-        use_poly_edges=args.get("use_poly_edges", True),
-        use_bond_angles=args.get("use_bond_angles", False),
-        build_angle_bias=True,
-        use_rich_node_features=args.get("use_rich_node_features", False),
-        use_valence_features=args.get("use_valence_features", False),
-        use_dihedrals=args.get("use_dihedrals", False))
+    # on — the single shared flag enumeration (load_cif_dataset_from_args) guarantees
+    # it. target_column stays None: the pretraining target is irrelevant to an
+    # encoder-only embedding pass and absent from the transfer index.
+    dataset = load_cif_dataset_from_args(index_path, args)
 
     sa, sn, _, sp, _, _ = dataset[0][0][:6]
     model = _build_model_from_args(args, (sa.shape[-1], sn.shape[-1], sp.shape[-1]))
@@ -89,22 +78,12 @@ def embed_raw(index_path, out_dir, feature_args=None, device="cpu", batch_size=6
     learned encoder add anything over the raw atom features it ingests?'. No checkpoint /
     model. ``feature_args`` (a checkpoint's args dict) match the encoder's feature space
     (rich features / dihedrals / neighbor caps) for a fair comparison; defaults otherwise."""
-    from data import load_cif_dataset, collate_pool_geom
+    from data import load_cif_dataset_from_args, collate_pool_geom
     from torch.utils.data import DataLoader
 
     args = feature_args or {}
     os.makedirs(out_dir, exist_ok=True)
-    dataset = load_cif_dataset(
-        index_path,
-        max_num_nbr=args.get("max_num_nbr", 14),
-        max_num_poly_nbr=args.get("max_num_poly_nbr", 16),
-        target_column=None,
-        use_poly_edges=args.get("use_poly_edges", True),
-        use_bond_angles=args.get("use_bond_angles", False),
-        build_angle_bias=True,
-        use_rich_node_features=args.get("use_rich_node_features", False),
-        use_valence_features=args.get("use_valence_features", False),
-        use_dihedrals=args.get("use_dihedrals", False))
+    dataset = load_cif_dataset_from_args(index_path, args)
 
     loader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_pool_geom)
     done = dim = 0

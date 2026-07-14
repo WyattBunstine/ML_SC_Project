@@ -14,7 +14,7 @@ import json, os, sys
 sys.path.insert(0, "models/common")
 sys.path.insert(0, "models/GPSTransformer")
 import torch
-from data import load_cif_dataset, collate_pool_multitask
+from data import load_cif_dataset_from_args, collate_pool_multitask
 from train import _build_cart_strain, _mt_loss, compute_target_stats
 from model import GPSCrystalNet
 
@@ -24,15 +24,11 @@ PACK = sys.argv[2] if len(sys.argv) > 2 else "database/datafiles/MP/dos_pack_ef1
 cfg = json.load(open(CFG_PATH))
 print(f"config: {CFG_PATH}\npack:   {PACK}")
 
-ds = load_cif_dataset(
-    PACK,
-    max_num_nbr=cfg["max_num_nbr"], max_num_poly_nbr=cfg["max_num_poly_nbr"],
+# The shared flag enumeration (load_cif_dataset_from_args) + the pretraining-only
+# overrides — so this smoke consumes the pack in EXACTLY the feature space gps_main will.
+ds = load_cif_dataset_from_args(
+    PACK, cfg,
     target_column=cfg["target_column"],
-    use_bond_angles=cfg.get("use_bond_angles", False),
-    use_poly_edges=cfg["use_poly_edges"], build_angle_bias=True,
-    use_rich_node_features=cfg.get("use_rich_node_features", False),
-    use_valence_features=cfg.get("use_valence_features", False),
-    use_dihedrals=cfg.get("use_dihedrals", False),
     multitask=True,
     n_energy=cfg.get("n_energy"),
     dos_per_atom=cfg.get("dos_per_atom", True),

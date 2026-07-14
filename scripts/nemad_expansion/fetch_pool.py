@@ -9,9 +9,10 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_HERE))) # repo root (data
 # 3DSC repo (for synthetic_doping internals); override with THREEDSC_REPO env var.
 THREEDSC_REPO = _os.environ.get("THREEDSC_REPO", _os.path.expanduser("~/Downloads/old_files/3DSC-main"))
 
-import re, os, sys, pandas as pd
-key=re.search(r'MPRester\(["\']([A-Za-z0-9]{28,34})["\']', open("test.py").read()).group(1)
-os.environ["MP_API_KEY"]=key
+import os, sys, pandas as pd
+# Env-only key, per claude.md ("read from the MP_API_KEY environment variable, no
+# longer hardcoded") — never scraped from a local file.
+key = os.environ.get("MP_API_KEY") or sys.exit("error: set MP_API_KEY (env-only)")
 from mp_api.client import MPRester
 
 systems=[l.strip() for l in open("database/datafiles/NE_SCDB/need_systems.txt") if l.strip()]

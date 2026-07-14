@@ -9,7 +9,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_HERE))) # repo root (data
 # 3DSC repo (for synthetic_doping internals); override with THREEDSC_REPO env var.
 THREEDSC_REPO = _os.environ.get("THREEDSC_REPO", _os.path.expanduser("~/Downloads/old_files/3DSC-main"))
 
-import sys, re, os, warnings, heapq, pandas as pd, numpy as np
+import sys, os, warnings, heapq, pandas as pd, numpy as np
 warnings.filterwarnings("ignore")
 from collections import defaultdict
 from pymatgen.core import Composition
@@ -55,7 +55,7 @@ print(f"candidates with >=1 accepted parent: {len(cand)}",flush=True)
 
 # fetch structures for all unique mids across top-K
 mids=sorted({t[3] for lst in topk.values() for t in lst})
-key=re.search(r'MPRester\(["\']([A-Za-z0-9]{28,34})["\']', open("test.py").read()).group(1)
+key = os.environ.get("MP_API_KEY") or sys.exit("error: set MP_API_KEY (env-only)")
 print(f"fetching {len(mids)} structures",flush=True)
 cache={}
 with MPRester(key) as mpr:
