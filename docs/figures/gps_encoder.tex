@@ -67,10 +67,10 @@
 % =====================================================================
 %  OVERALL TITLE
 % =====================================================================
-\node[font=\Large\bfseries, anchor=south] at (10.3,4.2)
-   {GPSCrystalNet: a geometry-aware crystal encoder};
-\node[font=\small\itshape, text=ink, anchor=north] at (10.3,4.1)
-   {formation-energy regression \,($E_\text{form}$ per atom)};
+%\node[font=\Large\bfseries, anchor=south] at (10.3,4.2)
+%   {GPSCrystalNet: a geometry-aware crystal encoder};
+%\node[font=\small\itshape, text=ink, anchor=north] at (10.3,4.1)
+%   {formation-energy regression \,($E_\text{form}$ per atom)};
 
 % =====================================================================
 %  (1) CRYSTAL STRUCTURE  — perovskite-like slab (B-O network + A-sites)
@@ -254,10 +254,10 @@
 
   % head -> pool -> output
   \node[ebox] (head) at (1.7,-1.55)
-       {Per-atom energy head};
+       {Per-atom head};
   \node[ebox, minimum width=26mm] (mean) at (1.7,-2.65)
        {mean over atoms};
-  \node[pill] (eform) at (1.7,-3.80) {$E_\text{form}$};
+  \node[pill] (eform) at (1.7,-3.80) {Target};
 
   % vertical flow arrows (slimmer head so the gaps read clearly)
   \draw[flow] (embed.south)  -- (block.north);

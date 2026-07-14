@@ -2,7 +2,7 @@
   "models": "ORIG",
   "dataset_rd": "database/datafiles/MP",
   "atom_init": "atom_init.json",
-  "dataset": "SC_MP_basic.pickle",
+  "dataset": "id_prop_basic.pickle",
 
   "batch_size": 128,
   "val_ratio": 0.1,

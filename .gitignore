@@ -15,3 +15,7 @@ __pycache__/
 model_data/
 mpnn_result*
 test_result_epoch_log.csv
+
+# LaTeX build artifacts (docs/figures)
+docs/figures/*.aux
+docs/figures/*.log
