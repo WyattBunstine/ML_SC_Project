@@ -17,23 +17,8 @@ from synth_dope import synth_dope_one
 from pymatgen.io.cif import CifWriter
 from mp_api.client import MPRester
 
-LMR,LTR,LMA=0.10001,0.05001,0.15001; HMR,HTR,HMA=0.20001,0.15001,0.3001
-def chem_dict(comp):
-    d=Composition(comp).get_el_amt_dict() if isinstance(comp,str) else dict(comp)
-    els=sorted([e for e in d if e!="O"])+(["O"] if "O" in d else []); return {e:float(d[e]) for e in els}
-def formula_similarity(cd_sc,cd_2):
-    es,e2=list(cd_sc),list(cd_2)
-    if len(es)<len(e2) or not all(e in es for e in e2): return np.nan,np.nan
-    if len(es)>len(e2) and len(e2)==1: return np.nan,np.nan
-    q=np.array([cd_sc[e] for e in es]); q2=np.array([cd_2.get(e,0.0) for e in es])
-    q2=q2*(q.sum()/q2.sum()); diffs=np.abs(q-q2); rel=2*diffs/(q+q2); trd=2*diffs.sum()/(q.sum()+q2.sum())
-    def ok(mr,tr,ma):
-        if trd>tr: return False
-        return not any((d>ma and r>mr) for d,r in zip(diffs,rel))
-    if trd==0: return 1,trd
-    if ok(LMR,LTR,LMA): return 2,trd
-    if ok(HMR,HTR,HMA): return 3,trd
-    return np.nan,trd
+# the shared 3DSC totreldiff matcher (formula_match.py) — was a drifting local copy
+from formula_match import chem_dict, formula_similarity
 
 K=8
 pool=pd.read_pickle("database/datafiles/NE_SCDB/mp_crystal_pool.pickle"); pool["cd"]=pool["reduced"].map(chem_dict)
