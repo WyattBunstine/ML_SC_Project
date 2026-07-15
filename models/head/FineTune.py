@@ -280,13 +280,44 @@ def run(cfg, out_dir, device):
                   epoch_fn=lambda h_, o_, y_: warmup_epoch(h_, o_, y_, _rng),
                   val_fn=warmup_val)
 
-        # ---- phase B: unfreeze the top blocks, fine-tune at a tiny encoder LR ----
-        k = cfg.get("ft_unfreeze_blocks", 1)
-        enc_params = []
-        for blk in list(model.blocks)[-k:]:
-            for p in blk.parameters():
-                p.requires_grad = True
-                enc_params.append(p)
+        # ---- phase B: unfreeze the selected encoder subset, tiny encoder LR ----
+        # ft_unfreeze picks WHERE gradients enter the encoder (params in parens):
+        #   "blocks:k"  top-k GPS blocks (default, k=ft_unfreeze_blocks; 333k/block)
+        #   "norms"     every LayerNorm (3.1k)  — global scale recalibration
+        #   "bitfit"    every bias (12k)        — slightly richer recalibration
+        #   "embedding" the input Linear (2.4k) — re-mix input features (e.g. re-weight
+        #               the valence dims that physics pretraining weighted for energies)
+        #   "ffn:k"     the FFNs of the top-k blocks (132k/block) — computation, not attention
+        #   "attn:k"    the shell attentions of the top-k blocks (200k/block)
+        mode = cfg.get("ft_unfreeze", f"blocks:{cfg.get('ft_unfreeze_blocks', 1)}")
+        kind, _, karg = mode.partition(":")
+        k = int(karg) if karg else 1
+        if kind == "blocks":
+            mods = list(model.blocks)[-k:]
+        elif kind == "ffn":
+            mods = [m for blk in list(model.blocks)[-k:]
+                    for n, m in blk.named_children() if n.startswith("ffn")]
+        elif kind == "attn":
+            mods = [m for blk in list(model.blocks)[-k:]
+                    for n, m in blk.named_children() if n.endswith("_attn")]
+        elif kind == "embedding":
+            mods = [model.embedding]
+        elif kind in ("norms", "bitfit"):
+            mods = []                               # selected by parameter name below
+        else:
+            raise ValueError(f"unknown ft_unfreeze mode {mode!r}")
+        enc_params = [p for m_ in mods for p in m_.parameters()]
+        if kind == "norms":
+            enc_params = [p for n, p in model.named_parameters()
+                          if "norm" in n.lower() and "heads." not in n]
+        elif kind == "bitfit":
+            enc_params = [p for n, p in model.named_parameters()
+                          if n.endswith(".bias") and "heads." not in n]
+        for p in enc_params:
+            p.requires_grad = True
+        if seed == 0:
+            print(f"[ft] phase-B unfreeze '{mode}': "
+                  f"{sum(p.numel() for p in enc_params):,} encoder params", flush=True)
         head._frozen_enc = False
         # The head KEEPS its warmup weight decay in phase B (each param group sets its
         # own; the optimizer-level default would otherwise silently zero it, leaving
@@ -312,7 +343,8 @@ def run(cfg, out_dir, device):
         seed_true = np.array([data["tc"][id2row[c]] for c in bids])
         seed_logs.append({"seed": seed, "val_z_mae": val_z,
                           "test_mae_K": float(np.abs(seed_true - k_pred).mean()),
-                          "unfrozen_blocks": k})
+                          "unfreeze": mode,
+                          "encoder_params_unfrozen": int(sum(p.numel() for p in enc_params))})
         if seed == 0:
             with open(os.path.join(out_dir, "ft_log_seed0.csv"), "w", newline="") as f:
                 w = csv.DictWriter(f, fieldnames=list(log[0].keys())); w.writeheader(); w.writerows(log)
@@ -334,8 +366,8 @@ def run(cfg, out_dir, device):
     metrics = {"finetune": True, "n_seeds": len(seed_preds), "seeds": seed_logs,
                "split_group": cfg.get("split_group", "parent"), "loss": loss_type,
                "msle": msle, "rmse_K": rmse,
-               "unfrozen_blocks": cfg.get("ft_unfreeze_blocks", 1),
-               "encoder_params_unfrozen": sum(p.numel() for blk in list(model.blocks)[-cfg.get("ft_unfreeze_blocks", 1):] for p in blk.parameters()),
+               "unfreeze": mode,
+               "encoder_params_unfrozen": int(sum(p.numel() for p in enc_params)),
                "head": family_mae_report(tc_te, head_K, fam_te, grp_te)}
     with open(os.path.join(out_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=1)
@@ -345,6 +377,6 @@ def run(cfg, out_dir, device):
             f.write(f"{c},{fam_te[i]},{grp_te[i]},{tc_te[i]:.3f},{head_K[i]:.3f}\n")
     print(f"[finetune] {len(seed_preds)}-seed ensemble: MAE {metrics['head']['overall']['mae_K']:.2f} K | "
           f"RMSE {rmse:.2f} | MSLE {msle:.3f} | cuprate MAE {metrics['head'].get('family/Cuprate',{}).get('mae_K',float('nan')):.2f} "
-          f"[split={metrics['split_group']}, loss={loss_type}, top {cfg.get('ft_unfreeze_blocks',1)} block(s)]")
+          f"[split={metrics['split_group']}, loss={loss_type}, unfreeze={mode}]")
     print(f"run dir: {out_dir}")
     return metrics
