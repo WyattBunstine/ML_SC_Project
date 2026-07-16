@@ -156,7 +156,8 @@ class Standardizer(nn.Module):
 class TcHead(nn.Module):
     def __init__(self, enc_dim: int, phys_dim: int, pca_k: int = 64,
                  hidden: int = 64, dropout: float = 0.2,
-                 pooling: str = "meanmax", pool_dim: int = 32):
+                 pooling: str = "meanmax", pool_dim: int = 32,
+                 n_classes: int = 2):
         super().__init__()
         # `enc_dim` is the pooled width (2*D) for meanmax, the per-atom width (D)
         # for the learned pools — HeadMain passes the right one.
@@ -177,7 +178,13 @@ class TcHead(nn.Module):
         self.norm = nn.LayerNorm(in_dim)
         self.trunk = nn.Sequential(nn.Linear(in_dim, hidden), nn.Softplus(),
                                    nn.Dropout(dropout))
-        self.class_head = nn.Linear(hidden, 2)
+        # n_classes=2: the legacy SC/non-SC pretraining head (unchanged default).
+        # n_classes=4: the ground-state hurdle head — SC / FM / AFM / both, trained
+        # with a MASKED cross-entropy (class -1 = unknown ground state, e.g. the
+        # 3DSC tc=0 parents, contributes no gradient); the regression head then
+        # trains on SC rows only and inference is E[Tc] = P(SC) * Tc_reg.
+        self.n_classes = n_classes
+        self.class_head = nn.Linear(hidden, n_classes)
         self.tc_head = nn.Linear(hidden, 1)
         # log1p-Kelvin z-normalization of the regression target (train split).
         self.register_buffer("tc_mean", torch.zeros(1))
