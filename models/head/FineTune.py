@@ -155,18 +155,40 @@ def run(cfg, out_dir, device):
         logits, z = head(h, phys_b, seg=seg, n=len(cif_ids))
         return logits, z, rows
 
-    def joint_loss(logits, z, rows, y_z):
-        """Legacy: plain regression over the batch. Hurdle: L1 on tc>0 rows + masked
-        CE on ground-state-labeled rows; a batch missing one population contributes
-        only the other term (never NaN)."""
+    def _reg_loss(head, z, y_z_sel, tc_sel):
+        """One regression term, per the configured loss space:
+          l1     — L1 in z (log1p-standardized): the historical default; small-error
+                   mass dominates, family-scale misses on rare rows can hide.
+          msle   — MSE in z: emphasizes RELATIVE error (a 0.5->2 K miss ~ a 30->120).
+          mse_k  — MSE in KELVIN: a 24 K miss costs 576x a 1 K miss — targets the
+                   don't-care-about-small-errors regime (found: the val09 champion
+                   under-predicted every >20 K iron-based by ~24 K and L1 never saw
+                   it). Uses the UNCLAMPED Kelvin map so gradients survive pred<0;
+                   normalized by Var(Tc_train) for optimizer-scale sanity.
+          wl1_k  — L1 in z weighted by (1+Tc_true): the same emphasis direction,
+                   robust to high-Tc label noise (the 130 K near-duplicate problem).
+        """
+        if loss_type == "msle":
+            return F.mse_loss(z, y_z_sel)
+        if loss_type == "mse_k":
+            k = torch.expm1(z * head.tc_std + head.tc_mean)
+            return F.mse_loss(k, tc_sel) / k_var
+        if loss_type == "wl1_k":
+            w = (1.0 + tc_sel) / k_wmean
+            return (w * (z - y_z_sel).abs()).mean()
+        return F.l1_loss(z, y_z_sel)
+
+    def joint_loss(head, logits, z, rows, y_z):
+        """Legacy: plain regression over the batch. Hurdle: regression on tc>0 rows +
+        masked CE on ground-state-labeled rows; a batch missing one population
+        contributes only the other term (never NaN)."""
         rt = torch.as_tensor(rows, device=device)
         if not use_gs:
-            return F.mse_loss(z, y_z[rt]) if loss_type == "msle" else F.l1_loss(z, y_z[rt])
+            return _reg_loss(head, z, y_z[rt], tc_t[rt])
         loss = z.sum() * 0.0
         m_pos = is_pos[rt]
         if m_pos.any():
-            loss = loss + (F.mse_loss(z[m_pos], y_z[rt][m_pos]) if loss_type == "msle"
-                           else F.l1_loss(z[m_pos], y_z[rt][m_pos]))
+            loss = loss + _reg_loss(head, z[m_pos], y_z[rt][m_pos], tc_t[rt][m_pos])
         m_gs = gs_t[rt] >= 0
         if m_gs.any():
             loss = loss + gs_w * F.cross_entropy(logits[m_gs], gs_t[rt][m_gs])
@@ -178,6 +200,9 @@ def run(cfg, out_dir, device):
     tr_rows = [id2row[c] for c in ds_ids if id2split.get(c) == "train" and is_sc[id2row[c]]]
     fit_rows = ([r for r in tr_rows if bool(is_pos[r])] if use_gs else tr_rows)
     tc_tr = tc_t[fit_rows].cpu()
+    # Kelvin-space loss normalizers (train-fit constants; see _reg_loss)
+    k_var = max(float(tc_tr.var()), 1.0)
+    k_wmean = max(float((1.0 + tc_tr).mean()), 1.0)
 
     def make_head(seed):
         torch.manual_seed(seed)
@@ -228,25 +253,23 @@ def run(cfg, out_dir, device):
             bids = order[b0:b0 + bs]
             opt.zero_grad()
             logits, z, rows = _cached_forward(head, "train", bids)
-            loss = joint_loss(logits, z, rows, y_z)
+            loss = joint_loss(head, logits, z, rows, y_z)
             loss.backward(); opt.step(); tot += loss.item()
         return tot
 
-    def _val_metric(logits, z, rows, y_z):
-        """Early-stop objective on a val batch -> (sum, count). Legacy: z-error over
-        the batch. Hurdle: z-error over tc>0 rows + weighted CE over labeled rows,
-        normalized per-row so the composite tracks both discrimination and scale."""
+    def _val_metric(head, logits, z, rows, y_z):
+        """Early-stop objective on a val batch -> (sum, count), in the SAME loss space
+        as training (_reg_loss), so model selection optimizes what the loss optimizes.
+        Hurdle: regression term over tc>0 rows + weighted CE over labeled rows."""
         rt = torch.as_tensor(rows, device=device)
         if not use_gs:
-            d = z - y_z[rt]
-            s = (d * d).sum() if loss_type == "msle" else d.abs().sum()
-            return float(s), len(rows)
+            return float(_reg_loss(head, z, y_z[rt], tc_t[rt])) * len(rows), len(rows)
         s, cnt = 0.0, 0
         m_pos = is_pos[rt]
         if m_pos.any():
-            d = z[m_pos] - y_z[rt][m_pos]
-            s += float((d * d).sum() if loss_type == "msle" else d.abs().sum())
-            cnt += int(m_pos.sum())
+            n = int(m_pos.sum())
+            s += float(_reg_loss(head, z[m_pos], y_z[rt][m_pos], tc_t[rt][m_pos])) * n
+            cnt += n
         m_gs = gs_t[rt] >= 0
         if m_gs.any():
             s += gs_w * float(F.cross_entropy(logits[m_gs], gs_t[rt][m_gs],
@@ -261,7 +284,7 @@ def run(cfg, out_dir, device):
         for b0 in range(0, len(val_ids_sc), bs):
             bids = val_ids_sc[b0:b0 + bs]
             logits, z, rows = _cached_forward(head, "val", bids)
-            s, c = _val_metric(logits, z, rows, y_z)
+            s, c = _val_metric(head, logits, z, rows, y_z)
             num += s; den += c
         return num / max(den, 1)
 
@@ -275,7 +298,7 @@ def run(cfg, out_dir, device):
             opt.zero_grad()
             logits, z, rows = forward_batch(head, inp, cif_ids,
                                             grad_encoder=train and not head._frozen_enc)
-            loss = joint_loss(logits, z, rows, y_z)
+            loss = joint_loss(head, logits, z, rows, y_z)
             loss.backward(); opt.step(); tot += loss.item()
         return tot
 
@@ -285,7 +308,7 @@ def run(cfg, out_dir, device):
         num = den = 0.0
         for inp, _t, _l, cif_ids in loaders["val"]:
             logits, z, rows = forward_batch(head, inp, cif_ids, grad_encoder=False)
-            s, c = _val_metric(logits, z, rows, y_z)
+            s, c = _val_metric(head, logits, z, rows, y_z)
             num += s; den += c
         return num / max(den, 1)
 
