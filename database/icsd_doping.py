@@ -101,16 +101,25 @@ def _adjust_oxygen(st, target_O):
             var = [o[-1]] if o else []
     fixed = sum(occ(i) for i in o if i not in var)
     chain = target_O - fixed
-    cap = sum(1.0 for _ in var)   # each variable site up to full occupancy
+    # A variable site's O capacity is what its CO-OCCUPANTS leave free (an F-doped
+    # site holding F 0.05 can take O up to 0.95) — and adjusting O must PRESERVE
+    # those co-occupants: the old wholesale `st[i] = {O: give}` silently erased a
+    # site-sharing anion dopant (this killed every Nd2CuO4-xFx build).
+    other = lambda i: {el: x for el, x in st[i].species.items() if el.symbol != "O"}
+    cap = sum(1.0 - sum(other(i).values()) for i in var)
     if chain < -1e-6 or chain > cap + 1e-6:
         return None, f"O out of range (need chain {chain:.2f}, cap {cap:.1f})"
     rem, drop = chain, []
     for i in var:
-        give = min(1.0, rem); rem -= give
-        if give < 1e-4:
-            drop.append(i)
+        room = 1.0 - sum(other(i).values())
+        give = min(room, rem); rem -= give
+        new = dict(other(i))
+        if give >= 1e-4:
+            new[Element("O")] = round(give, 5)
+        if new:
+            st[i] = new
         else:
-            st[i] = {Element("O"): round(give, 5)}
+            drop.append(i)
     if drop:
         st.remove_sites(drop)
     return st, "ok"
@@ -127,8 +136,11 @@ def combined_dope(structure, target_formula, tol=0.04):
         return None, "no shared cation"
     # scale by TOTAL cation count (not one reference cation — that would zero out the
     # reference's deficit and hide it as a doping host, e.g. Cu for TM dopants).
-    cat_cur = sum(v for e, v in cur.items() if e != "O")
-    cat_tg = sum(v for e, v in tg.items() if e != "O")
+    # Scale by the TRUE cation count: every anion is excluded, not just O — an
+    # anion dopant (F in Nd2CuO4-xFx) counted as a "cation" skews the scale and
+    # every des[] amount with it (Nd 2.0 came out as des 1.88).
+    cat_cur = sum(v for e, v in cur.items() if e not in ANIONS)
+    cat_tg = sum(v for e, v in tg.items() if e not in ANIONS)
     scale = cat_cur / cat_tg if cat_tg else 1.0
     des = {e: v * scale for e, v in tg.items()}
     # 1) cation / anion substitution for every element that must be ADDED
@@ -142,11 +154,15 @@ def combined_dope(structure, target_formula, tol=0.04):
         if not _substitute_on_site(st, host, D, need):
             return None, f"cannot place {D} on {host}"
         cur = st.composition.get_el_amt_dict()
-    # 2) oxygen
+    # 2) oxygen — only when substitution hasn't already landed the O target: an
+    # anion dopant (F on O) reduces O occupancy in the same move, so re-adjusting
+    # would redistribute O across the freshly doped sites for no reason.
     if "O" in des:
-        st, why = _adjust_oxygen(st, des["O"])
-        if st is None:
-            return None, why
+        cur_O = st.composition.get_el_amt_dict().get("O", 0.0)
+        if abs(cur_O - des["O"]) > tol:
+            st, why = _adjust_oxygen(st, des["O"])
+            if st is None:
+                return None, why
     # 3) validate composition matches target (up to the reference scale)
     got = st.composition.get_el_amt_dict()
     for e in set(des) | set(got):
