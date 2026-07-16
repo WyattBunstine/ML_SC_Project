@@ -71,7 +71,13 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
     need_embed = require_embed or need_atoms
 
     ids, enc_rows, phys_rows, tc, label, family, doped = [], [], [], [], [], [], []
-    atom_list = []
+    atom_list, gs = [], []
+    # Ground-state class per row (the phase-2 hurdle's classification target):
+    #   0 = SC (tc>0) · 1 = FM · 2 = AFM · 3 = both/ferrimagnetic (NEMAD magnetic rows,
+    #   from the index's mag_order column) · -1 = UNKNOWN (tc=0 rows without a magnetic
+    #   label, e.g. the 3DSC parents) -> MASKED in the classifier loss, never guessed.
+    GS_CLASSES = {"FM": 1, "AFM": 2, "both": 3}
+    has_mag = "mag_order" in df.columns
     missing_embed = missing_desc = missing_aux = 0
     for row in df.itertuples():
         emb = None
@@ -102,6 +108,9 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
         ids.append(row.id)
         tc.append(float(row.tc) if not pd.isna(row.tc) else np.nan)
         label.append(int(row.label))
+        _tc = float(row.tc) if not pd.isna(row.tc) else 0.0
+        _mag = getattr(row, "mag_order", None) if has_mag else None
+        gs.append(0 if _tc > 0 else GS_CLASSES.get(_mag, -1))
         if row.id in meta.index:
             family.append(meta.loc[row.id, "family"])
             doped.append(bool(meta.loc[row.id, "synth_doped"]))
@@ -118,6 +127,7 @@ def assemble(index_path: str, embed_dir: str, descriptors_path: str,
         "family": np.asarray(family),
         "synth_doped": np.asarray(doped),
         "group": np.asarray([FAMILY_GROUP[f] for f in family]),
+        "gs": np.asarray(gs, dtype=np.int64),   # ground-state class (-1 = masked)
         "missing_embed": missing_embed,
         "missing_desc": missing_desc,
     }

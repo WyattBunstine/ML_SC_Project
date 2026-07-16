@@ -128,6 +128,16 @@ def run(cfg, out_dir, device):
 
     phys_t = torch.as_tensor(phys_np, device=device)
     tc_t = torch.as_tensor(data["tc"], device=device).float()
+    # ---- ground-state HURDLE mode (phase 2 of the magnetic negatives) ----
+    # ground_state_head: the head grows a 4-class ground-state output (SC/FM/AFM/both,
+    # labels from data["gs"], -1 = unknown -> masked out of the CE), the REGRESSION
+    # trains on tc>0 rows ONLY (negatives inform the classifier, never drag the Tc
+    # scale — the fix for the modulation-vs-discrimination trade the tc=0-flood
+    # experiment exposed), and inference is the hurdle E[Tc] = P(SC) * Tc_reg.
+    use_gs = bool(cfg.get("ground_state_head", False))
+    gs_w = float(cfg.get("gs_loss_weight", 1.0))
+    gs_t = torch.as_tensor(data["gs"], device=device).long()
+    is_pos = tc_t > 0                                   # regression-supervised rows
 
     def batch_static(cif_ids):
         rows = [id2row[c] for c in cif_ids]
@@ -142,17 +152,38 @@ def run(cfg, out_dir, device):
             with torch.no_grad():
                 h = model.encode(*inp)
         phys_b, rows = batch_static(cif_ids)
-        _logits, z = head(h, phys_b, seg=seg, n=len(cif_ids))
-        return z, rows
+        logits, z = head(h, phys_b, seg=seg, n=len(cif_ids))
+        return logits, z, rows
 
-    # target / phys normalizers fit ONCE on SC-train (shared across seeds & phases)
+    def joint_loss(logits, z, rows, y_z):
+        """Legacy: plain regression over the batch. Hurdle: L1 on tc>0 rows + masked
+        CE on ground-state-labeled rows; a batch missing one population contributes
+        only the other term (never NaN)."""
+        rt = torch.as_tensor(rows, device=device)
+        if not use_gs:
+            return F.mse_loss(z, y_z[rt]) if loss_type == "msle" else F.l1_loss(z, y_z[rt])
+        loss = z.sum() * 0.0
+        m_pos = is_pos[rt]
+        if m_pos.any():
+            loss = loss + (F.mse_loss(z[m_pos], y_z[rt][m_pos]) if loss_type == "msle"
+                           else F.l1_loss(z[m_pos], y_z[rt][m_pos]))
+        m_gs = gs_t[rt] >= 0
+        if m_gs.any():
+            loss = loss + gs_w * F.cross_entropy(logits[m_gs], gs_t[rt][m_gs])
+        return loss
+
+    # target / phys normalizers fit ONCE on train (shared across seeds & phases).
+    # Hurdle mode fits the Tc normalizer on the tc>0 train rows only — the regression
+    # never sees the zeros, so its z-space must not be centered by them.
     tr_rows = [id2row[c] for c in ds_ids if id2split.get(c) == "train" and is_sc[id2row[c]]]
-    tc_tr = tc_t[tr_rows].cpu()
+    fit_rows = ([r for r in tr_rows if bool(is_pos[r])] if use_gs else tr_rows)
+    tc_tr = tc_t[fit_rows].cpu()
 
     def make_head(seed):
         torch.manual_seed(seed)
         head = TcHead(enc_dim, phys_t.shape[1], cfg["pca_k"], cfg["hidden"],
-                      cfg["dropout"], pooling="deepsets", pool_dim=pool_dim).to(device)
+                      cfg["dropout"], pooling="deepsets", pool_dim=pool_dim,
+                      n_classes=(int(cfg.get("n_gs_classes", 4)) if use_gs else 2)).to(device)
         head.fit_target(tc_tr)
         head.phys_std.fit(phys_t[tr_rows].cpu()); head.to(device)
         return head
@@ -185,8 +216,8 @@ def run(cfg, out_dir, device):
         counts = torch.tensor([h_cache[split][c].shape[0] for c in bids], device=device)
         seg = torch.repeat_interleave(torch.arange(len(bids), device=device), counts)
         phys_b, rows = batch_static(bids)
-        _logits, z = head(h, phys_b, seg=seg, n=len(bids))
-        return z, rows
+        logits, z = head(h, phys_b, seg=seg, n=len(bids))
+        return logits, z, rows
 
     def warmup_epoch(head, opt, y_z, rng):
         head.train(); model.eval()
@@ -196,10 +227,32 @@ def run(cfg, out_dir, device):
         for b0 in range(0, len(order), bs):
             bids = order[b0:b0 + bs]
             opt.zero_grad()
-            z, rows = _cached_forward(head, "train", bids)
-            loss = F.mse_loss(z, y_z[rows]) if loss_type == "msle" else F.l1_loss(z, y_z[rows])
+            logits, z, rows = _cached_forward(head, "train", bids)
+            loss = joint_loss(logits, z, rows, y_z)
             loss.backward(); opt.step(); tot += loss.item()
         return tot
+
+    def _val_metric(logits, z, rows, y_z):
+        """Early-stop objective on a val batch -> (sum, count). Legacy: z-error over
+        the batch. Hurdle: z-error over tc>0 rows + weighted CE over labeled rows,
+        normalized per-row so the composite tracks both discrimination and scale."""
+        rt = torch.as_tensor(rows, device=device)
+        if not use_gs:
+            d = z - y_z[rt]
+            s = (d * d).sum() if loss_type == "msle" else d.abs().sum()
+            return float(s), len(rows)
+        s, cnt = 0.0, 0
+        m_pos = is_pos[rt]
+        if m_pos.any():
+            d = z[m_pos] - y_z[rt][m_pos]
+            s += float((d * d).sum() if loss_type == "msle" else d.abs().sum())
+            cnt += int(m_pos.sum())
+        m_gs = gs_t[rt] >= 0
+        if m_gs.any():
+            s += gs_w * float(F.cross_entropy(logits[m_gs], gs_t[rt][m_gs],
+                                              reduction="sum"))
+            cnt += int(m_gs.sum())
+        return s, cnt
 
     @torch.no_grad()
     def warmup_val(head, y_z):
@@ -207,10 +260,9 @@ def run(cfg, out_dir, device):
         num = den = 0.0
         for b0 in range(0, len(val_ids_sc), bs):
             bids = val_ids_sc[b0:b0 + bs]
-            z, rows = _cached_forward(head, "val", bids)
-            d = z - y_z[rows]
-            num += (d * d).sum().item() if loss_type == "msle" else d.abs().sum().item()
-            den += len(rows)
+            logits, z, rows = _cached_forward(head, "val", bids)
+            s, c = _val_metric(logits, z, rows, y_z)
+            num += s; den += c
         return num / max(den, 1)
 
     def epoch_pass(head, train, opt, y_z):
@@ -221,8 +273,9 @@ def run(cfg, out_dir, device):
         tot = 0.0
         for inp, _t, _l, cif_ids in loaders["train"]:
             opt.zero_grad()
-            z, rows = forward_batch(head, inp, cif_ids, grad_encoder=train and not head._frozen_enc)
-            loss = F.mse_loss(z, y_z[rows]) if loss_type == "msle" else F.l1_loss(z, y_z[rows])
+            logits, z, rows = forward_batch(head, inp, cif_ids,
+                                            grad_encoder=train and not head._frozen_enc)
+            loss = joint_loss(logits, z, rows, y_z)
             loss.backward(); opt.step(); tot += loss.item()
         return tot
 
@@ -231,10 +284,9 @@ def run(cfg, out_dir, device):
         head.eval(); model.eval()
         num = den = 0.0
         for inp, _t, _l, cif_ids in loaders["val"]:
-            z, rows = forward_batch(head, inp, cif_ids, grad_encoder=False)
-            d = z - y_z[rows]
-            num += (d * d).sum().item() if loss_type == "msle" else d.abs().sum().item()
-            den += len(rows)
+            logits, z, rows = forward_batch(head, inp, cif_ids, grad_encoder=False)
+            s, c = _val_metric(logits, z, rows, y_z)
+            num += s; den += c
         return num / max(den, 1)
 
     def fit_phase(head, params, lr, wd, epochs, patience, y_z, tag, log,
@@ -261,7 +313,7 @@ def run(cfg, out_dir, device):
         print(f"[ft] {tag} DONE: best val_z_mae {best:.4f} @ep{best_ep} ({ep + 1} epochs)", flush=True)
         return best
 
-    seed_preds, seed_logs, te_ids = [], [], None
+    seed_preds, seed_probs, seed_logs, te_ids = [], [], [], None
     base_state = copy.deepcopy(model.state_dict())   # restore the pretrained encoder per seed
     for seed in range(cfg.get("n_seeds", 3)):
         model.load_state_dict(base_state)
@@ -332,13 +384,21 @@ def run(cfg, out_dir, device):
 
         # ---- test predictions for this seed ----
         model.eval(); head.eval()
-        zs, bids = [], []
+        zs, lgs, bids = [], [], []
         with torch.no_grad():
             for inp, _t, _l, cif_ids in loaders["test"]:
-                z, _rows = forward_batch(head, inp, cif_ids, grad_encoder=False)
-                zs.append(z); bids += list(cif_ids)
-        k_pred = head.z_to_kelvin(torch.cat(zs)).cpu().numpy()
+                logits, z, _rows = forward_batch(head, inp, cif_ids, grad_encoder=False)
+                zs.append(z); lgs.append(logits); bids += list(cif_ids)
+        k_reg = head.z_to_kelvin(torch.cat(zs)).cpu().numpy()
+        probs = torch.softmax(torch.cat(lgs), dim=1).cpu().numpy()
+        if use_gs:
+            # hurdle: E[Tc] = P(SC) * Tc_reg — the classifier gates the scale, the
+            # regression (trained on SC only) carries it.
+            k_pred = probs[:, 0] * k_reg
+        else:
+            k_pred = k_reg
         seed_preds.append((bids, k_pred))
+        seed_probs.append((bids, probs))
         # per-seed single-model test MAE (the ensemble is the headline; this shows spread)
         seed_true = np.array([data["tc"][id2row[c]] for c in bids])
         seed_logs.append({"seed": seed, "val_z_mae": val_z,
@@ -350,15 +410,22 @@ def run(cfg, out_dir, device):
                 w = csv.DictWriter(f, fieldnames=list(log[0].keys())); w.writeheader(); w.writerows(log)
             te_ids = bids
 
-    # ---- ensemble in Kelvin over the shared test ids ----
+    # ---- ensemble in Kelvin (and class probs) over the shared test ids ----
     order = {c: i for i, c in enumerate(te_ids)}
     acc = np.zeros(len(te_ids))
     for bids, k_pred in seed_preds:
         for c, p in zip(bids, k_pred):
             acc[order[c]] += p
     head_K = acc / len(seed_preds)
+    n_cls = seed_probs[0][1].shape[1]
+    prob_acc = np.zeros((len(te_ids), n_cls))
+    for bids, probs in seed_probs:
+        for c, pr in zip(bids, probs):
+            prob_acc[order[c]] += pr
+    prob_te = prob_acc / len(seed_probs)
     rows = [id2row[c] for c in te_ids]
     tc_te = data["tc"][rows]; fam_te = data["family"][rows]; grp_te = data["group"][rows]
+    gs_te = data["gs"][rows]
     # Global MSLE / RMSE on test (MSLE = the 3DSC paper's metric; head_K already clamped >=0).
     _t = np.asarray(tc_te, float); _p = np.maximum(np.asarray(head_K, float), 0.0)
     msle = float(np.mean((np.log1p(_t) - np.log1p(_p)) ** 2))
@@ -369,12 +436,30 @@ def run(cfg, out_dir, device):
                "unfreeze": mode,
                "encoder_params_unfrozen": int(sum(p.numel() for p in enc_params)),
                "head": family_mae_report(tc_te, head_K, fam_te, grp_te)}
+    if use_gs:
+        # ground-state classifier report over the LABELED test rows (gs>=0):
+        # per-class precision/recall from the ensemble-averaged probabilities.
+        GS_NAMES = ["SC", "FM", "AFM", "both"][:n_cls]
+        lab = gs_te >= 0
+        y, yhat = gs_te[lab], prob_te[lab].argmax(1)
+        cls_report = {"n_labeled_test": int(lab.sum()),
+                      "accuracy": float((y == yhat).mean()) if lab.any() else None}
+        for k_, nm in enumerate(GS_NAMES):
+            tp = int(((yhat == k_) & (y == k_)).sum())
+            cls_report[nm] = {"n": int((y == k_).sum()),
+                              "precision": round(tp / max(int((yhat == k_).sum()), 1), 3),
+                              "recall": round(tp / max(int((y == k_).sum()), 1), 3)}
+        metrics["ground_state"] = cls_report
     with open(os.path.join(out_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=1)
     with open(os.path.join(out_dir, "predictions.csv"), "w") as f:
-        f.write("id,family,group,tc_true_K,tc_head_K\n")
+        extra = ",p_sc,gs_true,gs_pred" if use_gs else ""
+        f.write(f"id,family,group,tc_true_K,tc_head_K{extra}\n")
         for i, c in enumerate(te_ids):
-            f.write(f"{c},{fam_te[i]},{grp_te[i]},{tc_te[i]:.3f},{head_K[i]:.3f}\n")
+            base_row = f"{c},{fam_te[i]},{grp_te[i]},{tc_te[i]:.3f},{head_K[i]:.3f}"
+            if use_gs:
+                base_row += f",{prob_te[i, 0]:.4f},{int(gs_te[i])},{int(prob_te[i].argmax())}"
+            f.write(base_row + "\n")
     print(f"[finetune] {len(seed_preds)}-seed ensemble: MAE {metrics['head']['overall']['mae_K']:.2f} K | "
           f"RMSE {rmse:.2f} | MSLE {msle:.3f} | cuprate MAE {metrics['head'].get('family/Cuprate',{}).get('mae_K',float('nan')):.2f} "
           f"[split={metrics['split_group']}, loss={loss_type}, unfreeze={mode}]")
