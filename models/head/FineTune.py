@@ -453,9 +453,16 @@ def run(cfg, out_dir, device):
     _t = np.asarray(tc_te, float); _p = np.maximum(np.asarray(head_K, float), 0.0)
     msle = float(np.mean((np.log1p(_t) - np.log1p(_p)) ** 2))
     rmse = float(np.sqrt(np.mean((_t - _p) ** 2)))
+    # SC-only aggregate: on indexes with many tc=0 rows (magnetic negatives, parents)
+    # the pooled MAE is flattered by easy zeros (a 77%-zero test pool turned 7.0 K
+    # per-superconductor into a 3.05 headline) — report the tc>0 number ALWAYS.
+    _pos = _t > 0
+    mae_pos = float(np.abs(_t[_pos] - _p[_pos]).mean()) if _pos.any() else None
     metrics = {"finetune": True, "n_seeds": len(seed_preds), "seeds": seed_logs,
                "split_group": cfg.get("split_group", "parent"), "loss": loss_type,
                "msle": msle, "rmse_K": rmse,
+               "mae_tc_pos_K": mae_pos,
+               "n_test_tc_pos": int(_pos.sum()), "n_test_tc_zero": int((~_pos).sum()),
                "unfreeze": mode,
                "encoder_params_unfrozen": int(sum(p.numel() for p in enc_params)),
                "head": family_mae_report(tc_te, head_K, fam_te, grp_te)}
@@ -483,7 +490,8 @@ def run(cfg, out_dir, device):
             if use_gs:
                 base_row += f",{prob_te[i, 0]:.4f},{int(gs_te[i])},{int(prob_te[i].argmax())}"
             f.write(base_row + "\n")
-    print(f"[finetune] {len(seed_preds)}-seed ensemble: MAE {metrics['head']['overall']['mae_K']:.2f} K | "
+    print(f"[finetune] {len(seed_preds)}-seed ensemble: MAE {metrics['head']['overall']['mae_K']:.2f} K "
+          f"(SC-only {mae_pos:.2f} over {int(_pos.sum())}; {int((~_pos).sum())} tc=0 rows) | "
           f"RMSE {rmse:.2f} | MSLE {msle:.3f} | cuprate MAE {metrics['head'].get('family/Cuprate',{}).get('mae_K',float('nan')):.2f} "
           f"[split={metrics['split_group']}, loss={loss_type}, unfreeze={mode}]")
     print(f"run dir: {out_dir}")
