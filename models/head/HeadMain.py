@@ -43,7 +43,10 @@ DEFAULTS = {
     # Pooling of the per-atom embedding into one structure vector (see HeadModel):
     # "meanmax" (parameter-free, PCA on [mean||max]), "deepsets", or "attention".
     # pool_dim sizes the learned pools (out width = 2*pool_dim); ignored by meanmax.
-    "pooling": "meanmax", "pool_dim": 32,
+    # pool_dim=64 is the HPO-confirmed default (stage B 2026-07-17): vs 32 it cut
+    # chemsys SC-MAE 6.52->5.59 K and cuprate 18.5->15.6 K with tighter seed spread
+    # (MSLE ~unchanged — the win is Kelvin/cuprate capacity, not the log metric).
+    "pooling": "meanmax", "pool_dim": 64,
     "class_pretrain": True, "class_epochs": 300, "class_patience": 30,
     "class_lr": 3e-3, "class_weight_decay": 1e-4,
     "tc_epochs": 2000, "tc_patience": 100, "tc_lr": 3e-3,
