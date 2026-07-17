@@ -286,11 +286,15 @@ ${account_line}
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/%x-%j.out
-#SBATCH --error=logs/%x-%j.err
-source ~/.bashrc
-conda activate ${CONDA_ENV}
-cd ${REMOTE_PATH}
+#SBATCH --output=${REMOTE_PATH}/logs/%x-%j.out
+#SBATCH --error=${REMOTE_PATH}/logs/%x-%j.err
+
+set -euo pipefail
+${ENV_SETUP}
+
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+cd "${REMOTE_PATH}"
 mkdir -p model_data/hpo
 PYTHONHASHSEED=0 python scripts/head_hpo_sweep.py --target ${target} \\
     --n-configs ${n} --out model_data/hpo/head_${target}_${stamp}.csv
