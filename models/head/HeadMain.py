@@ -72,13 +72,19 @@ def _prepare_transfer_inputs(cfg, device):
     .npy or an existing descriptors pickle is reused untouched."""
     import glob
     embed_dir = cfg["embed_dir"]
+    # FineTune encodes graphs LIVE from the checkpoint (assemble require_embed=False) and
+    # never reads the precomputed embed_dir, so the (expensive) embedding pass — and its
+    # embed_source pack, which need not exist on a compute node — is pure waste for a
+    # finetune run. Only the descriptor table below is still needed. (The frozen-probe
+    # path DOES consume embed_dir, so it still gets built there.)
+    build_embeddings = not cfg.get("finetune")
     # `encoder`: "gps" = the learned encoder embedding (needs a checkpoint); "raw" = the
     # per-atom RAW node features the encoder ingests (ablation: does the encoder add
     # anything?). Defaults to "gps" when a checkpoint is set. Both arms share descriptors
     # so gps-vs-raw isolates the encoder's contribution.
     encoder = cfg.get("encoder") or ("gps" if cfg.get("checkpoint") else None)
     have_emb = os.path.isdir(embed_dir) and glob.glob(os.path.join(embed_dir, "*.npy"))
-    if encoder in ("gps", "raw") and not have_emb:
+    if build_embeddings and encoder in ("gps", "raw") and not have_emb:
         # The GPS encoder + data layer live under models/common + models/GPSTransformer;
         # put them on the path the same way the embed-gps CLI does before importing.
         import sys
@@ -99,7 +105,7 @@ def _prepare_transfer_inputs(cfg, device):
             print(f"[transfer] RAW node-feature embedding {source} -> {embed_dir}")
             embed_raw(source, embed_dir, feature_args=feat, device=device)
     aux = cfg.get("aux_meanmax_dir")
-    if aux and not (os.path.isdir(aux) and glob.glob(os.path.join(aux, "*.npy"))):
+    if build_embeddings and aux and not (os.path.isdir(aux) and glob.glob(os.path.join(aux, "*.npy"))):
         import sys
         for _p in (os.path.join("models", "common"), os.path.join("models", "GPSTransformer")):
             if _p not in sys.path:
