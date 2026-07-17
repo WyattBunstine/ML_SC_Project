@@ -235,7 +235,68 @@ sync_code() {
     rsync -a models/MPNN/*.py         "${SSH}:${REMOTE_PATH}/models/MPNN/"
     rsync -a models/GPSTransformer/*.py "${SSH}:${REMOTE_PATH}/models/GPSTransformer/"
     rsync -a models/OriginalCGCNN/*.py "${SSH}:${REMOTE_PATH}/models/OriginalCGCNN/"
+    # Transfer-head package + top-level scripts (the head HPO sweep runs remotely).
+    ssh "${SSH}" "mkdir -p '${REMOTE_PATH}/models/head' '${REMOTE_PATH}/scripts'"
+    rsync -a models/head/*.py      "${SSH}:${REMOTE_PATH}/models/head/"
+    rsync -a scripts/*.py          "${SSH}:${REMOTE_PATH}/scripts/"
     rsync -a configs/              "${SSH}:${REMOTE_PATH}/configs/"
+}
+
+# ---------------------------------------------------------------------------
+# Ship the transfer-HEAD data (index + descriptors + metadata + doped graphs) so
+# head training / the HPO sweep can run remotely. Checkpoints are already remote
+# (model_data/ is cluster-native). Idempotent rsync.
+# ---------------------------------------------------------------------------
+sync_head_data() {
+    local MPD="database/datafiles/MP"
+    ssh "${SSH}" "mkdir -p '${REMOTE_PATH}/${MPD}/graphs_v4_doped'"
+    rsync -a --info=progress2 \
+        "${MPD}/SC_MP_V4_doped.pickle" "${MPD}/descriptors_doped.pickle" \
+        "${MPD}/3DSC_MP.csv" \
+        "${SSH}:${REMOTE_PATH}/${MPD}/"
+    rsync -a --info=progress2 "${MPD}/graphs_v4_doped/" \
+        "${SSH}:${REMOTE_PATH}/${MPD}/graphs_v4_doped/"
+    echo ">> Head data sync complete."
+}
+
+# ---------------------------------------------------------------------------
+# Submit the stage-A head HPO sweep (scripts/head_hpo_sweep.py) as a 1-GPU job:
+#   ./scripts/deploy.sh sweep-head [target=msle] [n_configs=80]
+# One job runs the whole sweep sequentially against a single shared embedding
+# cache (the per-config cost is ~1-2 GPU-min); the leaderboard CSV lands in
+# remote model_data/hpo/ and comes back with `deploy.sh fetch`.
+# ---------------------------------------------------------------------------
+sweep_head() {
+    local target="${1:-msle}" n="${2:-80}"
+    local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
+    local job_name="hpo_head_${target}_${stamp}"
+    local job_file="jobs/${job_name}.slurm"
+    echo ">> Pushing code + head data..."
+    sync_code
+    sync_head_data
+    local account_line=""
+    [ -n "${SLURM_ACCOUNT}" ] && account_line="#SBATCH --account=${SLURM_ACCOUNT}"
+    ssh "${SSH}" "cat > '${REMOTE_PATH}/${job_file}'" <<EOF
+#!/usr/bin/env bash
+#SBATCH --job-name=${job_name}
+#SBATCH --partition=${SLURM_PARTITION}
+${account_line}
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48G
+#SBATCH --time=12:00:00
+#SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
+source ~/.bashrc
+conda activate ${CONDA_ENV}
+cd ${REMOTE_PATH}
+mkdir -p model_data/hpo
+PYTHONHASHSEED=0 python scripts/head_hpo_sweep.py --target ${target} \\
+    --n-configs ${n} --out model_data/hpo/head_${target}_${stamp}.csv
+EOF
+    echo ">> Submitting ${job_file} ..."
+    ssh "${SSH}" "cd '${REMOTE_PATH}' && sbatch '${job_file}'"
 }
 
 # ---------------------------------------------------------------------------
@@ -786,6 +847,8 @@ case "${cmd}" in
     augment-physics) augment_physics ;;
     pack-mptrj)  pack_mptrj "$@" ;;
     sync-dos-pack) sync_dos_pack "$@" ;;
+    sync-head-data) sync_head_data ;;
+    sweep-head) sweep_head "$@" ;;
     status)    status ;;
     logs)      logs "$@" ;;
     fetch)     fetch ;;
