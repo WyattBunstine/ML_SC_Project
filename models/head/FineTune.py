@@ -433,13 +433,17 @@ def run(cfg, out_dir, device):
                 w = csv.DictWriter(f, fieldnames=list(log[0].keys())); w.writeheader(); w.writerows(log)
             te_ids = bids
 
-    # ---- ensemble in Kelvin (and class probs) over the shared test ids ----
+    # ---- ensemble over the shared test ids: Kelvin-mean (default) or log-space ----
+    # ensemble_space "log": average seeds in log1p-Kelvin and expm1 back — the right
+    # aggregation when the reporting metric is MSLE (arithmetic Kelvin means are
+    # biased high in log space; the chemsys/XGBoost comparison is scored on MSLE).
+    log_ens = cfg.get("ensemble_space", "kelvin") == "log"
     order = {c: i for i, c in enumerate(te_ids)}
     acc = np.zeros(len(te_ids))
     for bids, k_pred in seed_preds:
         for c, p in zip(bids, k_pred):
-            acc[order[c]] += p
-    head_K = acc / len(seed_preds)
+            acc[order[c]] += np.log1p(max(p, 0.0)) if log_ens else p
+    head_K = np.expm1(acc / len(seed_preds)) if log_ens else acc / len(seed_preds)
     n_cls = seed_probs[0][1].shape[1]
     prob_acc = np.zeros((len(te_ids), n_cls))
     for bids, probs in seed_probs:
