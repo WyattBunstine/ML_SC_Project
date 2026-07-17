@@ -266,6 +266,50 @@ sync_head_data() {
 # cache (the per-config cost is ~1-2 GPU-min); the leaderboard CSV lands in
 # remote model_data/hpo/ and comes back with `deploy.sh fetch`.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Submit a train-HEAD job that runs one or more head configs in sequence
+# (scripts/run_head.py -> HeadMain.run, the train-head entrypoint), as a 1-GPU
+# job. For HPO stage B / any head fine-tune on the cluster:
+#   ./scripts/deploy.sh run-head configs/head/a.json configs/head/b.json ...
+# Run dirs land under remote model_data/<date>/ and return via `fetch`.
+# ---------------------------------------------------------------------------
+run_head() {
+    [ "$#" -ge 1 ] || { echo "ERROR: pass >=1 head config"; exit 1; }
+    for c in "$@"; do [ -f "$c" ] || { echo "ERROR: config not found: $c"; exit 1; }; done
+    local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
+    local job_name="head_batch_${stamp}"
+    local job_file="jobs/${job_name}.slurm"
+    local cfg_rel=""; for c in "$@"; do cfg_rel="${cfg_rel} ${c#./}"; done
+    echo ">> Pushing code + head data..."
+    sync_code
+    sync_head_data
+    local account_line=""
+    [ -n "${SLURM_ACCOUNT}" ] && account_line="#SBATCH --account=${SLURM_ACCOUNT}"
+    ssh "${SSH}" "cat > '${REMOTE_PATH}/${job_file}'" <<EOF
+#!/usr/bin/env bash
+#SBATCH --job-name=${job_name}
+#SBATCH --partition=${SLURM_PARTITION}
+${account_line}
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48G
+#SBATCH --time=12:00:00
+#SBATCH --output=${REMOTE_PATH}/logs/%x-%j.out
+#SBATCH --error=${REMOTE_PATH}/logs/%x-%j.err
+
+set -euo pipefail
+${ENV_SETUP}
+
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+cd "${REMOTE_PATH}"
+PYTHONHASHSEED=0 python scripts/run_head.py${cfg_rel}
+EOF
+    echo ">> Submitting ${job_file} (configs:${cfg_rel}) ..."
+    ssh "${SSH}" "cd '${REMOTE_PATH}' && sbatch '${job_file}'"
+}
+
 sweep_head() {
     local target="${1:-msle}" n="${2:-80}"
     local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
@@ -853,6 +897,7 @@ case "${cmd}" in
     sync-dos-pack) sync_dos_pack "$@" ;;
     sync-head-data) sync_head_data ;;
     sweep-head) sweep_head "$@" ;;
+    run-head) run_head "$@" ;;
     status)    status ;;
     logs)      logs "$@" ;;
     fetch)     fetch ;;
