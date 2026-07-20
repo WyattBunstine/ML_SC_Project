@@ -24,6 +24,7 @@ import warnings
 
 import torch
 import torch.nn as nn
+from torch.nn.attention import sdpa_kernel, SDPBackend
 
 # Neutral data constants (the angle-RBF basis shared by the featurization); not
 # model code, so importing from common keeps GPS independent of MPNN.
@@ -170,18 +171,26 @@ class WithinCrystalAttention(nn.Module):
         h = self.norm(x)
         padded = x.new_zeros(B, Lmax, h.shape[-1])
         padded[seg, intra] = h
-        if dist_bias is None:
-            attended, _ = self.attn(padded, padded, padded,
-                                    key_padding_mask=key_pad, need_weights=False)
-        else:
-            # One additive float mask (B*heads, Lmax, Lmax): the distance bias, with
-            # padded KEYS set to dtype.min (fp16/bf16-safe) for all queries.
-            neg = torch.finfo(padded.dtype).min
-            am = dist_bias.reshape(B * self.n_heads, Lmax, Lmax).to(padded.dtype)
-            am = am.masked_fill(
-                key_pad.repeat_interleave(self.n_heads, dim=0).unsqueeze(1), neg)
-            attended, _ = self.attn(padded, padded, padded,
-                                    attn_mask=am, need_weights=False)
+        # Force the MATH SDPA kernel: nn.MultiheadAttention dispatches to the fused
+        # flash/mem-efficient CUDA kernels, whose backward is NOT double-backward-
+        # differentiable — and the multitask trainer takes a second backward through
+        # this attention for the conservative forces (autograd.grad(E, cart,
+        # create_graph=True)). Only the math kernel supports that higher-order grad.
+        # N is per-crystal (block-diagonal, Lmax bounded by max cell atoms), so the
+        # math kernel's O(N^2) materialization is cheap here.
+        with sdpa_kernel(SDPBackend.MATH):
+            if dist_bias is None:
+                attended, _ = self.attn(padded, padded, padded,
+                                        key_padding_mask=key_pad, need_weights=False)
+            else:
+                # One additive float mask (B*heads, Lmax, Lmax): the distance bias, with
+                # padded KEYS set to dtype.min (fp16/bf16-safe) for all queries.
+                neg = torch.finfo(padded.dtype).min
+                am = dist_bias.reshape(B * self.n_heads, Lmax, Lmax).to(padded.dtype)
+                am = am.masked_fill(
+                    key_pad.repeat_interleave(self.n_heads, dim=0).unsqueeze(1), neg)
+                attended, _ = self.attn(padded, padded, padded,
+                                        attn_mask=am, need_weights=False)
         return x + attended[seg, intra]
 
 
