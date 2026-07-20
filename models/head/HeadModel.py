@@ -62,16 +62,33 @@ def _segment_softmax(scores, seg, n):
 class DeepSetsPool(nn.Module):
     """pooled = [mean_i g(h_i) || max_i g(h_i)] — a per-atom map THEN aggregate,
     matching the encoder's pretraining readout (mean of a per-atom head). The
-    nonlinearity acts before pooling, which plain mean||max cannot express."""
+    nonlinearity acts before pooling, which plain mean||max cannot express.
 
-    def __init__(self, in_dim: int, pool_dim: int = 32):
+    Pooling-size study knobs (small-sample regime):
+    - ``rank``: LOW-RANK g (in->rank->pool_dim) decouples capacity from output
+      width — e.g. 128->16->64 is ~3.1k params vs the full 128->64's ~8.3k, at
+      the SAME pooled width. None -> the full single Linear (default, unchanged).
+    - ``agg``: which aggregations to concat — "meanmax" (default, out=2*pool_dim),
+      "mean" or "max" (out=pool_dim). Tests where the (cuprate) signal lives: the
+      max branch captures the single most extreme site (the active sublattice)."""
+
+    def __init__(self, in_dim: int, pool_dim: int = 32, rank: int = None, agg: str = "meanmax"):
         super().__init__()
-        self.g = nn.Linear(in_dim, pool_dim)
+        if rank:
+            self.g = nn.Sequential(nn.Linear(in_dim, int(rank)), nn.Softplus(),
+                                   nn.Linear(int(rank), pool_dim))
+        else:
+            self.g = nn.Sequential(nn.Linear(in_dim, pool_dim))
         self.act = nn.Softplus()
-        self.out_dim = 2 * pool_dim
+        self.agg = agg
+        self.out_dim = pool_dim * (2 if agg == "meanmax" else 1)
 
     def forward(self, x, seg, n):
         g = self.act(self.g(x))
+        if self.agg == "mean":
+            return _segment_mean(g, seg, n)
+        if self.agg == "max":
+            return _segment_max(g, seg, n)
         return torch.cat([_segment_mean(g, seg, n), _segment_max(g, seg, n)], dim=1)
 
 
@@ -157,7 +174,8 @@ class TcHead(nn.Module):
     def __init__(self, enc_dim: int, phys_dim: int, pca_k: int = 64,
                  hidden: int = 64, dropout: float = 0.2,
                  pooling: str = "meanmax", pool_dim: int = 32,
-                 n_classes: int = 2, head_arch: str = "concat"):
+                 n_classes: int = 2, head_arch: str = "concat",
+                 pool_rank: int = None, pool_agg: str = "meanmax"):
         super().__init__()
         # `enc_dim` is the pooled width (2*D) for meanmax, the per-atom width (D)
         # for the learned pools — HeadMain passes the right one.
@@ -166,7 +184,7 @@ class TcHead(nn.Module):
             self.pca = PCAWhiten(enc_dim, pca_k)
             pooled_dim = pca_k
         elif pooling == "deepsets":
-            self.pool = DeepSetsPool(enc_dim, pool_dim)
+            self.pool = DeepSetsPool(enc_dim, pool_dim, rank=pool_rank, agg=pool_agg)
             pooled_dim = self.pool.out_dim
         elif pooling == "attention":
             self.pool = AttentionPool(enc_dim, pool_dim)
