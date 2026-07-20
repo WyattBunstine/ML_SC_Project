@@ -209,7 +209,9 @@ def run(cfg, out_dir, device):
         head = TcHead(enc_dim, phys_t.shape[1], cfg["pca_k"], cfg["hidden"],
                       cfg["dropout"], pooling="deepsets", pool_dim=pool_dim,
                       n_classes=(int(cfg.get("n_gs_classes", 4)) if use_gs else 2),
-                      head_arch=cfg.get("head_arch", "concat")).to(device)
+                      head_arch=cfg.get("head_arch", "concat"),
+                      pool_rank=cfg.get("pool_rank"),
+                      pool_agg=cfg.get("pool_agg", "meanmax")).to(device)
         head.fit_target(tc_tr)
         head.phys_std.fit(phys_t[tr_rows].cpu()); head.to(device)
         return head
