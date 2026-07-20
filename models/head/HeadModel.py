@@ -157,7 +157,7 @@ class TcHead(nn.Module):
     def __init__(self, enc_dim: int, phys_dim: int, pca_k: int = 64,
                  hidden: int = 64, dropout: float = 0.2,
                  pooling: str = "meanmax", pool_dim: int = 32,
-                 n_classes: int = 2):
+                 n_classes: int = 2, head_arch: str = "concat"):
         super().__init__()
         # `enc_dim` is the pooled width (2*D) for meanmax, the per-atom width (D)
         # for the learned pools — HeadMain passes the right one.
@@ -174,7 +174,18 @@ class TcHead(nn.Module):
         else:
             raise ValueError(f"unknown pooling {pooling!r}")
         self.phys_std = Standardizer(phys_dim)
-        in_dim = pooled_dim + phys_dim
+        # head_arch — how the composition descriptors enter (small-sample regime):
+        #   "concat"      : [pooled || phys] -> trunk (the fusion default)
+        #   "struct_only" : trunk sees the structure embedding ALONE (no phys) — a
+        #                   diagnostic of how much Tc signal the encoder h carries unaided
+        #   "resid"       : trunk sees structure only AND a direct LINEAR composition
+        #                   head is ADDED to the Tc output, so the structure MLP learns
+        #                   only the RESIDUAL over composition (the wide-and-deep
+        #                   regularizer — composition is what XGBoost already fits well).
+        self.head_arch = head_arch
+        in_dim = (pooled_dim + phys_dim) if head_arch == "concat" else pooled_dim
+        if head_arch == "resid":
+            self.comp_head = nn.Linear(phys_dim, 1)   # linear composition -> z
         self.norm = nn.LayerNorm(in_dim)
         self.trunk = nn.Sequential(nn.Linear(in_dim, hidden), nn.Softplus(),
                                    nn.Dropout(dropout))
@@ -212,11 +223,16 @@ class TcHead(nn.Module):
 
     def features(self, x, phys, seg=None, n=None) -> torch.Tensor:
         pooled = self._pooled(x, seg, n)
-        return self.trunk(self.norm(torch.cat([pooled, self.phys_std(phys)], dim=1)))
+        if self.head_arch == "concat":
+            pooled = torch.cat([pooled, self.phys_std(phys)], dim=1)
+        return self.trunk(self.norm(pooled))          # struct_only/resid: structure alone
 
     def forward(self, x, phys, seg=None, n=None):
         h = self.features(x, phys, seg, n)
-        return self.class_head(h), self.tc_head(h).squeeze(-1)
+        tc_z = self.tc_head(h).squeeze(-1)
+        if self.head_arch == "resid":                 # + linear composition term
+            tc_z = tc_z + self.comp_head(self.phys_std(phys)).squeeze(-1)
+        return self.class_head(h), tc_z
 
     def n_fresh_params(self) -> int:
         """Trainable parameters (buffers excluded) — the budgeted quantity."""
