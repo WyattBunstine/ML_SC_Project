@@ -39,9 +39,15 @@ from HeadModel import TcHead  # noqa: E402
 
 
 def sample_config(rng):
+    # NOTE: axes added 2026-07-21 (pool_agg/pool_rank/head_arch) — the sampler
+    # is seeded, so this changes which config index i maps to; a resumed sweep
+    # must not straddle the change (fresh --out per sampler version).
     return {
         "hidden": rng.choice([32, 64, 128, 192]),
-        "pool_dim": rng.choice([16, 32, 64]),
+        "pool_dim": rng.choice([16, 32, 64, 128]),
+        "pool_agg": rng.choice(["meanmax", "mean", "max"]),
+        "pool_rank": rng.choice([0, 16, 32]),          # 0 = full-rank g
+        "head_arch": rng.choice(["concat", "concat", "struct_only", "resid"]),
         "dropout": round(rng.uniform(0.05, 0.35), 3),
         "tc_lr": float(np.exp(rng.uniform(np.log(3e-4), np.log(1e-2)))),
         "tc_weight_decay": float(np.exp(rng.uniform(np.log(1e-5), np.log(3e-3)))),
@@ -128,8 +134,11 @@ def main():
 
     def run_config(cfg, seed=0):
         torch.manual_seed(seed)
+        rank = int(cfg.get("pool_rank", 0)) or None    # 0 = full-rank g
         head = TcHead(enc_dim, phys_t.shape[1], 64, int(cfg["hidden"]), float(cfg["dropout"]),
-                      pooling="deepsets", pool_dim=int(cfg["pool_dim"])).to(device)
+                      pooling="deepsets", pool_dim=int(cfg["pool_dim"]), pool_rank=rank,
+                      head_arch=str(cfg.get("head_arch", "concat")),
+                      pool_agg=str(cfg.get("pool_agg", "meanmax"))).to(device)
         head.fit_target(tc_t[tr_rows].cpu())
         head.phys_std.fit(phys_t[tr_rows].cpu()); head.to(device)
         y_z = head.target_to_z(tc_t)
