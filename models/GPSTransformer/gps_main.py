@@ -132,7 +132,24 @@ def main():
                    else [args["index_path"]])
     if len(index_paths) > 1 and not multitask:
         sys.exit("multiple index_path entries (a masked-union) require a multitask `tasks` config.")
-    _subsets = [load_cif_dataset(ip, **_ds_kw) for ip in index_paths]
+    # Masked-union member sampling weights (config "member_weights", one int per
+    # index_path; default all 1 = current behavior). The union samples uniformly by
+    # global index, so the MPtrj bulk (~580k frames) drowns the smaller SC-relevant
+    # members (DOS ~62k, disorder corpus ~12k) ~46:1 — a member seen ~2% of the time
+    # can't reshape the representation. Repeating a member's dataset OVERSAMPLES it and
+    # shares the underlying pack memmap (no extra memory); the material-level split puts
+    # every copy of a material in the same fold (no train/val leak).
+    member_weights = args.get("member_weights", [1] * len(index_paths))
+    if len(member_weights) != len(index_paths):
+        sys.exit(f"member_weights ({len(member_weights)}) must match "
+                 f"index_path members ({len(index_paths)})")
+    _subsets = []
+    for ip, w in zip(index_paths, member_weights):
+        ds = load_cif_dataset(ip, **_ds_kw)
+        _subsets.extend([ds] * int(w))
+    if any(w != 1 for w in member_weights):
+        print(f"masked-union member_weights {member_weights} -> {len(_subsets)} "
+              f"effective members ({sum(len(s) for s in _subsets):,} samples)", flush=True)
     dataset = _subsets[0] if len(_subsets) == 1 else ConcatMTDataset(_subsets)
 
     split_by = resolve_split_by(args.get("split_by"), dataset)
