@@ -78,8 +78,9 @@ def _prepare_transfer_inputs(cfg, device):
     # FineTune encodes graphs LIVE from the checkpoint (assemble require_embed=False) and
     # never reads the precomputed embed_dir, so the (expensive) embedding pass — and its
     # embed_source pack, which need not exist on a compute node — is pure waste for a
-    # finetune run. Only the descriptor table below is still needed. (The frozen-probe
-    # path DOES consume embed_dir, so it still gets built there.)
+    # finetune run. The descriptor table AND any aux_meanmax_dir are still needed
+    # (the aux build below is deliberately not gated). (The frozen-probe path DOES
+    # consume embed_dir, so it still gets built there.)
     build_embeddings = not cfg.get("finetune")
     # `encoder`: "gps" = the learned encoder embedding (needs a checkpoint); "raw" = the
     # per-atom RAW node features the encoder ingests (ablation: does the encoder add
@@ -107,8 +108,12 @@ def _prepare_transfer_inputs(cfg, device):
             from models.head.embed_gps import embed_raw
             print(f"[transfer] RAW node-feature embedding {source} -> {embed_dir}")
             embed_raw(source, embed_dir, feature_args=feat, device=device)
+    # NOTE: the finetune fast-path (build_embeddings=False) must NOT gate the aux
+    # build — unlike embed_dir, aux_meanmax_dir IS consumed by FineTune (assemble
+    # folds it into phys and silently drops rows whose aux .npy is missing, then
+    # FineTune's id-mismatch assert kills the run on a fresh node).
     aux = cfg.get("aux_meanmax_dir")
-    if build_embeddings and aux and not (os.path.isdir(aux) and glob.glob(os.path.join(aux, "*.npy"))):
+    if aux and not (os.path.isdir(aux) and glob.glob(os.path.join(aux, "*.npy"))):
         import sys
         for _p in (os.path.join("models", "common"), os.path.join("models", "GPSTransformer")):
             if _p not in sys.path:
@@ -303,9 +308,15 @@ def run(config_path):
     seed_preds, seed_logs = [], []
     for seed in range(cfg["n_seeds"]):
         torch.manual_seed(seed)
+        # Forward the head-architecture knobs exactly like FineTune.make_head does —
+        # a frozen config setting head_arch/pool_rank/pool_agg must train what its
+        # config.json records, not silently fall back to the concat/meanmax default.
         model = TcHead(enc_dim_head if learned_pool else enc.shape[1], phys.shape[1],
                        cfg["pca_k"], cfg["hidden"], cfg["dropout"],
-                       pooling=pooling, pool_dim=cfg["pool_dim"]).to(device)
+                       pooling=pooling, pool_dim=cfg["pool_dim"],
+                       head_arch=cfg.get("head_arch", "concat"),
+                       pool_rank=cfg.get("pool_rank"),
+                       pool_agg=cfg.get("pool_agg", "meanmax")).to(device)
         metrics["fresh_params"] = model.n_fresh_params()
         model.fit_target(tc[sc_mask["train"]].cpu())
         # PCA + standardizers fit on the widest training pool this seed sees.

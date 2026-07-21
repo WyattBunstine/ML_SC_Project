@@ -29,6 +29,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from models.head.embed_cache import build_embed_cache, cat_cached
 from models.head.HeadData import (assemble, chemsys_groups, family_mae_report,
                                   make_splits, parent_composition_groups)
 from models.head.HeadModel import TcHead
@@ -53,15 +54,53 @@ def _encoder(checkpoint_path, index_path, device):
     return model.to(device), ds, collate_pool_geom
 
 
+VALID_LOSSES = ("l1", "msle", "mse_k", "wl1_k")
+
+
+def reg_loss(z, y_z_sel, tc_sel, loss_type, tc_mean, tc_std, k_var=1.0, k_wmean=1.0):
+    """One regression term, per the configured loss space. Shared by the fine-tune
+    protocol (run) and the stage-A head HPO sweep so the two can't drift.
+      l1     — L1 in z (log1p-standardized): the historical default; small-error
+               mass dominates, family-scale misses on rare rows can hide.
+      msle   — MSE in z: emphasizes RELATIVE error (a 0.5->2 K miss ~ a 30->120).
+      mse_k  — MSE in KELVIN: a 24 K miss costs 576x a 1 K miss — targets the
+               don't-care-about-small-errors regime (found: the val09 champion
+               under-predicted every >20 K iron-based by ~24 K and L1 never saw
+               it). Kelvin map is unclamped below (gradients survive pred<0) but
+               the exponent is capped at 30 (~1e13 K, far beyond physics): fp32
+               expm1 overflows near 88 and the MSE square near 44, and one inf
+               loss NaN-poisons the weights for the rest of the run. Normalized
+               by Var(Tc_train) for optimizer-scale sanity.
+      wl1_k  — L1 in z weighted by (1+Tc_true): the same emphasis direction,
+               robust to high-Tc label noise (the 130 K near-duplicate problem).
+    """
+    if loss_type == "msle":
+        return F.mse_loss(z, y_z_sel)
+    if loss_type == "mse_k":
+        k = torch.expm1((z * tc_std + tc_mean).clamp(max=30.0))
+        return F.mse_loss(k, tc_sel) / k_var
+    if loss_type == "wl1_k":
+        w = (1.0 + tc_sel) / k_wmean
+        return (w * (z - y_z_sel).abs()).mean()
+    if loss_type == "l1":
+        return F.l1_loss(z, y_z_sel)
+    raise ValueError(f"unknown loss {loss_type!r} (use one of {VALID_LOSSES})")
+
+
 def run(cfg, out_dir, device):
     from torch.utils.data import DataLoader, Subset
 
     bs = cfg.get("ft_batch_size", 64)
     pool_dim = cfg["pool_dim"]
-    # Loss/early-stop objective in z (= standardized log1p) space: "l1" (default) or
-    # "msle" (squared log error -> MSE in z-space, which equals MSLE up to a constant,
-    # matching the 3DSC XGBoost objective).
+    # Loss/early-stop objective (see reg_loss for the spaces). Validated HERE so a
+    # typo'd config fails at startup instead of silently training the l1 fallback
+    # while metrics.json records the intended loss name.
     loss_type = cfg.get("loss", "l1")
+    if loss_type not in VALID_LOSSES:
+        raise ValueError(f"unknown loss {loss_type!r} (use one of {VALID_LOSSES})")
+    ens_space = cfg.get("ensemble_space", "kelvin")
+    if ens_space not in ("kelvin", "log"):
+        raise ValueError(f"unknown ensemble_space {ens_space!r} (use 'kelvin' or 'log')")
     # ---- static tables (descriptors, tc, family) + the leak-free parent-grouped split ----
     # pooling="meanmax" just so assemble doesn't pack the per-atom CSR we don't need here;
     # we only consume phys / tc / family / ids, and the encoder supplies embeddings live.
@@ -156,27 +195,10 @@ def run(cfg, out_dir, device):
         return logits, z, rows
 
     def _reg_loss(head, z, y_z_sel, tc_sel):
-        """One regression term, per the configured loss space:
-          l1     — L1 in z (log1p-standardized): the historical default; small-error
-                   mass dominates, family-scale misses on rare rows can hide.
-          msle   — MSE in z: emphasizes RELATIVE error (a 0.5->2 K miss ~ a 30->120).
-          mse_k  — MSE in KELVIN: a 24 K miss costs 576x a 1 K miss — targets the
-                   don't-care-about-small-errors regime (found: the val09 champion
-                   under-predicted every >20 K iron-based by ~24 K and L1 never saw
-                   it). Uses the UNCLAMPED Kelvin map so gradients survive pred<0;
-                   normalized by Var(Tc_train) for optimizer-scale sanity.
-          wl1_k  — L1 in z weighted by (1+Tc_true): the same emphasis direction,
-                   robust to high-Tc label noise (the 130 K near-duplicate problem).
-        """
-        if loss_type == "msle":
-            return F.mse_loss(z, y_z_sel)
-        if loss_type == "mse_k":
-            k = torch.expm1(z * head.tc_std + head.tc_mean)
-            return F.mse_loss(k, tc_sel) / k_var
-        if loss_type == "wl1_k":
-            w = (1.0 + tc_sel) / k_wmean
-            return (w * (z - y_z_sel).abs()).mean()
-        return F.l1_loss(z, y_z_sel)
+        # Delegates to the shared module-level reg_loss (also used by the head HPO
+        # sweep); the head supplies the train-fit z<->Kelvin constants for mse_k.
+        return reg_loss(z, y_z_sel, tc_sel, loss_type,
+                        head.tc_mean, head.tc_std, k_var, k_wmean)
 
     def joint_loss(head, logits, z, rows, y_z):
         """Legacy: plain regression over the batch. Hurdle: regression on tc>0 rows +
@@ -223,26 +245,13 @@ def run(cfg, out_dir, device):
     # the head on cached tensors — removes ~(warmup_epochs x n_seeds) redundant full
     # encoder passes + per-access JSON graph rebuilds. Phase B fine-tunes the encoder,
     # so it keeps encoding live through the loaders.
-    @torch.no_grad()
-    def _encode_cached(split):
-        model.eval()
-        cache = {}
-        for inp, _t, _l, cif_ids in loaders[split]:
-            inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in inp)
-            seg = inp[6].to(device).long()
-            h = model.encode(*inp)
-            for c, cid in enumerate(cif_ids):
-                cache[cid] = h[seg == c]
-        return cache
-
-    h_cache = {"train": _encode_cached("train"), "val": _encode_cached("val")}
+    h_cache = {"train": build_embed_cache(model, loaders["train"], device),
+               "val": build_embed_cache(model, loaders["val"], device)}
     train_ids_sc = [ds_ids[i] for i in split_indices("train")]
     val_ids_sc = [ds_ids[i] for i in split_indices("val")]
 
     def _cached_forward(head, split, bids):
-        h = torch.cat([h_cache[split][c] for c in bids])
-        counts = torch.tensor([h_cache[split][c].shape[0] for c in bids], device=device)
-        seg = torch.repeat_interleave(torch.arange(len(bids), device=device), counts)
+        h, seg = cat_cached(h_cache[split], bids, device)
         phys_b, rows = batch_static(bids)
         logits, z = head(h, phys_b, seg=seg, n=len(bids))
         return logits, z, rows
@@ -425,10 +434,17 @@ def run(cfg, out_dir, device):
             k_pred = k_reg
         seed_preds.append((bids, k_pred))
         seed_probs.append((bids, probs))
-        # per-seed single-model test MAE (the ensemble is the headline; this shows spread)
+        # per-seed single-model test MAE (the ensemble is the headline; this shows
+        # spread). Named explicitly: _all_K pools every test row INCLUDING tc=0
+        # (flattered by easy zeros on negative-rich pools), _pos_K is SC-only —
+        # the one comparable to the headline mae_tc_pos_K.
         seed_true = np.array([data["tc"][id2row[c]] for c in bids])
+        seed_pos = seed_true > 0
         seed_logs.append({"seed": seed, "val_z_mae": val_z,
-                          "test_mae_K": float(np.abs(seed_true - k_pred).mean()),
+                          "test_mae_all_K": float(np.abs(seed_true - k_pred).mean()),
+                          "test_mae_pos_K": (float(np.abs(seed_true[seed_pos]
+                                                          - k_pred[seed_pos]).mean())
+                                             if seed_pos.any() else None),
                           "unfreeze": mode,
                           "encoder_params_unfrozen": int(sum(p.numel() for p in enc_params))})
         if seed == 0:
@@ -440,7 +456,7 @@ def run(cfg, out_dir, device):
     # ensemble_space "log": average seeds in log1p-Kelvin and expm1 back — the right
     # aggregation when the reporting metric is MSLE (arithmetic Kelvin means are
     # biased high in log space; the chemsys/XGBoost comparison is scored on MSLE).
-    log_ens = cfg.get("ensemble_space", "kelvin") == "log"
+    log_ens = ens_space == "log"
     order = {c: i for i, c in enumerate(te_ids)}
     acc = np.zeros(len(te_ids))
     for bids, k_pred in seed_preds:
@@ -497,8 +513,11 @@ def run(cfg, out_dir, device):
             if use_gs:
                 base_row += f",{prob_te[i, 0]:.4f},{int(gs_te[i])},{int(prob_te[i].argmax())}"
             f.write(base_row + "\n")
+    # mae_pos is None when the test pool has no tc>0 rows (e.g. a negatives-only
+    # holdout) — don't crash the summary print after all seeds trained.
+    _sc_str = f"{mae_pos:.2f}" if mae_pos is not None else "n/a"
     print(f"[finetune] {len(seed_preds)}-seed ensemble: MAE {metrics['head']['overall']['mae_K']:.2f} K "
-          f"(SC-only {mae_pos:.2f} over {int(_pos.sum())}; {int((~_pos).sum())} tc=0 rows) | "
+          f"(SC-only {_sc_str} over {int(_pos.sum())}; {int((~_pos).sum())} tc=0 rows) | "
           f"RMSE {rmse:.2f} | MSLE {msle:.3f} | cuprate MAE {metrics['head'].get('family/Cuprate',{}).get('mae_K',float('nan')):.2f} "
           f"[split={metrics['split_group']}, loss={loss_type}, unfreeze={mode}]")
     print(f"run dir: {out_dir}")

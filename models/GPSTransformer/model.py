@@ -20,10 +20,13 @@ ECoN-prior logits, multi-task heads (forces/magmom/DOS), position-differentiable
 forces.
 """
 
+import contextlib
 import warnings
 
 import torch
 import torch.nn as nn
+# torch>=2.3 (torch.nn.attention appeared in 2.3; the pre-2.3 API was
+# torch.backends.cuda.sdp_kernel) — pinned in requirements.txt.
 from torch.nn.attention import sdpa_kernel, SDPBackend
 
 # Neutral data constants (the angle-RBF basis shared by the featurization); not
@@ -171,14 +174,19 @@ class WithinCrystalAttention(nn.Module):
         h = self.norm(x)
         padded = x.new_zeros(B, Lmax, h.shape[-1])
         padded[seg, intra] = h
-        # Force the MATH SDPA kernel: nn.MultiheadAttention dispatches to the fused
-        # flash/mem-efficient CUDA kernels, whose backward is NOT double-backward-
-        # differentiable — and the multitask trainer takes a second backward through
-        # this attention for the conservative forces (autograd.grad(E, cart,
-        # create_graph=True)). Only the math kernel supports that higher-order grad.
-        # N is per-crystal (block-diagonal, Lmax bounded by max cell atoms), so the
-        # math kernel's O(N^2) materialization is cheap here.
-        with sdpa_kernel(SDPBackend.MATH):
+        # Force the MATH SDPA kernel when a backward is possible: nn.MultiheadAttention
+        # dispatches to the fused flash/mem-efficient CUDA kernels, whose backward is
+        # NOT double-backward-differentiable — and the multitask trainer takes a second
+        # backward through this attention for the conservative forces
+        # (autograd.grad(E, cart, create_graph=True)). Only the math kernel supports
+        # that higher-order grad. Under no_grad (frozen probes, embedding passes,
+        # cached-encode loops) no backward can exist, so the fused kernels are safe —
+        # gate on grad mode rather than taxing every inference forward. N is
+        # per-crystal (block-diagonal, Lmax bounded by max cell atoms), so the math
+        # kernel's O(N^2) materialization is cheap where it does apply.
+        _ctx = (sdpa_kernel(SDPBackend.MATH) if torch.is_grad_enabled()
+                else contextlib.nullcontext())
+        with _ctx:
             if dist_bias is None:
                 attended, _ = self.attn(padded, padded, padded,
                                         key_padding_mask=key_pad, need_weights=False)

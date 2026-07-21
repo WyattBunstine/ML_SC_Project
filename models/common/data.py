@@ -1695,7 +1695,8 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
                          pin_memory=False, seed=123, split_by="frame",
                          size_grouped=False, max_atoms_per_batch=None,
                          size_pool_factor=20, prefetch_factor=None,
-                         collate_fn=collate_pool, dist_info=None):
+                         collate_fn=collate_pool, dist_info=None,
+                         train_index_weights=None):
     """Build SC/non-SC loaders shared by the regression and classification tasks.
 
     Stratified per-class split into train/val/test. ``sc_to_nonsc_ratio`` governs
@@ -1708,6 +1709,14 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
 
     With the default ratio of inf, no non-SC are used in ANY split: train, val, and
     test are all SC-only (so non-SC entries never leak into the eval sets).
+
+    ``train_index_weights`` (per-global-index integer multiplicity, e.g. from a
+    masked-union's member_weights) oversamples the TRAIN loader only: train indices
+    are replicated w times at sampler construction. Val/test stay at natural
+    multiplicity, so early stopping and reported metrics are the uniform per-sample
+    statistics, comparable across weighted and unweighted runs; the returned
+    train_sc_idx / train_nonsc_idx also stay unweighted (they feed the feature/
+    target normalizers, which should reflect the natural data distribution).
 
     Returns a dict: train, val_realistic, val_balanced, test_realistic,
     test_balanced, split_sizes, and the train-pool index lists
@@ -1813,14 +1822,21 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
     # the train set; val/test stay whole (rank 0 validates). Non-distributed -> the
     # BalancedEpochSampler path, byte-identical. DDP here targets the all-SC multitask
     # pretraining (ratio=inf -> ns_train unused), so sharding sc_train is the full train set.
+    def _weighted(idx):
+        # Train-only oversampling: replicate index i train_index_weights[i] times.
+        if train_index_weights is None:
+            return idx
+        return [i for i in idx for _ in range(int(train_index_weights[i]))]
+
+    sc_train_w, ns_train_w = _weighted(sc_train), _weighted(ns_train)
     train_shard_sampler = None
     if dist_info is not None and getattr(dist_info, "enabled", False):
         train_shard_sampler = DistributedShardSampler(
-            sc_train, dist_info.world_size, dist_info.rank, seed=seed)
+            sc_train_w, dist_info.world_size, dist_info.rank, seed=seed)
         train_loader = make_loader(train_shard_sampler)
     else:
         train_loader = make_loader(
-            BalancedEpochSampler(sc_train, ns_train, n_nonsc_train, seed=seed))
+            BalancedEpochSampler(sc_train_w, ns_train_w, n_nonsc_train, seed=seed))
 
     return {
         "train": train_loader,
@@ -1842,5 +1858,7 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
             "train_nonsc_per_epoch": n_nonsc_train,
             "val_sc": len(sc_val), "val_nonsc": len(ns_val_keep),
             "test_sc": len(sc_test), "test_nonsc": len(ns_test_keep),
+            **({"train_sc_weighted": len(sc_train_w)}
+               if train_index_weights is not None else {}),
         },
     }

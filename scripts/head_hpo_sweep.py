@@ -17,7 +17,6 @@ first N already-scored configs (the sampler is seeded, so config i is stable).
       --split-group chemsys --n-configs 80 --out model_data/hpo/head_msle.csv
 """
 import argparse
-import json
 import os
 import random
 import sys
@@ -25,7 +24,6 @@ import sys
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn.functional as F
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -34,14 +32,19 @@ for _p in (os.path.join(_ROOT, "models", "common"),
            os.path.join(_ROOT, "models", "head")):
     sys.path.insert(0, _p)
 
+from models.head.embed_cache import build_embed_cache, cat_cached  # noqa: E402
+from models.head.FineTune import VALID_LOSSES, reg_loss  # noqa: E402
 from HeadData import assemble, chemsys_groups, make_splits, parent_composition_groups  # noqa: E402
 from HeadModel import TcHead  # noqa: E402
 
+# Bump whenever sample_config's axes/ranges change: the sampler is seeded, so any
+# change remaps which config index i produces which hyperparameters. Resume
+# refuses to append to a CSV written under a different version (see main).
+SAMPLER_VERSION = 2
+
 
 def sample_config(rng):
-    # NOTE: axes added 2026-07-21 (pool_agg/pool_rank/head_arch) — the sampler
-    # is seeded, so this changes which config index i maps to; a resumed sweep
-    # must not straddle the change (fresh --out per sampler version).
+    # v2 (2026-07-21): added pool_agg/pool_rank/head_arch axes + pool_dim 128.
     return {
         "hidden": rng.choice([32, 64, 128, 192]),
         "pool_dim": rng.choice([16, 32, 64, 128]),
@@ -64,7 +67,10 @@ def main():
     ap.add_argument("--descriptors", default="database/datafiles/MP/descriptors_doped.pickle")
     ap.add_argument("--metadata", default="database/datafiles/MP/3DSC_MP.csv")
     ap.add_argument("--split-group", default="chemsys", choices=["chemsys", "parent_comp", "parent"])
-    ap.add_argument("--target", default="msle", choices=["msle", "l1"])
+    # Loss spaces shared with FineTune.reg_loss — stage A can select under any
+    # objective stage B trains with (previously z-space msle/l1 only, so mse_k/wl1_k
+    # configs were tuned under an objective the sweep never scored).
+    ap.add_argument("--target", default="msle", choices=list(VALID_LOSSES))
     ap.add_argument("--n-configs", type=int, default=80)
     ap.add_argument("--warmup-max", type=int, default=120)
     ap.add_argument("--sample-seed", type=int, default=7)
@@ -103,16 +109,10 @@ def main():
         return [i for i, cid in enumerate(ds_ids) if id2split.get(cid) == s and is_sc[id2row[cid]]]
 
     cache = {}
-    with torch.no_grad():
-        for s in ("train", "val"):
-            dl = DataLoader(Subset(ds, positions(s)), batch_size=64,
-                            collate_fn=collate_pool_geom, num_workers=4)
-            for inp, _t, _l, cif_ids in dl:
-                inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in inp)
-                seg = inp[6].to(device).long()
-                h = model.encode(*inp)
-                for c, cid in enumerate(cif_ids):
-                    cache[cid] = h[seg == c]
+    for s in ("train", "val"):
+        dl = DataLoader(Subset(ds, positions(s)), batch_size=64,
+                        collate_fn=collate_pool_geom, num_workers=4)
+        cache.update(build_embed_cache(model, dl, device))
     print(f"cache built: {len(cache)} structures", flush=True)
     enc_dim = model.atom_fea_len
     del model
@@ -123,11 +123,13 @@ def main():
     tr_ids = [ds_ids[i] for i in positions("train")]
     va_ids = [ds_ids[i] for i in positions("val")]
     tr_rows = [id2row[c] for c in tr_ids]
+    # Kelvin-space loss normalizers, train-fit — same definition as FineTune.run.
+    _tc_tr = tc_t[tr_rows].cpu()
+    k_var = max(float(_tc_tr.var()), 1.0)
+    k_wmean = max(float((1.0 + _tc_tr).mean()), 1.0)
 
     def forward(head, bids):
-        h = torch.cat([cache[c] for c in bids])
-        counts = torch.tensor([cache[c].shape[0] for c in bids], device=device)
-        seg = torch.repeat_interleave(torch.arange(len(bids), device=device), counts)
+        h, seg = cat_cached(cache, bids, device)
         rows = [id2row[c] for c in bids]
         _lg, z = head(h, phys_t[rows], seg=seg, n=len(bids))
         return z, rows
@@ -154,16 +156,19 @@ def main():
                 bids = order[b0:b0 + bs]
                 opt.zero_grad()
                 z, rows = forward(head, bids)
-                t = y_z[rows]
-                loss = F.mse_loss(z, t) if args.target == "msle" else F.l1_loss(z, t)
+                # Shared loss (FineTune.reg_loss): stage A trains and selects in the
+                # SAME space stage B will optimize, for every supported target.
+                loss = reg_loss(z, y_z[rows], tc_t[rows], args.target,
+                                head.tc_mean, head.tc_std, k_var, k_wmean)
                 loss.backward(); opt.step()
             head.eval(); num = den = 0.0
             with torch.no_grad():
                 for b0 in range(0, len(va_ids), 256):
                     bids = va_ids[b0:b0 + 256]
                     z, rows = forward(head, bids)
-                    d = z - y_z[rows]
-                    num += float((d * d).sum() if args.target == "msle" else d.abs().sum())
+                    num += float(reg_loss(z, y_z[rows], tc_t[rows], args.target,
+                                          head.tc_mean, head.tc_std,
+                                          k_var, k_wmean)) * len(bids)
                     den += len(bids)
             v = num / max(den, 1)
             if v < best - 1e-6:
@@ -178,13 +183,30 @@ def main():
     configs = [sample_config(rng) for _ in range(args.n_configs)]
     done = 0
     if os.path.exists(args.out):
-        done = len(pd.read_csv(args.out))
+        prev = pd.read_csv(args.out)
+        # Resume skips by row count, which is only valid if the existing rows came
+        # from the SAME sampler version and sweep flags — otherwise config_idx maps
+        # to different hyperparameters and the leaderboard mixes incomparable
+        # objectives/encoders. Refuse instead of silently mixing.
+        stale = []
+        if "sampler_version" not in prev.columns or \
+                not (prev["sampler_version"] == SAMPLER_VERSION).all():
+            stale.append(f"sampler_version != {SAMPLER_VERSION}")
+        for col, cur in (("target", args.target), ("split_group", args.split_group),
+                         ("checkpoint", os.path.basename(args.checkpoint))):
+            if col in prev.columns and not (prev[col] == cur).all():
+                stale.append(f"{col} != {cur!r}")
+        if stale:
+            sys.exit(f"refusing to resume {args.out}: existing rows don't match this "
+                     f"invocation ({'; '.join(stale)}) — use a fresh --out")
+        done = len(prev)
         print(f"resuming: {done} configs already scored", flush=True)
     for i in range(done, len(configs)):
         cfg = configs[i]
         v, ep = run_config(cfg, seed=0)
         row = {**cfg, "config_idx": i, "val": v, "best_epoch": ep, "target": args.target,
-               "split_group": args.split_group, "checkpoint": os.path.basename(args.checkpoint)}
+               "split_group": args.split_group, "checkpoint": os.path.basename(args.checkpoint),
+               "sampler_version": SAMPLER_VERSION}
         pd.DataFrame([row]).to_csv(args.out, mode="a", header=not os.path.exists(args.out),
                                    index=False)
         print(f"[{i + 1}/{len(configs)}] val={v:.4f} @ep{ep}  {cfg}", flush=True)

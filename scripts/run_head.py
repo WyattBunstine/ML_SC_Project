@@ -9,6 +9,7 @@ models.common). Each config writes its own timestamped model_data/ run dir.
 """
 import os
 import sys
+import traceback
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _p in (_ROOT, os.path.join(_ROOT, "models", "common"),
@@ -22,6 +23,17 @@ from models.head.HeadMain import run  # noqa: E402
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit("usage: run_head.py <config.json> [config.json ...]")
+    # Per-config isolation: one failing config (bad path on the compute node, OOM,
+    # typo) must not abort the rest of a queued batch — report failures at the end
+    # and exit nonzero so the SLURM job still flags them.
+    failed = []
     for cfg in sys.argv[1:]:
         print(f"\n===== run_head: {cfg} =====", flush=True)
-        run(cfg)
+        try:
+            run(cfg)
+        except Exception:
+            traceback.print_exc()
+            failed.append(cfg)
+            print(f"===== run_head FAILED: {cfg} (continuing) =====", flush=True)
+    if failed:
+        sys.exit(f"{len(failed)}/{len(sys.argv) - 1} config(s) failed: {failed}")
