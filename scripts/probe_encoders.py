@@ -1,7 +1,8 @@
 """Frozen transfer probe across a set of pretrained encoders — a low-noise ranking.
 
 For each checkpoint: freeze the encoder, build its per-atom embedding cache once,
-train the TUNED head (pd64 deepsets, concat) warmup-only on the cached train
+train the head (hyperparameters sourced from HeadMain.DEFAULTS, deepsets pooling)
+warmup-only on the cached train
 embeddings (no encoder fine-tuning), and evaluate on TEST. Because the encoder is
 frozen and the head trains on fixed cached tensors, this is near-deterministic —
 it sidesteps the ~0.5-0.7 K CUDA fine-tuning noise, so encoder DIFFERENCES are
@@ -12,7 +13,6 @@ pretraining. Reports SC-only MAE / cuprate MAE / MSLE per encoder (mean over see
 """
 import argparse
 import glob
-import json
 import os
 import random
 import sys
@@ -28,7 +28,9 @@ for _p in (os.path.join(_ROOT, "models", "common"), os.path.join(_ROOT, "models"
            os.path.join(_ROOT, "models", "head")):
     sys.path.insert(0, _p)
 
+from embed_cache import build_embed_cache, cat_cached  # noqa: E402
 from HeadData import assemble, make_splits, parent_composition_groups  # noqa: E402
+from HeadMain import DEFAULTS  # noqa: E402
 from HeadModel import TcHead  # noqa: E402
 
 ENCODERS = {
@@ -82,22 +84,16 @@ def main():
         pos = {s: [i for i, c in enumerate(ds_ids) if id2split.get(c) == s and is_sc[id2row[c]]]
                for s in ("train", "val", "test")}
         cache = {}
-        with torch.no_grad():
-            for s in ("train", "val", "test"):
-                for inp, _t, _l, cif_ids in DataLoader(Subset(ds, pos[s]), batch_size=64,
-                                                       collate_fn=collate_pool_geom, num_workers=4):
-                    inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in inp)
-                    seg = inp[6].to(device).long(); h = model.encode(*inp)
-                    for c, cid in enumerate(cif_ids):
-                        cache[cid] = h[seg == c]
+        for s in ("train", "val", "test"):
+            loader = DataLoader(Subset(ds, pos[s]), batch_size=64,
+                                collate_fn=collate_pool_geom, num_workers=4)
+            cache.update(build_embed_cache(model, loader, device))
         edim = model.atom_fea_len
         del model; torch.cuda.empty_cache()
         return cache, {s: [ds_ids[i] for i in pos[s]] for s in pos}, edim
 
     def fwd(head, cache, bids):
-        h = torch.cat([cache[c] for c in bids])
-        counts = torch.tensor([cache[c].shape[0] for c in bids], device=device)
-        seg = torch.repeat_interleave(torch.arange(len(bids), device=device), counts)
+        h, seg = cat_cached(cache, bids, device)
         rows = [id2row[c] for c in bids]
         _lg, z = head(h, phys_t[rows], seg=seg, n=len(bids))
         return z, rows
@@ -106,11 +102,16 @@ def main():
         tr, va, te = ids_by["train"], ids_by["val"], ids_by["test"]
         tr_rows = [id2row[c] for c in tr]
         torch.manual_seed(seed)
-        head = TcHead(edim, phys_t.shape[1], 64, 64, 0.15, pooling="deepsets",
-                      pool_dim=64).to(device)
+        # Head hyperparameters sourced from HeadMain.DEFAULTS (single source of the
+        # tuned protocol) — hardcoding them here left the zoo ranking measured under
+        # a head no config uses once DEFAULTS moved (pool_dim 32->64 already did).
+        head = TcHead(edim, phys_t.shape[1], DEFAULTS["pca_k"], DEFAULTS["hidden"],
+                      DEFAULTS["dropout"], pooling="deepsets",
+                      pool_dim=DEFAULTS["pool_dim"]).to(device)
         head.fit_target(tc_t[tr_rows].cpu()); head.phys_std.fit(phys_t[tr_rows].cpu()); head.to(device)
         y_z = head.target_to_z(tc_t)
-        opt = torch.optim.AdamW(head.parameters(), lr=3e-3, weight_decay=1e-4)
+        opt = torch.optim.AdamW(head.parameters(), lr=DEFAULTS["tc_lr"],
+                                weight_decay=DEFAULTS["tc_weight_decay"])
         rng = random.Random(seed); best, bad, best_state = np.inf, 0, None
         for ep in range(args.warmup_max):
             head.train(); order = tr[:]; rng.shuffle(order)
@@ -125,7 +126,12 @@ def main():
             if v < best - 1e-6: best, bad, best_state = v, 0, {k: t.clone() for k, t in head.state_dict().items()}
             else: bad += 1
             if bad >= args.patience: break
-        head.load_state_dict(best_state); head.eval()
+        # best_state stays None if no epoch ever improved (NaN val from a bad
+        # checkpoint, or --warmup-max 0) — keep the last weights rather than crash
+        # the whole zoo sweep, matching FineTune.fit_phase's guard.
+        if best_state is not None:
+            head.load_state_dict(best_state)
+        head.eval()
         with torch.no_grad():
             zs = torch.cat([fwd(head, cache, te[b0:b0 + 256])[0] for b0 in range(0, len(te), 256)])
         k = head.z_to_kelvin(zs).cpu().numpy()

@@ -14,6 +14,9 @@
 #   ./scripts/deploy.sh augment-positions         # backfill frac_coords+lattice onto MPtrj graphs (CPU job)
 #   ./scripts/deploy.sh pack-mptrj [out_dir]      # pack graphs into the fast columnar training format
 #   ./scripts/deploy.sh sync-dos-pack [name]      # rsync a LOCAL DOS pack (database/datafiles/MP/<name>, default dos_pack) to scratch MP/<name>
+#   ./scripts/deploy.sh sync-head-data            # rsync the transfer-head data (index/descriptors/metadata/doped graphs)
+#   ./scripts/deploy.sh run-head cfg.json [...]   # run >=1 head configs (train-head) as one 1-GPU job
+#   ./scripts/deploy.sh sweep-head [target] [n] [ckpt]  # stage-A head HPO sweep (1-GPU job)
 #   ./scripts/deploy.sh status                    # squeue for your jobs
 #   ./scripts/deploy.sh logs <jobid>              # tail a running job's log
 #   ./scripts/deploy.sh fetch                     # rsync model_data/ + logs back here
@@ -260,13 +263,6 @@ sync_head_data() {
 }
 
 # ---------------------------------------------------------------------------
-# Submit the stage-A head HPO sweep (scripts/head_hpo_sweep.py) as a 1-GPU job:
-#   ./scripts/deploy.sh sweep-head [target=msle] [n_configs=80] [checkpoint]
-# One job runs the whole sweep sequentially against a single shared embedding
-# cache (the per-config cost is ~1-2 GPU-min); the leaderboard CSV lands in
-# remote model_data/hpo/ and comes back with `deploy.sh fetch`.
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # Submit a train-HEAD job that runs one or more head configs in sequence
 # (scripts/run_head.py -> HeadMain.run, the train-head entrypoint), as a 1-GPU
 # job. For HPO stage B / any head fine-tune on the cluster:
@@ -276,6 +272,35 @@ sync_head_data() {
 run_head() {
     [ "$#" -ge 1 ] || { echo "ERROR: pass >=1 head config"; exit 1; }
     for c in "$@"; do [ -f "$c" ] || { echo "ERROR: config not found: $c"; exit 1; }; done
+    # Preflight: ship the small data FILES each config references (index pickle,
+    # descriptors, metadata, holdout csv). sync_head_data covers only the default
+    # V4_doped set — a config referencing e.g. SC_MP_V4M.pickle would otherwise die
+    # with FileNotFoundError on the compute node hours into the queue. rsync -aR
+    # recreates the relative path remotely. Referenced paths missing locally are
+    # warned (they must already exist on the cluster); graph dirs indexed by a
+    # non-default pickle still need their own sync.
+    local ref_files f
+    ref_files="$(python3 - "$@" <<'PYEOF'
+import json, sys
+keys = ("index_path", "descriptors", "metadata_csv", "holdout_ids_csv")
+seen = []
+for p in sys.argv[1:]:
+    cfg = json.load(open(p))
+    for k in keys:
+        v = cfg.get(k)
+        if isinstance(v, str) and v and v not in seen:
+            seen.append(v)
+print("\n".join(seen))
+PYEOF
+)"
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        if [ -f "$f" ]; then
+            rsync -aR "$f" "${SSH}:${REMOTE_PATH}/"
+        elif [ ! -d "$f" ]; then
+            echo ">>   [warn] referenced path not found locally (must already exist remotely): $f"
+        fi
+    done <<< "${ref_files}"
     local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
     local job_name="head_batch_${stamp}"
     local job_file="jobs/${job_name}.slurm"
@@ -310,10 +335,20 @@ EOF
     ssh "${SSH}" "cd '${REMOTE_PATH}' && sbatch '${job_file}'"
 }
 
+# ---------------------------------------------------------------------------
+# Submit the stage-A head HPO sweep (scripts/head_hpo_sweep.py) as a 1-GPU job:
+#   ./scripts/deploy.sh sweep-head [target=msle] [n_configs=80] [checkpoint]
+# One job runs the whole sweep sequentially against a single shared embedding
+# cache (the per-config cost is ~1-2 GPU-min); the leaderboard CSV lands in
+# remote model_data/hpo/ and comes back with `deploy.sh fetch`.
+# ---------------------------------------------------------------------------
 sweep_head() {
     local target="${1:-msle}" n="${2:-80}" checkpoint="${3:-}"
     local ckpt_flag=""
-    [ -n "${checkpoint}" ] && ckpt_flag="--checkpoint ${checkpoint}"
+    # Single-quoted inside the flag: the job heredoc below is unquoted (local
+    # expansion), so without these the path would be word-split/globbed by the
+    # remote shell at job runtime.
+    [ -n "${checkpoint}" ] && ckpt_flag="--checkpoint '${checkpoint}'"
     local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
     local job_name="hpo_head_${target}_${stamp}"
     local job_file="jobs/${job_name}.slurm"

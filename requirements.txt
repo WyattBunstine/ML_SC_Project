@@ -10,7 +10,9 @@
 # falls back to CPU there). On the cluster, scripts/deploy.sh setup-env installs
 # the matching CUDA build first (TORCH_CUDA_CHANNEL), so this unpinned line is
 # already satisfied and won't drag in the wrong wheel. Local dev: 2.12.0+cu130.
-torch
+# >=2.3 floor: models/GPSTransformer/model.py imports torch.nn.attention
+# (sdpa_kernel), which appeared in 2.3 — older envs fail at import time.
+torch>=2.3
 numpy==2.4.6
 pandas==3.0.3
 scikit-learn==1.8.0

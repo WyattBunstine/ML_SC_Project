@@ -74,11 +74,19 @@ class DeepSetsPool(nn.Module):
 
     def __init__(self, in_dim: int, pool_dim: int = 32, rank: int = None, agg: str = "meanmax"):
         super().__init__()
+        if agg not in ("mean", "max", "meanmax"):
+            # Validate HERE: an unknown agg would compute out_dim=pool_dim below but
+            # fall through to the meanmax concat (2*pool_dim) in forward — an opaque
+            # LayerNorm shape crash deep in training instead of a named config error.
+            raise ValueError(f"unknown agg {agg!r} (use 'mean', 'max' or 'meanmax')")
         if rank:
             self.g = nn.Sequential(nn.Linear(in_dim, int(rank)), nn.Softplus(),
                                    nn.Linear(int(rank), pool_dim))
         else:
-            self.g = nn.Sequential(nn.Linear(in_dim, pool_dim))
+            # Bare Linear (NOT a one-element Sequential): keeps the historical
+            # state_dict keys (pool.g.weight, not pool.g.0.weight) so pre-existing
+            # head checkpoints stay loadable key-for-key.
+            self.g = nn.Linear(in_dim, pool_dim)
         self.act = nn.Softplus()
         self.agg = agg
         self.out_dim = pool_dim * (2 if agg == "meanmax" else 1)

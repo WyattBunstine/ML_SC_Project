@@ -20,6 +20,7 @@ import warnings
 # (N, heads, M, M) tensors. Must be set before torch initializes the CUDA allocator.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -132,25 +133,34 @@ def main():
                    else [args["index_path"]])
     if len(index_paths) > 1 and not multitask:
         sys.exit("multiple index_path entries (a masked-union) require a multitask `tasks` config.")
-    # Masked-union member sampling weights (config "member_weights", one int per
-    # index_path; default all 1 = current behavior). The union samples uniformly by
+    # Masked-union member sampling weights (config "member_weights", one positive
+    # int per index_path; default all 1 = uniform). The union samples uniformly by
     # global index, so the MPtrj bulk (~580k frames) drowns the smaller SC-relevant
     # members (DOS ~62k, disorder corpus ~12k) ~46:1 — a member seen ~2% of the time
-    # can't reshape the representation. Repeating a member's dataset OVERSAMPLES it and
-    # shares the underlying pack memmap (no extra memory); the material-level split puts
-    # every copy of a material in the same fold (no train/val leak).
+    # can't reshape the representation. Weights oversample the TRAIN loader ONLY
+    # (per-index multiplicity handed to get_sc_nonsc_loaders): the dataset holds ONE
+    # copy of every sample, so the split, val/test loaders, early-stop metric, and
+    # feature/target normalization stats all stay at natural multiplicity —
+    # comparable across weighted and unweighted rungs.
     member_weights = args.get("member_weights", [1] * len(index_paths))
     if len(member_weights) != len(index_paths):
         sys.exit(f"member_weights ({len(member_weights)}) must match "
                  f"index_path members ({len(index_paths)})")
-    _subsets = []
-    for ip, w in zip(index_paths, member_weights):
-        ds = load_cif_dataset(ip, **_ds_kw)
-        _subsets.extend([ds] * int(w))
-    if any(w != 1 for w in member_weights):
-        print(f"masked-union member_weights {member_weights} -> {len(_subsets)} "
-              f"effective members ({sum(len(s) for s in _subsets):,} samples)", flush=True)
+    if any(int(w) != w or w < 1 for w in member_weights):
+        sys.exit(f"member_weights must be positive integers, got {member_weights} "
+                 "(0/fractional would silently drop or truncate a member; to "
+                 "downweight a member, upweight the others instead)")
+    member_weights = [int(w) for w in member_weights]
+    _subsets = [load_cif_dataset(ip, **_ds_kw) for ip in index_paths]
     dataset = _subsets[0] if len(_subsets) == 1 else ConcatMTDataset(_subsets)
+    train_index_weights = None
+    if any(w != 1 for w in member_weights):
+        train_index_weights = np.concatenate(
+            [np.full(len(ds), w, dtype=np.int64)
+             for ds, w in zip(_subsets, member_weights)])
+        print(f"masked-union member_weights {member_weights}: train-only oversampling "
+              f"({len(dataset):,} unique samples, "
+              f"{int(train_index_weights.sum()):,} weighted)", flush=True)
 
     split_by = resolve_split_by(args.get("split_by"), dataset)
     args["split_by"] = split_by
@@ -175,7 +185,8 @@ def main():
         # GPS batches carry frac_coords + lattice (zeros on a positionless pack) so
         # the optional long-range distance bias has geometry. Multitask also batches
         # the per-target/-mask dicts + nbr_jimage for the autograd-force geometry.
-        collate_fn=(collate_pool_multitask if multitask else collate_pool_geom))
+        collate_fn=(collate_pool_multitask if multitask else collate_pool_geom),
+        train_index_weights=train_index_weights)
     print(f"split_by={split_by} -> split sizes:", loaders["split_sizes"])
 
     sc_idx = loaders["train_sc_idx"]
