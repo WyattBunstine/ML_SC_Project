@@ -261,7 +261,7 @@ sync_head_data() {
 
 # ---------------------------------------------------------------------------
 # Submit the stage-A head HPO sweep (scripts/head_hpo_sweep.py) as a 1-GPU job:
-#   ./scripts/deploy.sh sweep-head [target=msle] [n_configs=80]
+#   ./scripts/deploy.sh sweep-head [target=msle] [n_configs=80] [checkpoint]
 # One job runs the whole sweep sequentially against a single shared embedding
 # cache (the per-config cost is ~1-2 GPU-min); the leaderboard CSV lands in
 # remote model_data/hpo/ and comes back with `deploy.sh fetch`.
@@ -311,7 +311,9 @@ EOF
 }
 
 sweep_head() {
-    local target="${1:-msle}" n="${2:-80}"
+    local target="${1:-msle}" n="${2:-80}" checkpoint="${3:-}"
+    local ckpt_flag=""
+    [ -n "${checkpoint}" ] && ckpt_flag="--checkpoint ${checkpoint}"
     local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
     local job_name="hpo_head_${target}_${stamp}"
     local job_file="jobs/${job_name}.slurm"
@@ -340,7 +342,7 @@ export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 cd "${REMOTE_PATH}"
 mkdir -p model_data/hpo
-PYTHONHASHSEED=0 python scripts/head_hpo_sweep.py --target ${target} \\
+PYTHONHASHSEED=0 python scripts/head_hpo_sweep.py --target ${target} ${ckpt_flag} \\
     --n-configs ${n} --out model_data/hpo/head_${target}_${stamp}.csv
 EOF
     echo ">> Submitting ${job_file} ..."
