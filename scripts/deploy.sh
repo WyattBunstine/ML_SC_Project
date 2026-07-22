@@ -272,6 +272,10 @@ sync_head_data() {
 run_head() {
     [ "$#" -ge 1 ] || { echo "ERROR: pass >=1 head config"; exit 1; }
     for c in "$@"; do [ -f "$c" ] || { echo "ERROR: config not found: $c"; exit 1; }; done
+    # Wall-clock request (HEAD_TIME=H:MM:SS to override). Head batches run minutes
+    # per config, not hours — a short request backfills into scheduler gaps a 12h
+    # one waits behind (measured: probes ~15 min, 3-config stage-B ~25 min).
+    local head_time="${HEAD_TIME:-4:00:00}"
     # Preflight: ship the small data FILES each config references (index pickle,
     # descriptors, metadata, holdout csv). sync_head_data covers only the default
     # V4_doped set — a config referencing e.g. SC_MP_V4M.pickle would otherwise die
@@ -319,7 +323,7 @@ ${account_line}
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --time=12:00:00
+#SBATCH --time=${head_time}
 #SBATCH --output=${REMOTE_PATH}/logs/%x-%j.out
 #SBATCH --error=${REMOTE_PATH}/logs/%x-%j.err
 
