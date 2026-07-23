@@ -33,7 +33,7 @@ from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_target
                       _select_target_key, build_data_rows, subsample_frames_by_group,
                       rows_meanstd,
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
-                      valence_node_features, VALENCE_NODE_FEA_LEN,
+                      valence_node_features, VALENCE_NODE_FEA_LEN, CF_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN,
                       DIHEDRAL_FEA_LEN, DOS_N_ENERGY)
 
@@ -47,6 +47,8 @@ _FIELDS = {
     "atom_fea":  (np.float32, NODE_FEA_LEN),
     "frac_coords": (np.float32, 3),
     "dih_node":  (np.float32, DIHEDRAL_FEA_LEN),   # atom-aligned 4-body torsion summary
+    "valence":   (np.float32, VALENCE_NODE_FEA_LEN),  # baked subshells (v4.3 graphs; zeros else)
+    "cf":        (np.float32, CF_FEA_LEN),            # baked AOM crystal-field block (v4.3)
     "forces":    (np.float32, 3),    # atom-aligned multitask TARGET (NaN where absent)
     "magmom":    (np.float32, 1),    # atom-aligned multitask TARGET (NaN where absent)
     "bond_cnt":  (np.int32, None),
@@ -107,6 +109,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
     offsets = {col: [] for col in _OFFSET_COLS}
     kept_pos, failures, lattices, dih_any, stresses, doses = [], [], [], [], [], []
     phys_any = {"forces": False, "magmom": False, "stress": False, "dos": False}  # any finite -> has_X
+    baked_any = {"valence": False, "cf": False}  # v4.3 baked node blocks present -> has_*
     jimage_any = [False]   # any nonzero bond_jimage -> graphs carry exact PBC images
     start = time.time()
 
@@ -134,11 +137,20 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
             offsets["angv_start"].append(totals["ang_vcos"])
             offsets["n_angv"].append(len(r["ang_vcos"]))
             for name, (dtype, _w) in _FIELDS.items():
-                _write(name, r[name], dtype)
+                arr = r.get(name)
+                if arr is None and name in ("valence", "cf"):
+                    # legacy graph without baked blocks: zero-fill the uniform bin;
+                    # the has_* header flags below restore None semantics at read.
+                    arr = np.zeros((int(r["n_atoms"]), _FIELDS[name][1]), dtype=dtype)
+                _write(name, arr, dtype)
             lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
             stresses.append(np.asarray(r["stress"], dtype=np.float32).reshape(9))
             doses.append(np.asarray(r["dos"], dtype=np.float32).reshape(DOS_N_ENERGY))
             dih_any.append(bool(np.any(r["dih_node"])))
+            if not baked_any["valence"] and r.get("valence") is not None:
+                baked_any["valence"] = True
+            if not baked_any["cf"] and r.get("cf") is not None:
+                baked_any["cf"] = True
             for _k in phys_any:
                 if not phys_any[_k] and np.isfinite(r[_k]).any():
                     phys_any[_k] = True
@@ -195,6 +207,8 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
         "has_angles": totals["ang_cos"] > 0,
         "has_positions": bool(np.abs(lat_stack).sum() > 0),
         "has_dihedrals": bool(any(dih_any)),
+        "has_valence_baked": bool(baked_any["valence"]),
+        "has_cf": bool(baked_any["cf"]),
         "has_forces": phys_any["forces"],
         "has_magmom": phys_any["magmom"],
         "has_stress": phys_any["stress"],
@@ -233,7 +247,8 @@ class PackedCIFDataV4(Dataset):
                  use_bond_angles=False, use_poly_edges=True,
                  build_angle_bias=False, use_rich_node_features=False,
                  use_dihedrals=False, multitask=False, frame_subsample=1,
-                 use_valence_features=False, n_energy=None, dos_per_atom=True):
+                 use_valence_features=False, use_cf_features=False,
+                 n_energy=None, dos_per_atom=True):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
         if self._header["version"] != PACK_VERSION:
@@ -275,6 +290,10 @@ class PackedCIFDataV4(Dataset):
         self.build_angle_bias = build_angle_bias
         self.use_rich_node_features = use_rich_node_features
         self.use_valence_features = use_valence_features
+        self.use_cf_features = use_cf_features
+        if use_cf_features and not self._header.get("has_cf"):
+            raise ValueError(f"use_cf_features=True but pack {pack_dir} carries no baked "
+                             "cf block — repack from builder-v4.3 graphs.")
         self.use_dihedrals = use_dihedrals
         self.multitask = multitask
         # DOS target width served by this reader: packs store whatever grid was current
@@ -385,6 +404,13 @@ class PackedCIFDataV4(Dataset):
                 else np.zeros((n, 3), dtype=np.float32))
         dih = (mm["dih_node"][a0:a0 + n] if "dih_node" in mm
                else np.zeros((n, DIHEDRAL_FEA_LEN), dtype=np.float32))
+        # Baked v4.3 blocks: None (not zeros) when the pack predates them or was
+        # packed from legacy graphs — assemble then falls back (valence) / raises
+        # (cf), exactly matching the JSON backend's semantics.
+        valence = (mm["valence"][a0:a0 + n]
+                   if "valence" in mm and self._header.get("has_valence_baked") else None)
+        cf = (mm["cf"][a0:a0 + n]
+              if "cf" in mm and self._header.get("has_cf") else None)
         bjimage = (mm["bond_jimage"][b0:b0 + nb] if "bond_jimage" in mm
                    else np.zeros((nb, 3), dtype=np.int16))
         # Multitask targets: atom-aligned forces/magmom + per-sample stress. Absent
@@ -404,6 +430,8 @@ class PackedCIFDataV4(Dataset):
             "atom_fea": mm["atom_fea"][a0:a0 + n],
             "frac_coords": frac,
             "dih_node": dih,
+            "valence": valence,
+            "cf": cf,
             "lattice": lattice,
             "forces": forces,
             "magmom": magmom,
@@ -436,7 +464,8 @@ class PackedCIFDataV4(Dataset):
                                   self.build_angle_bias,
                                   use_rich_node_features=self.use_rich_node_features,
                                   use_dihedrals=self.use_dihedrals,
-                                  use_valence_features=self.use_valence_features)
+                                  use_valence_features=self.use_valence_features,
+                                  use_cf_features=self.use_cf_features)
         if self.multitask:
             bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
             targets, masks = _assemble_targets(r, energy=target, bandgap=bg,
@@ -470,7 +499,12 @@ class PackedCIFDataV4(Dataset):
             if self.use_rich_node_features:   # match assemble order: [base | rich | val | dih]
                 node = np.concatenate([node, rich_node_features(node[:, 0])], axis=1)
             if self.use_valence_features:
-                node = np.concatenate([node, valence_node_features(node[:, 0], node[:, 1])], axis=1)
+                val = (np.asarray(r["valence"], dtype=np.float32)
+                       if r.get("valence") is not None
+                       else valence_node_features(node[:, 0], node[:, 1]))
+                node = np.concatenate([node, val], axis=1)
+            if self.use_cf_features:
+                node = np.concatenate([node, np.asarray(r["cf"], dtype=np.float32)], axis=1)
             if self.use_dihedrals:
                 node = np.concatenate([node, np.asarray(r["dih_node"], dtype=np.float32)], axis=1)
             node_rows.append(node)
@@ -503,6 +537,7 @@ class PackedCIFDataV4(Dataset):
 
         node_dim = (NODE_FEA_LEN + (RICH_NODE_FEA_LEN if self.use_rich_node_features else 0)
                     + (VALENCE_NODE_FEA_LEN if self.use_valence_features else 0)
+                    + (CF_FEA_LEN if self.use_cf_features else 0)
                     + (DIHEDRAL_FEA_LEN if self.use_dihedrals else 0))
         return {
             "node": rows_meanstd(_cat(node_rows, node_dim), node_dim),

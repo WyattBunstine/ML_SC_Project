@@ -197,6 +197,16 @@ def _compact_v4_graph(graph: dict) -> dict:
             "ionization_energy": float(ie) if ie is not None else 0.0,
             "electron_affinity": float(ea) if ea is not None else 0.0,
         })
+        # Builder schema >= v4.3: carry the baked electronic-structure blocks
+        # ("valence" [n_s,n_p,n_d,n_f]; "cf" = cf_levels[5] + cf_occ[5] +
+        # [frontier_gap, unpaired]). Legacy builder graphs simply omit them and
+        # the ML loader falls back (valence) or raises (cf) — see data.py.
+        if "cf_occ" in node:
+            compact_nodes[-1]["valence"] = [float(x) for x in node["valence"]]
+            compact_nodes[-1]["cf"] = (
+                [float(x) for x in node["cf_levels"]]
+                + [float(x) for x in node["cf_occ"]]
+                + [float(node["cf_frontier_gap"]), float(node["cf_unpaired"])])
 
     compact_edges = []
     for edge in graph["edges"]:
