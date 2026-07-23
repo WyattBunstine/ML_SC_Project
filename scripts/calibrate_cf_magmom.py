@@ -227,7 +227,7 @@ def main():
     print(f"  test:  MAE {te_mae:.3f}  HS/LS {te_acc:.1%}  "
           f"(predict-0 baseline {base:.3f})")
     # current shipped defaults evaluated on test, for drift visibility
-    cur = (0.51, 1.0, 1.6, 2.0)
+    cur = (0.51, 1.0, 2.0, 2.5)
     cu_mae, cu_acc, _ = _eval(test, cur)
     print(f"  shipped defaults {cur}: test MAE {cu_mae:.3f}  HS/LS {cu_acc:.1%}")
 
@@ -248,7 +248,7 @@ def main():
         corr = np.corrcoef(p[:, 0], p[:, 1])[0, 1] if len(p) > 2 else float("nan")
         print(f"{el:>3} {len(p):>6} {np.abs(p[:, 0] - p[:, 1]).mean():6.2f} "
               f"{p[:, 0].mean():7.2f} {p[:, 1].mean():7.2f} {corr:6.2f}")
-    _set_knobs(0.51, 1.0, 1.6, 2.0)  # restore shipped defaults
+    _set_knobs(0.51, 1.0, 2.0, 2.5)  # restore shipped defaults
 
 
 if __name__ == "__main__":
