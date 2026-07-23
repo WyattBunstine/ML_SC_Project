@@ -234,6 +234,12 @@ for _z in range(1, 119):
 # from the stored Z + oxidation_state (no graph rebuild). Opt-in via use_valence_features;
 # concat order [base | rich | valence | dihedral], mirrored across every assembly site.
 VALENCE_NODE_FEA_LEN = 4
+# AOM crystal-field block baked by builder schema >= v4.3 (RPToleranceFactor
+# crystal_field_aom): cf_levels[5] + cf_occ[5] + cf_frontier_gap + cf_unpaired.
+# Baked-only (needs the builder's neighbor geometry + anion roles) — there is
+# deliberately NO load-time fallback: use_cf_features on a cf-less graph/pack
+# raises, so a masked union can't silently mix real and zero CF blocks.
+CF_FEA_LEN = 12
 _L = {"s": 0, "p": 1, "d": 2, "f": 3}
 _NOBLE_Z = [2, 10, 18, 36, 54, 86]
 
@@ -547,6 +553,7 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
 
     use_rich = getattr(dataset, "use_rich_node_features", False)
     use_val = getattr(dataset, "use_valence_features", False)
+    use_cf = getattr(dataset, "use_cf_features", False)
     use_dih = getattr(dataset, "use_dihedrals", False)
     node_rows, edge_rows, poly_rows = [], [], []
     zero_ang = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
@@ -558,7 +565,14 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
             if use_rich:        # match the assemble-time concat order: [base | rich | val | dih]
                 feat = np.concatenate([feat, rich_node_features([n["Z"]])[0]])
             if use_val:
-                feat = np.concatenate([feat, valence_node_features([n["Z"]], [feat[1]])[0]])
+                feat = np.concatenate([feat, (np.asarray(n["valence"], dtype=np.float32)
+                                              if "valence" in n else
+                                              valence_node_features([n["Z"]], [feat[1]])[0])])
+            if use_cf:
+                if "cf" not in n:
+                    raise ValueError("use_cf_features=True but graph nodes carry no baked "
+                                     "cf block — rebuild with builder schema >= v4.3.")
+                feat = np.concatenate([feat, np.asarray(n["cf"], dtype=np.float32)])
             if use_dih:
                 feat = np.concatenate([feat, dih[ni]])
             node_rows.append(feat)
@@ -749,6 +763,22 @@ def _extract_ragged(graph):
     # use_dihedrals. Legacy graphs -> all zeros.
     dih_node = dihedral_node_features(graph, n_atoms)
 
+    # Baked electronic-structure blocks (builder schema >= v4.3): per-node valence
+    # subshells (4) + AOM crystal-field block (12). Absent from legacy graphs ->
+    # None, so assemble falls back (valence: load-time computation) or raises
+    # (cf: baked-only). The pack writer zero-fills None for its uniform bins and
+    # records has_* header flags so the pack reader restores the None semantics.
+    def _baked_block(key, width):
+        if not any(key in n for n in graph["nodes"]):
+            return None
+        rows = np.zeros((n_atoms, width), dtype=np.float32)
+        for ni, n in enumerate(graph["nodes"]):
+            if key in n:
+                rows[ni] = np.asarray(n[key], dtype=np.float32)
+        return rows
+    valence_baked = _baked_block("valence", VALENCE_NODE_FEA_LEN)
+    cf_baked = _baked_block("cf", CF_FEA_LEN)
+
     # Multi-task TARGET tensors carried alongside the inputs: per-atom forces (N,3) +
     # magmom (N,1), per-structure stress (3,3). Absent in a graph -> NaN sentinel, so
     # the masked multi-task loss reads presence via isfinite and trains only real labels
@@ -779,6 +809,8 @@ def _extract_ragged(graph):
         "frac_coords": frac_coords,
         "lattice": lattice,
         "dih_node": dih_node,
+        "valence": valence_baked,
+        "cf": cf_baked,
         "forces": forces,
         "magmom": magmom,
         "dos": dos,
@@ -802,7 +834,7 @@ def _extract_ragged(graph):
 def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
                      use_poly_edges, use_bond_angles, build_angle_bias, *,
                      use_rich_node_features=False, use_dihedrals=False,
-                     use_valence_features=False):
+                     use_valence_features=False, use_cf_features=False):
     """Truncate/pad a ragged extraction into the model's padded sample tensors.
 
     Replicates the historical _build_sample behavior exactly: closest-first
@@ -875,11 +907,25 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
         rich = torch.from_numpy(rich_node_features(atom_fea[:, 0].numpy()))
         atom_fea = torch.cat([atom_fea, rich], dim=1)
     if use_valence_features:
-        # valence subshell occupancy [n_s,n_p,n_d,n_f] from stored Z (col 0) + oxidation
-        # (col 1). Order [base | rich | valence | dihedral] — every stats path mirrors this.
-        val = torch.from_numpy(valence_node_features(atom_fea[:, 0].numpy(),
-                                                     atom_fea[:, 1].numpy()))
+        # Order [base | rich | valence | cf | dihedral] — every stats path mirrors
+        # this. Prefer the builder-baked per-species block (schema >= v4.3, carried
+        # as r["valence"]); legacy graphs/packs fall back to the load-time
+        # computation from stored Z (col 0) + oxidation (col 1).
+        if r.get("valence") is not None:
+            val = torch.from_numpy(np.array(r["valence"], dtype=np.float32, copy=True))
+        else:
+            val = torch.from_numpy(valence_node_features(atom_fea[:, 0].numpy(),
+                                                         atom_fea[:, 1].numpy()))
         atom_fea = torch.cat([atom_fea, val], dim=1)
+    if use_cf_features:
+        # Baked-only (see CF_FEA_LEN note): a cf-less graph/pack is a hard error,
+        # never silently zero — a masked union must not mix real and fake CF.
+        if r.get("cf") is None:
+            raise ValueError(
+                "use_cf_features=True but this graph/pack carries no baked cf block "
+                "— rebuild it with builder schema >= v4.3 (crystal_field_aom).")
+        cf = torch.from_numpy(np.array(r["cf"], dtype=np.float32, copy=True))
+        atom_fea = torch.cat([atom_fea, cf], dim=1)
     if use_dihedrals:
         # Concat the per-atom 4-body torsion summary (zeros on a dihedral-less pack).
         # Order is [base | rich | dihedral] -- the stats paths mirror this exactly.
@@ -971,6 +1017,7 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_poly_edges, use_bond_angles, build_angle_bias=False, *,
                   use_rich_node_features=False, use_valence_features=False,
+                  use_cf_features=False,
                   use_dihedrals=False, multitask=False, bandgap=float("nan"),
                   dos_per_atom=True):
     """Build one fully-padded crystal sample from its graph JSON on disk.
@@ -996,7 +1043,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                               use_poly_edges, use_bond_angles, build_angle_bias,
                               use_rich_node_features=use_rich_node_features,
                               use_dihedrals=use_dihedrals,
-                              use_valence_features=use_valence_features)
+                              use_valence_features=use_valence_features,
+                              use_cf_features=use_cf_features)
 
     if multitask:
         targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap,
@@ -1054,10 +1102,12 @@ class CIFDataV4(Dataset):
                  build_angle_bias: bool = False, use_rich_node_features: bool = False,
                  use_dihedrals: bool = False, multitask: bool = False,
                  frame_subsample: int = 1, use_valence_features: bool = False,
+                 use_cf_features: bool = False,
                  n_energy: int = None, dos_per_atom: bool = True):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
         self.use_valence_features = use_valence_features
+        self.use_cf_features = use_cf_features
         self.use_dihedrals = use_dihedrals
         # DOS target width: graph JSONs carry the CURRENT fetch grid only (DOS_N_ENERGY),
         # so this backend can't serve a different width — fail loudly, don't mis-shape.
@@ -1198,6 +1248,7 @@ class CIFDataV4(Dataset):
                                    self.build_angle_bias,
                                    use_rich_node_features=self.use_rich_node_features,
                                    use_valence_features=self.use_valence_features,
+                                   use_cf_features=self.use_cf_features,
                                    use_dihedrals=self.use_dihedrals,
                                    multitask=self.multitask,
                                    bandgap=self._bandgap_by_id.get(str(rec[0]), float("nan")),
@@ -1234,6 +1285,7 @@ class CIFDataV4(Dataset):
                                self.use_bond_angles, self.build_angle_bias,
                                use_rich_node_features=self.use_rich_node_features,
                                use_valence_features=self.use_valence_features,
+                               use_cf_features=self.use_cf_features,
                                use_dihedrals=self.use_dihedrals,
                                multitask=self.multitask,
                                bandgap=self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")),
@@ -1341,6 +1393,7 @@ def load_cif_dataset_from_args(index_path, args, **overrides):
         use_bond_angles=args.get("use_bond_angles", False),
         use_rich_node_features=args.get("use_rich_node_features", False),
         use_valence_features=args.get("use_valence_features", False),
+        use_cf_features=args.get("use_cf_features", False),
         use_dihedrals=args.get("use_dihedrals", False),
     )
     kw.update(overrides)
