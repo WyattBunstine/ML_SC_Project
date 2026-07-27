@@ -13,6 +13,7 @@
 #   ./scripts/deploy.sh build-mptrj               # build MPtrj cgv4 graphs on the cluster (CPU job)
 #   ./scripts/deploy.sh augment-positions         # backfill frac_coords+lattice onto MPtrj graphs (CPU job)
 #   ./scripts/deploy.sh pack-mptrj [out_dir]      # pack graphs into the fast columnar training format
+#   ./scripts/deploy.sh augment-cf [out_pack]     # backfill v4.3 valence+cf onto MPtrj graphs, repack to packed_v4_cf
 #   ./scripts/deploy.sh sync-dos-pack [name]      # rsync a LOCAL DOS pack (database/datafiles/MP/<name>, default dos_pack) to scratch MP/<name>
 #   ./scripts/deploy.sh sync-head-data            # rsync the transfer-head data (index/descriptors/metadata/doped graphs)
 #   ./scripts/deploy.sh run-head cfg.json [...]   # run >=1 head configs (train-head) as one 1-GPU job
@@ -766,6 +767,37 @@ EOF
 
 # pack-mptrj [out_dir]: default writes packed_v1; pass ${SCRATCH_MPTRJ_PACK_V2}
 # after augment-positions to build the positioned v2 pack without clobbering v1.
+# ---------------------------------------------------------------------------
+# Backfill baked v4.3 valence+cf blocks onto the remote MPtrj graphs (in place,
+# resumable/atomic — scripts/augment_cf.py), then pack into a NEW pack so the
+# legacy packed_v4 stays untouched for older configs:
+#   ./scripts/deploy.sh augment-cf [out_pack=.../MPtrj/packed_v4_cf]
+# MPtrj frames are all ordered, where augment == full v4.3 rebuild bit-for-bit
+# (validated on the SC set); saves the ~day-scale Voronoi rebuild.
+# ---------------------------------------------------------------------------
+augment_cf() {
+    local out_pack="${1:-${SCRATCH_PATH}/ML_SC_Proj/MPtrj/packed_v4_cf}"
+    local remote_rp="${REMOTE_PATH%/*}/RPToleranceFactor"
+    echo ">> Pushing code + AOM builder modules..."
+    sync_code
+    rsync -a main.py "${SSH}:${REMOTE_PATH}/"
+    rsync -a database/*.py "${SSH}:${REMOTE_PATH}/database/"
+    ssh "${SSH}" "mkdir -p '${remote_rp}'"
+    rsync -a ../RPToleranceFactor/crystal_graph_v4.py \
+        ../RPToleranceFactor/crystal_field_aom.py "${SSH}:${remote_rp}/"
+    submit_cpu_job "augment_cf" "12:00:00" "$(cat <<EOF
+export RP_TOLERANCE_FACTOR_PATH="${remote_rp}"
+python scripts/augment_cf.py --index database/datafiles/MPtrj/MPtrj_V4.pickle \\
+    --workers ${SLURM_CPU_CPUS}
+python main.py pack-dataset \\
+    --index database/datafiles/MPtrj/MPtrj_V4.pickle \\
+    --out "${out_pack}" \\
+    --workers ${SLURM_CPU_CPUS}
+EOF
+)"
+    echo ">> Submitted. New pack (train with index_path = ${out_pack}); legacy packed_v4 untouched."
+}
+
 pack_mptrj() {
     local out_pack="${1:-${SCRATCH_MPTRJ_PACK}}"
     echo ">> Pushing code..."
@@ -934,6 +966,7 @@ case "${cmd}" in
     build-mptrj) build_mptrj ;;
     augment-positions) augment_positions ;;
     augment-physics) augment_physics ;;
+    augment-cf)  augment_cf "$@" ;;
     pack-mptrj)  pack_mptrj "$@" ;;
     sync-dos-pack) sync_dos_pack "$@" ;;
     sync-head-data) sync_head_data ;;
