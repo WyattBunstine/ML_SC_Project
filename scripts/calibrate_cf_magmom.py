@@ -211,7 +211,13 @@ def main():
     global _SITES
     _SITES = train
     workers = args.workers or max(1, (os.cpu_count() or 4) - 2)
-    with mp.Pool(workers) as pool:  # fork shares _SITES copy-on-write
+
+    def _init_sites(s):
+        global _SITES
+        _SITES = s
+    # explicit initializer: portable across start methods (spawn/forkserver
+    # workers re-import the module and would see _SITES=None; review 2026-07-28)
+    with mp.Pool(workers, initializer=_init_sites, initargs=(train,)) as pool:
         rows = sorted(pool.map(_score_combo, grid))
     print(f"\n=== TRAIN sweep ({len(train)} sites, e_scale=1.0 fixed) ===")
     print(f"{'MAE':>7} {'HS/LS':>6} {'beta':>5} {'k_sd':>5} {'r4d':>5} {'r5d':>5}")

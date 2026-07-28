@@ -163,6 +163,7 @@ def _compact_v4_graph(graph: dict) -> dict:
     from pymatgen.core.periodic_table import Element as PmgElement
 
     ion_role_map = {"cation": 1, "anion": -1, "neutral": 0}
+    has_cf_nodes = False
     compact_nodes = []
     for node in graph["nodes"]:
         el = PmgElement(node["element"])
@@ -207,6 +208,7 @@ def _compact_v4_graph(graph: dict) -> dict:
                 [float(x) for x in node["cf_levels"]]
                 + [float(x) for x in node["cf_occ"]]
                 + [float(node["cf_frontier_gap"]), float(node["cf_unpaired"])])
+            has_cf_nodes = True
 
     compact_edges = []
     for edge in graph["edges"]:
@@ -302,6 +304,11 @@ def _compact_v4_graph(graph: dict) -> dict:
         "angle_triplets": compact_triplets,
         "dihedrals": compact_dihedrals,
     }
+    if has_cf_nodes:
+        # stamp the CF feature-schema version so re-bakes can detect stale
+        # blocks (key-presence alone cannot; review 2026-07-28)
+        from crystal_field_aom import CF_SCHEMA
+        out["cf_schema"] = CF_SCHEMA
     # Geometry for the long-range distance bias (Tier 2): atom-aligned fractional
     # coords (N,3) + the lattice (3,3). Present in the full builder graph; carried
     # through so a rebuild keeps them. Defensive — omitted if a graph lacks them

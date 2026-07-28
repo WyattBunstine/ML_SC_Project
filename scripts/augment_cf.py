@@ -34,7 +34,15 @@ import numpy as np
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "database"))
 import crystal_graph_v4_import  # noqa: F401,E402  (RPToleranceFactor on path)
-from crystal_field_aom import site_cf_features, site_valence_subshells  # noqa: E402
+from crystal_field_aom import CF_SCHEMA, site_cf_features, site_valence_subshells  # noqa: E402
+
+FORCE = False
+
+
+def _init_force(force):
+    global FORCE
+    FORCE = force
+
 
 # compact ion_role encoding (database_main ion_role_map)
 _ANION = -1
@@ -59,7 +67,7 @@ def augment_graph(path):
         nodes = g.get("nodes") or []
         if not nodes:
             return "fail:no-nodes"
-        if "cf" in nodes[0]:
+        if "cf" in nodes[0] and g.get("cf_schema") == CF_SCHEMA and not FORCE:
             return "skip"
         frac = g.get("frac_coords")
         lat = g.get("lattice")
@@ -85,6 +93,7 @@ def augment_graph(path):
                                 "ligand": _symbol(nodes[s]["Z"]),
                                 "chi": nodes[s].get("chi_pauling")})
 
+        g["cf_schema"] = CF_SCHEMA
         for i, n in enumerate(nodes):
             oxi = float(n.get("oxidation_state") or 0.0)
             species = [{"symbol": _symbol(n["Z"]), "occupancy": 1.0,
@@ -109,6 +118,8 @@ def main():
     ap.add_argument("--index", help="index pickle; augment every referenced graph")
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--force", action="store_true",
+                    help="re-bake even if cf present (stale cf_schema re-bakes always)")
     args = ap.parse_args()
     if bool(args.graph_dir) == bool(args.index):
         sys.exit("pass exactly one of --graph-dir / --index")
@@ -127,10 +138,13 @@ def main():
     t0 = time.time()
     counts = {"done": 0, "skip": 0}
     fails = {}
-    with mp.Pool(workers) as pool:
-        for i, res in enumerate(pool.imap_unordered(augment_graph, paths, chunksize=64)):
+    failed_paths = []
+    with mp.Pool(workers, initializer=_init_force, initargs=(args.force,)) as pool:
+        # ordered imap so results pair with paths (per-path failure manifest)
+        for i, res in enumerate(pool.imap(augment_graph, paths, chunksize=64)):
             if res.startswith("fail:"):
                 fails[res] = fails.get(res, 0) + 1
+                failed_paths.append(f"{paths[i]}\t{res}")
             else:
                 counts[res] += 1
             if (i + 1) % 20000 == 0:
@@ -138,11 +152,21 @@ def main():
                 print(f"  {i + 1:,}/{len(paths):,} ({(i + 1) / el:.0f}/s) "
                       f"done={counts['done']:,} skip={counts['skip']:,} "
                       f"fail={sum(fails.values())}", flush=True)
+    if failed_paths:
+        man = ((os.path.join(args.graph_dir, "augment_failed_paths.txt")) if args.graph_dir
+               else os.path.splitext(args.index)[0] + ".augment_failed_paths.txt")
+        with open(man, "w") as f:
+            f.write("\n".join(failed_paths) + "\n")
+        print(f"failure manifest: {man}", flush=True)
     print(f"DONE in {time.time() - t0:.0f}s: {counts['done']:,} augmented, "
-          f"{counts['skip']:,} already had cf, {sum(fails.values())} failed "
+          f"{counts['skip']:,} already current, {sum(fails.values())} failed "
           f"{dict(list(fails.items())[:5]) if fails else ''}", flush=True)
-    if fails and sum(fails.values()) > 0.01 * len(paths):
-        sys.exit("more than 1% failures — investigate before packing")
+    if fails:
+        # ANY failure blocks packing: pack-level has_* flags are pack-global, so
+        # one un-baked graph becomes zeros-served-as-real (the dos_pack_ef1_cf
+        # corruption). Fix the listed paths and re-run (resumable).
+        sys.exit(f"{sum(fails.values())} augment failures — see manifest; "
+                 "do NOT pack until clean")
 
 
 if __name__ == "__main__":
