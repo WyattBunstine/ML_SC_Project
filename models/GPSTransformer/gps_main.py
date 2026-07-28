@@ -2,8 +2,12 @@
 
 GPS's own thin trainer: it builds the GPS model and drives the SHARED,
 model-agnostic pieces in models/common — the data layer (loaders, feature stats,
-splits) and the regression loop (common/train.py). It imports nothing from the
-MPNN package, so the two model subfolders stay independent.
+splits) and the training loops (common/train.py). Two modes: single-target
+regression, and multitask physics pretraining (config carries a `tasks` list:
+energy/forces/stress/magmom/bandgap/dos over a masked-union of packs listed in
+index_path, with optional per-member train-only oversampling via member_weights
+and conservative-autograd forces). It imports nothing from the MPNN package, so
+the two model subfolders stay independent.
 
 Usage: python models/GPSTransformer/gps_main.py <config.json>
        (or `python main.py train-gps <config.json>`)

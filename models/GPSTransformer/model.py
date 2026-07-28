@@ -15,8 +15,10 @@ Forward signature matches the shared collate contract
 (atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx, nbr_angle,
 crystal_seg, n_crystals), so it runs under the shared trainer (common/train.py).
 
-Deferred to later increments: register tokens, global->local query conditioning,
-ECoN-prior logits, multi-task heads (forces/magmom/DOS), position-differentiable
+Implemented since: multi-task per-atom heads (energy/forces/stress/magmom/
+bandgap/DOS via from_args `tasks`) + optional within-crystal global attention
+(gps_global). Still deferred: register tokens, global->local query conditioning,
+ECoN-prior logits, position-differentiable
 forces.
 """
 

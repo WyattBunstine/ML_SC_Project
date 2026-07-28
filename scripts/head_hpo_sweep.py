@@ -6,12 +6,16 @@ candidate costs ~1-2 GPU-minutes instead of a ~35-minute full fine-tune. This
 is the missing fairness step vs the (heavily tuned) XGBoost baseline: our head
 hyperparameters were hand-set once (2026-06-29) and never swept.
 
-Selection is on VAL in the target loss space only; test is never read here.
+Selection is on VAL in the target loss space only (--target supports every
+FineTune reg_loss space: l1 / msle / mse_k / wl1_k — stage A selects under the
+same objective stage B trains with); test is never read here.
 Stage B (top-k configs -> full two-phase protocol, multi-seed) confirms before
 anything touches a reported number.
 
 Resumable: rows append to the leaderboard CSV per config; a restart skips the
-first N already-scored configs (the sampler is seeded, so config i is stable).
+first N already-scored configs (the sampler is seeded, so config i is stable),
+and REFUSES to resume a CSV written under a different sampler_version, target,
+checkpoint, or split_group (mixing those made the ranking incomparable).
 
   PYTHONHASHSEED=0 python scripts/head_hpo_sweep.py --target msle \
       --split-group chemsys --n-configs 80 --out model_data/hpo/head_msle.csv
