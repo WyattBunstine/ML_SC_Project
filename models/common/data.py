@@ -771,13 +771,17 @@ def _extract_ragged(graph):
     # (cf: baked-only). The pack writer zero-fills None for its uniform bins and
     # records has_* header flags so the pack reader restores the None semantics.
     def _baked_block(key, width):
-        if not any(key in n for n in graph["nodes"]):
+        stamped = sum(key in n for n in graph["nodes"])
+        if stamped == 0:
             return None
-        rows = np.zeros((n_atoms, width), dtype=np.float32)
-        for ni, n in enumerate(graph["nodes"]):
-            if key in n:
-                rows[ni] = np.asarray(n[key], dtype=np.float32)
-        return rows
+        if stamped != n_atoms:
+            # all-or-none: a partially-stamped graph (corruption/hand-edit — no
+            # current writer produces one) must fail loudly, not silently mix
+            # real rows with zero-filled ones (review 2026-07-28).
+            raise ValueError(f"graph has '{key}' on {stamped}/{n_atoms} nodes — "
+                             "corrupt or partially-baked; rebuild it")
+        return np.stack([np.asarray(n[key], dtype=np.float32)
+                         for n in graph["nodes"]])
     valence_baked = _baked_block("valence", VALENCE_NODE_FEA_LEN)
     cf_baked = _baked_block("cf", CF_FEA_LEN)
 
@@ -1877,6 +1881,18 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
     # the train set; val/test stay whole (rank 0 validates). Non-distributed -> the
     # BalancedEpochSampler path, byte-identical. DDP here targets the all-SC multitask
     # pretraining (ratio=inf -> ns_train unused), so sharding sc_train is the full train set.
+    if train_index_weights is not None:
+        # Self-enforcing contract (review 2026-07-28): the parallel array must
+        # cover the dataset exactly, and fractional/zero weights silently delete
+        # samples via int() truncation — refuse both here, not just in gps_main.
+        if len(train_index_weights) != len(dataset):
+            raise ValueError(f"train_index_weights length {len(train_index_weights)} "
+                             f"!= len(dataset) {len(dataset)}")
+        _w_arr = np.asarray(train_index_weights)
+        if not np.all((_w_arr >= 1) & (_w_arr == np.floor(_w_arr))):
+            raise ValueError("train_index_weights must be positive integers "
+                             "(fractional/zero would silently drop samples)")
+
     def _weighted(idx):
         # Train-only oversampling: replicate index i train_index_weights[i] times.
         if train_index_weights is None:

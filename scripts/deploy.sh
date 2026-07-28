@@ -662,7 +662,10 @@ EOF
 
     echo ">> Syncing builder + code + the 12 GB MPtrj JSON (one-time; resumable)..."
     ssh "${SSH}" "mkdir -p '${remote_rp}' '${REMOTE_PATH}/database/datafiles/MPtrj' '${REMOTE_PATH}/logs' '${REMOTE_PATH}/jobs' '${SCRATCH_MPTRJ_GRAPHS}'"
-    rsync -a ../RPToleranceFactor/crystal_graph_v4.py "${SSH}:${remote_rp}/"
+    # v4.3+: the builder's import closure is BOTH files (crystal_graph_v4
+    # top-level-imports crystal_field_aom) — shipping one alone dies at import.
+    rsync -a ../RPToleranceFactor/crystal_graph_v4.py \
+        ../RPToleranceFactor/crystal_field_aom.py "${SSH}:${remote_rp}/"
     rsync -a main.py            "${SSH}:${REMOTE_PATH}/"
     rsync -a database/*.py      "${SSH}:${REMOTE_PATH}/database/"
     rsync -a --info=progress2 --partial \

@@ -150,7 +150,12 @@ def main():
         agg = {k: np.mean([r[k] for r in res]) for k in res[0]}
         sd = {k: np.std([r[k] for r in res]) for k in res[0]}
         row = dict(encoder=tag, node_dim=edim, **{k: round(agg[k], 3) for k in agg},
-                   sc_mae_sd=round(sd["sc_mae"], 3))
+                   sc_mae_sd=round(sd["sc_mae"], 3),
+                   # protocol columns: rows from different head protocols must be
+                   # distinguishable in the shared CSV (dropout drifted 0.15->0.2
+                   # unnoticed once; review 2026-07-28)
+                   dropout=DEFAULTS["dropout"], tc_lr=DEFAULTS["tc_lr"],
+                   pool_dim=DEFAULTS["pool_dim"], hidden=DEFAULTS["hidden"])
         rows.append(row)
         pd.DataFrame([row]).to_csv(args.out, mode="a", header=not os.path.exists(args.out), index=False)
         print(f"[{tag:16s}] SC-MAE {agg['sc_mae']:.2f}±{sd['sc_mae']:.2f}  "

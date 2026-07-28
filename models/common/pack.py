@@ -110,6 +110,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
     kept_pos, failures, lattices, dih_any, stresses, doses = [], [], [], [], [], []
     phys_any = {"forces": False, "magmom": False, "stress": False, "dos": False}  # any finite -> has_X
     baked_any = {"valence": False, "cf": False}  # v4.3 baked node blocks present -> has_*
+    baked_seen = {"valence": [0, 0], "cf": [0, 0]}  # [with-block, without] -> mixed refusal
     jimage_any = [False]   # any nonzero bond_jimage -> graphs carry exact PBC images
     start = time.time()
 
@@ -141,7 +142,14 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
                 if arr is None and name in ("valence", "cf"):
                     # legacy graph without baked blocks: zero-fill the uniform bin;
                     # the has_* header flags below restore None semantics at read.
+                    # MIXED coverage is refused at finalize — the has_* flags are
+                    # pack-global, so one baked graph + zero-filled legacy rows
+                    # would serve zeros as real features (the dos_pack_ef1_cf
+                    # corruption, 2026-07-28).
+                    baked_seen[name][1] += 1
                     arr = np.zeros((int(r["n_atoms"]), _FIELDS[name][1]), dtype=dtype)
+                elif name in ("valence", "cf"):
+                    baked_seen[name][0] += 1
                 _write(name, arr, dtype)
             lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
             stresses.append(np.asarray(r["stress"], dtype=np.float32).reshape(9))
@@ -198,6 +206,14 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
         meta["mp_id"] = meta["id"].astype(str).str.replace(r"\.cif$", "", regex=True)
     meta.to_pickle(os.path.join(out_dir, "meta.pickle"))
 
+    for _name, (_with, _without) in baked_seen.items():
+        if _with and _without:
+            raise ValueError(
+                f"pack refused: MIXED '{_name}' coverage ({_with} graphs baked, "
+                f"{_without} legacy). The has_{_name} header flag is pack-global, so "
+                "zero-filled legacy rows would be served as real baked features. "
+                "Rebuild/augment the graph dir uniformly first (see augment_cf.py / "
+                "rebuild_dos_graphs_cf.py).")
     header = {
         "version": PACK_VERSION,
         "n_samples": len(kept_pos),
