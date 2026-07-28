@@ -179,6 +179,21 @@ class Standardizer(nn.Module):
 
 
 class TcHead(nn.Module):
+    """T_c regression + SC-class head over pooled encoder embeddings.
+
+    Pipeline: pool per-atom h (pooling: "meanmax" -> PCAWhiten(pca_k);
+    "deepsets"/"attention" -> learned pool sized by pool_dim, with DeepSets
+    knobs pool_rank (low-rank g) and pool_agg (mean/max/meanmax)) -> combine
+    with the standardized composition descriptors per head_arch:
+      concat      — [pooled || phys] -> LayerNorm -> 1-hidden trunk (default)
+      struct_only — pooled embedding alone (no descriptors; the encoder-only arm)
+      resid       — linear composition baseline + structure-MLP residual
+    -> tc_head (z-space regression, z = standardized log1p Kelvin) + class_head
+    (n_classes; 2 = SC/non-SC, >2 = ground-state hurdle classes).
+    Fresh-parameter count via n_fresh_params(); z<->Kelvin via fit_target /
+    z_to_kelvin. All knobs default to the historical behavior.
+    """
+
     def __init__(self, enc_dim: int, phys_dim: int, pca_k: int = 64,
                  hidden: int = 64, dropout: float = 0.2,
                  pooling: str = "meanmax", pool_dim: int = 32,

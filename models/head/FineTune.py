@@ -6,6 +6,12 @@ exploit it — capacity to read the 128-d embedding overfits 4k labels, budgetin
 discards the signal. Fine-tuning attacks that directly: gradients reshape the encoder so
 a SMALL DeepSets head can read the T_c-relevant structure.
 
+Loss spaces (config "loss", validated at startup; shared with the head HPO
+sweep via module-level reg_loss): l1 / msle (z-space) and mse_k / wl1_k
+(Kelvin-space); "ensemble_space" log|kelvin picks the seed-ensemble average
+domain. Unfreeze modes (ft_unfreeze): blocks:k / norms / embedding / bitfit /
+ffn:k / attn:k — norms (3k params) is the transfer-probe default.
+
 Guardrails against overfitting 1.5M encoder params on ~4k labels:
   - head WARMUP first (encoder frozen) — never hit a trained encoder with a random head;
   - then unfreeze only the TOP `ft_unfreeze_blocks` GPS block(s) (~332k each), the rest stays frozen;

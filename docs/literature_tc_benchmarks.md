@@ -1,7 +1,9 @@
 # T_c Prediction — Literature Benchmarks
 
 Reference list of published machine-learning models for superconducting critical
-temperature (T_c) regression, kept so we don't refetch. Captured 2026-06-30.
+temperature (T_c) regression, kept so we don't refetch. Captured 2026-06-30;
+our-numbers sections last reconciled 2026-07-28 (post split-bug re-validation +
+rungs 12/13).
 
 **Read the comparability notes before ranking anything against our numbers.** The single
 most important fact: headline numbers across this literature are **not comparable**, because
@@ -15,20 +17,37 @@ for every entry below.
 
 ---
 
-## Our benchmarks (3DSC_MP, parent-grouped leak-free split, 1154-row test)
+## Our benchmarks (3DSC_MP)
 
-| model | MAE (K) | RMSE (K) | R² | MSLE | cuprate MAE (K) | notes |
-|---|---|---|---|---|---|---|
-| GPS encoder FT — **forces-w2** pretrain (7-seed) | **4.18** | 9.93 | — | 0.780 | 13.44 | **our best** (parent-grouped, L1 loss) |
-| GPS encoder FT — rung-04 pretrain (7-seed) | 4.44 | 10.41 | 0.706 | 0.848 | 14.73 | prior champion |
-| GPS encoder, FT — **3DSC protocol** (chemsys split + MSLE loss) | 5.47 | 11.67 | — | **0.779** | 20.32 | for direct XGBoost comparison ↓ |
-| GPS encoder, frozen + head | 5.68 | — | — | — | 23.4 | best frozen |
-| ORIG CGCNN from scratch (leak-free) | 5.92 | 16.13 | 0.173 | 1.396 | 24.81 | single seed |
-| ORIG CGCNN (random/leaky split) | 4.04 | — | — | — | ~24.8 | leakage-inflated, NOT comparable |
+> **⚠️ SPLIT-BUG INVALIDATION (2026-07-14).** Every fine-tune number produced
+> 2026-06-29 → 2026-07-14 ran on scrambled folds (FineTune joined split labels to
+> dataset positions by index order while the dataset seed-shuffles at load; fixed
+> `48f099d`). The old headline **4.18 K "champion" is void** (~1.1 K of it was
+> leak). Frozen-probe numbers were unaffected. Tables below are post-fix.
 
-Split = parent-grouped (doped variants of one MP parent kept together), seed 123, 70/10/20.
-Loss = L1 in log1p(K); reported MAE in Kelvin. Our split is leak-free but slightly *less* strict
-than the 3DSC paper's chemical-system grouping.
+### Parent-grouped protocol (re-validated 2026-07-16, byte-identical configs, fixed code)
+
+| model | MAE (K) | SC-only MAE | notes |
+|---|---|---|---|
+| GPS FT — 09-valence pretrain | **5.12** | — | re-validated battery champion |
+| GPS FT — rung-04 pretrain | 5.17 | — | now ≈ forces-w2 (old ordering flipped) |
+| GPS FT — forces-w2 pretrain | 5.29 | 7.30 | was "4.18" pre-fix |
+| GPS frozen + head | 5.68 | — | unaffected by the bug |
+| ORIG CGCNN from scratch (leak-free) | 5.92 | — | single seed |
+
+### Chemsys protocol (3DSC-paper-comparable; msle loss, norms unfreeze, 3-seed log-ensemble)
+
+| encoder | MAE (K) | SC-only | MSLE | cuprate MAE | notes |
+|---|---|---|---|---|---|
+| rung 12 (disorder corpus) | **4.26** | **5.33** | 0.847 | **15.23** | **Kelvin/cuprate champion** |
+| rung 13 (globaldeep + disorder) | 5.02 | 6.84 | **0.836** | 19.58 | MSLE-best; trades high-T_c amplitude |
+| 09-valence (hpoB pd64, blocks:1) | — | 5.59 | 0.867 | 15.58 | pre-disorder best |
+| 09-valence (best09 protocol) | — | 6.59 | 0.880 | 18.68 | first honest chemsys number |
+
+Chemsys MSLE progression 0.937 → 0.880 → 0.867 → 0.847 → 0.836 vs **XGBoost 0.748**
+(3DSC paper, same protocol): we currently LOSE the log metric — the earlier "0.733 tie"
+was entirely split leakage. Our edge is Kelvin-scale/cuprate accuracy and zero-shot
+family transfer, not MSLE. Rung 15 (AOM crystal-field features) pending.
 
 ---
 
@@ -44,15 +63,15 @@ than the 3DSC paper's chemical-system grouping.
 - vs us: **DIRECT TEST DONE.** Re-ran our FT under their exact protocol (chemical-system grouped split + MSLE loss, 7-seed):
   - rung-04 encoder (2026-06-30): **MSLE 0.779** (MAE 5.47, cuprate 20.32).
   - **forces-w2 encoder (2026-07-02): MSLE 0.766** (MAE 5.21, RMSE 11.44, cuprate 19.58, val-z 0.465±0.004) — closes the gap to **0.018**, now INSIDE the XGBoost's ±0.010 band (~2σ ≈ 0.728–0.768). Single chem-system split vs their 100-rep average → 0.018 is within split-noise, i.e. a **statistical tie**, not a loss.
-  - **5-SPLIT SWEEP (2026-07-02, forces-w2, 7-seed each):** chemsys split seeds 123/234/345/456/567 → MSLE 0.766/0.758/0.749/0.664/0.728, **mean 0.733, sd 0.037 (SEM 0.017)** vs XGBoost **0.748 ± 0.010**. Difference −0.015 < our SEM → **STATISTICAL TIE** (deficit erased from rung-04's 0.779). Honest caveat: high split-to-split variance (~4× their 100-rep spread); the sub-0.748 mean rests largely on one favorable split (456=0.664 — drop it and the other four average 0.750, dead-on XGBoost). So "indistinguishable," not a claimed win.
-  - Net: our structure-GNN is **on par** with the published 3DSC XGBoost on its own MSLE metric/split, and additionally wins on absolute-K MAE + cuprates (which they don't report). MSLE-training + the harder chemsys split raise MAE (4.18→5.21) since MSLE deprioritizes high-T_c — the 4.18K champion is the absolute-accuracy model.
+  - **⚠️ RETRACTED — 5-SPLIT SWEEP (2026-07-02, "statistical tie" mean 0.733):** ran on the scrambled folds of the positional-split bug (fixed `48f099d`); the post-fix 5-seed re-run gives **0.937 ± 0.075** on the same protocol. The tie was entirely leakage. Post-fix protocol + representation work (log-ensembling, pd64, disorder corpus, globaldeep) has brought us to **0.836 best / 0.847 Kelvin-champion** vs their 0.748 — an honest deficit.
+  - Net (post-fix): XGBoost still leads the log metric (0.748 vs our 0.836); our structure-GNN leads where they don't report — absolute-Kelvin MAE, cuprate accuracy (15.2 K), and zero-shot family transfer (nickelates, LSCO hole-side dome).
 
 **SuperVision-ALIGNN** (this IS the source of the "ALIGNN on 3DSC" figure)
 - HuggingFace `shreyaspullehf/supervision-alignn-tc-prediction`
 - Dataset: 3DSC_MP (5,773); Model: ALIGNN
 - Metrics: **MAE 5.34 K, RMSE 10.27 K, R² 0.719**
 - Split: ⚠️ **random 70/15/15** (leaky)
-- vs us: our FT (rung-04) RMSE 10.41 / R² 0.706 ≈ ALIGNN's 10.27 / 0.719 — but **ALIGNN is on a random (leaky) split and ours is leak-free**, so matching it on a harder task means we're effectively stronger; and our champion forces-w2 (MAE **4.18**, RMSE 9.93) < their 5.34.
+- vs us: **ALIGNN is on a random (leaky) split and ours is leak-free**, so any rough parity on a harder task means we're effectively stronger; our post-fix chemsys champion (pooled MAE 4.26, RMSE 9.53) compares to their (leak-inflated) 5.34 MAE.
 
 **Electronegativity-informed CGCNN (mCGCNN-EΔEN)**
 - ACS *Inorg. Chem.*, DOI [10.1021/acs.inorgchem.6c01169](https://doi.org/10.1021/acs.inorgchem.6c01169)
@@ -108,4 +127,4 @@ than the 3DSC paper's chemical-system grouping.
 - **Metric**: MSLE (3DSC paper) ≠ MAE (us, Quinn) ≠ RMSE (Roter, ALIGNN) ≠ R²-on-ln T_c (Stanev). RMSE ≈ 1.5–2× MAE on these skewed distributions. MSLE rewards low-T_c *relative* accuracy; MAE/RMSE in K reward high-T_c *absolute* accuracy (cuprates).
 - **Split is the decider**: random splits LEAK on these datasets (duplicate/doped near-siblings) — worth ≈ 1.9 K of false optimism for us (ORIG 4.04 leaky → 5.92 leak-free). 3DSC's chemical-system grouping is the gold standard; our parent-grouping is leak-free, slightly less strict. **Honest, grouped-split structure results are scarce — basically just the 3DSC XGBoost (MSLE 0.748).** ALIGNN/mCGCNN/JPCC/Zhang are all random or unverified.
 - **Data ceiling**: ~20% of SuperCon entries estimated mislabeled (Roter & Dordevic) — caps achievable accuracy.
-- **Bottom line vs us**: On 3DSC, every flashier number (R² ≥ 0.92, RMSE ≤ 8 K) rides on a random/unverified split. The only fair competitor on an honest split is the **3DSC XGBoost**, and the settled 5-split same-protocol test (chemsys + MSLE, forces-w2) gives **XGBoost 0.748 vs our mean 0.733 ± SEM 0.017 = a STATISTICAL TIE** (deficit erased from rung-04's 0.779). Our GNN additionally leads on absolute-K MAE / cuprates (**4.18 / 13.44** parent-grouped, forces-w2), which they don't report. Roughly comparable models with opposite strengths; a strong composition+SOAP gradient boost is hard to beat on the log metric, our GNN wins on absolute accuracy.
+- **Bottom line vs us (post-split-fix)**: On 3DSC, every flashier number (R² ≥ 0.92, RMSE ≤ 8 K) rides on a random/unverified split. The only fair competitor on an honest split is the **3DSC XGBoost**: they lead the log metric (**0.748 vs our best 0.836**; the old "0.733 tie" was split leakage, retracted above). Our GNN leads on what they don't report: Kelvin-scale accuracy (chemsys pooled MAE **4.26**, SC-only 5.33), cuprate MAE (**15.23**), and zero-shot family transfer. Opposite strengths: a composition+SOAP gradient boost is hard to beat on a log metric dominated by low-T_c/composition regularity; the structure-GNN wins on absolute accuracy and physics transfer.

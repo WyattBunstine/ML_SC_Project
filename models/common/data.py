@@ -230,9 +230,11 @@ for _z in range(1, 119):
 # electronic CONFIGURATION, not element identity: Cu2+ and Ni1+ both read [0,0,9,0] (d9),
 # while a d2 site [0,0,2,0] and a p2 site [2,2,0,0] stay distinct, and f-electron
 # (heavy-fermion) systems are visible (Ce3+ = [0,0,0,1]). d/f-block CATIONS collapse
-# valence into the (n-1)d / (n-2)f shell (Ni+ = 3d9, not 3d8 4s1). Computed at LOAD time
-# from the stored Z + oxidation_state (no graph rebuild). Opt-in via use_valence_features;
-# concat order [base | rich | valence | dihedral], mirrored across every assembly site.
+# valence into the (n-1)d / (n-2)f shell (Ni+ = 3d9, not 3d8 4s1). This LOAD-time
+# computation from stored Z + oxidation_state is the LEGACY FALLBACK: builder schema
+# >= v4.3 bakes a per-species occupancy-weighted valence block into the graph, which
+# assemble prefers when present. Opt-in via use_valence_features;
+# concat order [base | rich | valence | cf | dihedral], mirrored across every assembly site.
 VALENCE_NODE_FEA_LEN = 4
 # AOM crystal-field block baked by builder schema >= v4.3 (RPToleranceFactor
 # crystal_field_aom): cf_levels[5] + cf_occ[5] + cf_frontier_gap + cf_unpaired.
@@ -562,7 +564,7 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
         dih = dihedral_node_features(graph, len(graph["nodes"])) if use_dih else None
         for ni, n in enumerate(graph["nodes"]):
             feat = _node_to_fea(n)
-            if use_rich:        # match the assemble-time concat order: [base | rich | val | dih]
+            if use_rich:        # match the assemble-time concat order: [base | rich | val | cf | dih]
                 feat = np.concatenate([feat, rich_node_features([n["Z"]])[0]])
             if use_val:
                 feat = np.concatenate([feat, (np.asarray(n["valence"], dtype=np.float32)

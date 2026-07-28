@@ -11,10 +11,14 @@ script:
      guess + Voronoi/ECoN edges are knob-independent) and caches, per TM site,
      the AOM inputs (species+oxidation, neighbor vecs/weights/ligands) plus the
      |DFT magmom| target;
-  3. grid-sweeps (E_SIGMA_SCALE, BETA_NEPHELAUXETIC, K_SD) over the cache,
+  3. grid-sweeps (BETA_NEPHELAUXETIC, K_SD, 4d/5d row factors) at the fixed
+     physical e_sigma scale (the e_sigma x beta grid is ratio-degenerate) over
+     the cache, fitting on a train split of materials,
      scoring MAE(n_unpaired_pred, |m_DFT|) plus a spin-STATE agreement rate on
      the discriminative d4-d7 sites (HS/LS separated by |m|: LS < 1.5 < HS);
-  4. reports the surface, the best knobs, and per-element diagnostics.
+  4. reports the train sweep, the HELD-OUT verdict (30% material-split test —
+     the knobs must generalize, not memorize the sample), and per-element
+     diagnostics on test.
 
 This is the GO/NO-GO gate before any full pack rebuild (task #19 stage 4).
 

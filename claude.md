@@ -26,40 +26,52 @@ When working on this project, iterate with the user on ideas before making imple
 
 ```
 ML_SC_Project/
-├── main.py                           # CLI: build-db / download-nonsc / download-energy / train / train-mpnn / plot
+├── main.py                           # CLI: build-db / build-mptrj / augment-positions / augment-physics /
+│                                     #   pack-dataset / fetch-dos / download-nonsc / download-energy /
+│                                     #   train / train-mpnn / train-gps / train-head / embed-mace / embed-gps / plot
 ├── plot.py                           # Scatter-plot predictions vs targets
 ├── configs/
-│   ├── orig_basic.json                    # Baseline CGCNN, regression (T_c)
-│   ├── orig_classify_basic.json           # Baseline CGCNN, classification (SC/non-SC)
-│   └── mpnn_basic.json               # MPNN (crystal_graph_v4), regression
+│   ├── orig_basic.json / orig_classify_basic.json / mpnn_basic.json   # legacy CGCNN/MPNN entries
+│   ├── gps/ + gps_ablation_suite/    # GPS encoder single-task + architecture ablations
+│   ├── gps_mt_ablation_suite/        # multitask pretraining rungs (01..15; 15 = +crystal-field features)
+│   └── head/                         # T_c transfer-head configs (frozen probes, fine-tune, HPO, holdouts)
+├── scripts/
+│   ├── deploy.sh                     # cluster SLURM: setup-env/sync-*/run/run-head/sweep-head/build-mptrj/
+│   │                                 #   pack-mptrj/augment-cf/status/fetch/... (header lists all)
+│   ├── augment_cf.py                 # backfill baked v4.3 valence+cf onto existing compact graphs (ordered sets)
+│   ├── calibrate_cf_magmom.py        # AOM crystal-field knob calibration vs MPtrj DFT magmoms (held-out)
+│   ├── build_disorder_corpus.py      # mean-field disordered-structure pretraining corpus from ordered MP entries
+│   ├── head_hpo_sweep.py / run_head.py / probe_encoders.py   # head HPO stage A, multi-config head runner, encoder zoo
+│   └── (eval/compare/ensemble utilities)
 ├── database/                        # SCRIPTS only — all data is under datafiles/ (gitignored)
-│   ├── database_main.py             # DB generation: generate_atom_init(),
-│   │                                #   generate_Basic_DB(), generate_CGv4_DB()
-│   ├── crystal_graph_v4_import.py   # build_crystal_graph_from_cif() — rich graph builder for cgv4
-│   ├── Download_MP_data.py          # gen_dataset(): non-SC MP API download (main.py download-nonsc)
-│   ├── Download_MP_energy.py        # gen_dataset(): MP energy-target download (main.py download-energy)
-│   └── datafiles/                   # ALL data files — GITIGNORED (CIFs, graphs, pickles, CSVs)
-│       ├── atom_init.json           # Per-element feature vectors (84 elements, 8 features each)
-│       ├── MP/                      # superconductor (3DSC_MP) data
-│       │   ├── id_prop.csv          # Headerless: filename.cif, T_c (5,773 rows)
-│       │   ├── 3DSC_MP.csv          # Full 3DSC dataset with metadata
-│       │   ├── SC_MP_basic.pickle # SC-only basic dataset: [id, value, struc_dict, label]
-│       │   ├── SC_MP_V4.pickle/.csv # cgv4 index: [id, value, graph_path, label] (+ target cols)
-│       │   ├── graphs_v4/           # cgv4 per-material JSON graphs (+ failed.txt log)
-│       │   └── cifs/                # CIF structure files
+│   ├── database_main.py             # DB generation: generate_atom_init(), generate_Basic_DB(), generate_CGv4_DB()
+│   ├── crystal_graph_v4_import.py   # imports the cgv4 builder from ../RPToleranceFactor (RP_TOLERANCE_FACTOR_PATH)
+│   ├── Extract_MPtrj.py             # stream the MPtrj release JSON (frames + physics targets)
+│   ├── Download_MP_data.py / Download_MP_energy.py / Download_MP_dos.py   # MP API fetches
+│   ├── icsd_doping.py / oxidation_doping.py   # doped-structure synthesis + doping-aware oxidation states
+│   └── datafiles/                   # ALL data files — GITIGNORED (CIFs, graphs, pickles, packs)
+│       ├── atom_init.json
+│       ├── MP/                      # superconductor data + relaxed-MP electronic structure
+│       │   ├── id_prop.csv / 3DSC_MP.csv          # 5,773-row T_c source + metadata
+│       │   ├── SC_MP_V4_doped*.pickle             # cgv4 index lineage: _doped (+_oxifix), V4M (magnetic
+│       │   │                                      #   negatives), V6 (NEMAD/ICSD expansion), _doped_cf (v4.3
+│       │   │                                      #   baked valence + crystal-field features)
+│       │   ├── graphs_v4*/                        # per-material JSON graphs per index variant
+│       │   ├── SC_pack_doped*/ dos_pack*/ disorder_pack*/   # packed columnar stores (_cf = v4.3 features)
+│       │   ├── disorder_corpus/                   # mean-field doped-structure corpus (cifs + graphs + index)
+│       │   ├── dos_rebuild/                       # DOS fetch + ±1eV-grid index (dos_pack_ef1 source)
+│       │   └── cifs*/                             # CIF structure files (incl. v5 ICSD/NEMAD sets)
 │       ├── Non_SC_DB_MP/            # non-SC negatives: Non_SC.csv + cifs/
-│       └── MP_Energy/               # MP energy benchmark: mp_energy.csv + cifs/
+│       ├── MP_Energy/               # MP energy benchmark (experimental-only by default!)
+│       └── MPtrj/                   # MPtrj release JSON (graphs+packs live on cluster scratch)
 └── models/
-    ├── CGCNNMain.py                  # Baseline CGCNN trainer (main.py train) — regression + classification
-    ├── classify_result*, test_result*  # outputs (predictions, checkpoints, epoch logs)
-    ├── OriginalCGCNN/                # baseline CGCNN
-    │   ├── CGCNNMainOrig.py          # standalone argparse trainer (not wired into main.py)
-    │   ├── CGCNNOrig.py              # model (classification-capable)
-    │   └── data.py                   # dataset, collate, loaders, BalancedEpochSampler
-    └── MPNN/                         # message-passing net (main.py train-mpnn)
-        ├── MPNNMain.py               # MPNN trainer — regression + classification
-        ├── MPNNModel.py              # CrystalMPNN model (classification-capable)
-        └── MPNNData.py               # graph loader, collate, loaders, BalancedEpochSampler
+    ├── common/                       # SHARED infra: data.py (graph/pack loaders, features, splits),
+    │                                 #   pack.py (columnar store), train.py (regression + multitask loops)
+    ├── GPSTransformer/               # GPS crystal encoder (main.py train-gps): model.py + gps_main.py
+    ├── head/                         # T_c transfer: HeadMain/HeadModel/HeadData/FineTune/embed_gps/
+    │                                 #   embed_cache (+ MACE embedding path)
+    ├── CGCNNMain.py + OriginalCGCNN/ # baseline CGCNN (main.py train)
+    └── MPNN/                         # message-passing net (main.py train-mpnn): MPNNMain.py + MPNNModel.py
 ```
 
 ---
@@ -175,8 +187,13 @@ Each element (Z = 1–84) has 8 features: `[Z, block (0=s,1=p,2=d,3=f), valence,
 atomic_radius, electron_affinity, ionization_energy, electronegativity, electron_affinity]`.
 The baseline CGCNN sums these per site weighted by occupancy → (N, 8), embedded to 64-d.
 
-The MPNN instead uses the **14 node + 7 edge + 7 poly-edge** features defined in
-`MPNN/MPNNData.py` (`NODE_FEA_LEN`, `NBR_FEA_LEN`, `POLY_FEA_LEN`). The 14 node features are:
+The MPNN/GPS models instead use the **14 node + 7 edge + 7 poly-edge** features defined in
+`models/common/data.py` (`NODE_FEA_LEN`, `NBR_FEA_LEN`, `POLY_FEA_LEN`). Optional node blocks
+extend this (concat order `[base | rich | valence | cf | dihedral]`, config-flag-gated):
+`use_rich_node_features` (+4), `use_valence_features` (+4, [n_s,n_p,n_d,n_f] subshells —
+baked per-species in builder-v4.3 graphs, load-time fallback for legacy), `use_cf_features`
+(+12, the AOM crystal-field block: sorted d-levels, occupancies, frontier gap, unpaired —
+baked-only, v4.3 packs), `use_dihedrals` (+12). The 14 base node features are:
 `Z, oxidation_state, ion_role, chi_pauling, chi_allen, ecn_value, shannon_radius, cn_core,
 hist_{corner,edge,face,other}, ionization_energy, electron_affinity`. The last two are pure
 per-element lookups (carried over from the original CGCNN `atom_init` vector); they are read
@@ -275,6 +292,23 @@ near-duplicate frames.
 ---
 
 ## Research Roadmap (rewritten 2026-06-12; phased)
+
+> **⚠️ STATUS NOTE (2026-07-28).** The phase write-ups below are a point-in-time
+> snapshot (2026-06-24) and predate two major developments:
+> 1. **The FineTune positional-split bug** (fixed `48f099d`, 2026-07-14): loader
+>    positions were joined to split labels by index order while the dataset
+>    seed-shuffles at load, scrambling every fine-tune fold from 2026-06-29 to
+>    2026-07-14. All transfer numbers from that window (incl. the 4.18 K
+>    "champion") are INVALID; docs/literature_tc_benchmarks.md carries the
+>    re-validated table.
+> 2. **The pretraining-representation program** (rungs 09-15): valence subshell
+>    features, ±1 eV DOS reconditioning, the mean-field disorder corpus (rung 12
+>    = current champion encoder: MAE 4.26 K / SC-only 5.33 / MSLE 0.847 /
+>    cuprate 15.23 under chemsys + norms-unfreeze), whole-crystal attention
+>    (rung 13: best MSLE 0.836, worse Kelvin — two-encoder portfolio), and the
+>    AOM crystal-field features (builder v4.3, rung 15 in flight).
+> Session-to-session state lives in the auto-memory (MEMORY.md), which is more
+> current than this section.
 
 **Premise.** The end target is superconducting **T_c**: data-starved (~6k labels) and
 label-noisy. Physically, T_c is governed by (a) **phonons / lattice dynamics**
