@@ -50,6 +50,10 @@ ML_SC_Project/
 │   ├── Download_MP_data.py / Download_MP_energy.py / Download_MP_dos.py   # MP API fetches
 │   ├── icsd_doping.py / oxidation_doping.py   # doped-structure synthesis + doping-aware oxidation states
 │   └── datafiles/                   # ALL data files — GITIGNORED (CIFs, graphs, pickles, packs)
+│       │                            # Retirement convention: superseded/era-closed datasets move
+│       │                            #   to datafiles/.retired/<date>/ (README manifest: why + how
+│       │                            #   to restore/rebuild) instead of deletion — check there
+│       │                            #   before rebuilding something that "disappeared".
 │       ├── atom_init.json
 │       ├── MP/                      # superconductor data + relaxed-MP electronic structure
 │       │   ├── id_prop.csv / 3DSC_MP.csv          # 5,773-row T_c source + metadata
