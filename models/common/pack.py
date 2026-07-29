@@ -208,6 +208,12 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
 
     for _name, (_with, _without) in baked_seen.items():
         if _with and _without:
+            # refusing AFTER bins/meta were written: delete any stale header so
+            # the half-written dir can't be auto-detected as a valid pack and
+            # memmapped against old totals (gap-sweep 2026-07-28)
+            _stale = os.path.join(out_dir, "pack_header.json")
+            if os.path.exists(_stale):
+                os.remove(_stale)
             raise ValueError(
                 f"pack refused: MIXED '{_name}' coverage ({_with} graphs baked, "
                 f"{_without} legacy). The has_{_name} header flag is pack-global, so "

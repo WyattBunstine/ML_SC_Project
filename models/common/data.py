@@ -1882,6 +1882,13 @@ def get_sc_nonsc_loaders(dataset, batch_size=64, val_ratio=0.1, test_ratio=0.1,
     # BalancedEpochSampler path, byte-identical. DDP here targets the all-SC multitask
     # pretraining (ratio=inf -> ns_train unused), so sharding sc_train is the full train set.
     if train_index_weights is not None:
+        if sc_to_nonsc_ratio != float("inf"):
+            # n_nonsc_train is computed from UNWEIGHTED counts, so weights would
+            # silently distort the configured class ratio by the mean SC weight;
+            # refuse until the interaction is designed (review 2026-07-28).
+            raise NotImplementedError(
+                "train_index_weights with a finite sc_to_nonsc_ratio is not "
+                "supported (epoch class balance would silently inflate)")
         # Self-enforcing contract (review 2026-07-28): the parallel array must
         # cover the dataset exactly, and fractional/zero weights silently delete
         # samples via int() truncation — refuse both here, not just in gps_main.

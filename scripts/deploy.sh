@@ -791,7 +791,7 @@ augment_cf() {
     submit_cpu_job "augment_cf" "12:00:00" "$(cat <<EOF
 export RP_TOLERANCE_FACTOR_PATH="${remote_rp}"
 python scripts/augment_cf.py --index database/datafiles/MPtrj/MPtrj_V4.pickle \\
-    --workers ${SLURM_CPU_CPUS}
+    --workers ${SLURM_CPU_CPUS} ${AUGMENT_FORCE:+--force}
 python main.py pack-dataset \\
     --index database/datafiles/MPtrj/MPtrj_V4.pickle \\
     --out "${out_pack}" \\

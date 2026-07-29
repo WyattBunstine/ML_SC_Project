@@ -197,7 +197,9 @@ def main():
                 not (prev["sampler_version"] == SAMPLER_VERSION).all():
             stale.append(f"sampler_version != {SAMPLER_VERSION}")
         for col, cur in (("target", args.target), ("split_group", args.split_group),
-                         ("checkpoint", os.path.basename(args.checkpoint))):
+                         # FULL path: five zoo encoders share the basename
+                         # result_model_best.pth.tar (gap-sweep 2026-07-28)
+                         ("checkpoint", args.checkpoint)):
             if col in prev.columns and not (prev[col] == cur).all():
                 stale.append(f"{col} != {cur!r}")
         if stale:
@@ -209,7 +211,7 @@ def main():
         cfg = configs[i]
         v, ep = run_config(cfg, seed=0)
         row = {**cfg, "config_idx": i, "val": v, "best_epoch": ep, "target": args.target,
-               "split_group": args.split_group, "checkpoint": os.path.basename(args.checkpoint),
+               "split_group": args.split_group, "checkpoint": args.checkpoint,
                "sampler_version": SAMPLER_VERSION}
         pd.DataFrame([row]).to_csv(args.out, mode="a", header=not os.path.exists(args.out),
                                    index=False)

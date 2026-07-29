@@ -15,8 +15,9 @@ Two phases (run separately so the API fetch can overlap other work):
             possibly a newer relaxation. Acceptable for a per-structure total
             DOS target; recorded here for provenance.
   --build   build every graph with the CURRENT builder (schema >= v4.3, baked
-            valence+cf), carry the per-structure physics keys (dos, bandgap,
-            forces, magmom, stress) over from the OLD graph JSON, write to
+            valence+cf), carry the per-STRUCTURE physics keys (dos, bandgap)
+            over from the OLD graph JSON (atom-aligned keys are deliberately
+            NOT carried — refetched structures may reorder sites), write to
             dos_rebuild/graphs_v4_cf/, and emit dos_all_index_cf.pickle/.csv.
             Refuses to finish silently on failures: writes failed_paths.txt and
             exits nonzero if ANY graph failed (no sub-1% tolerance — the DOS
@@ -40,12 +41,19 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 sys.path.insert(0, os.path.join(_ROOT, "database"))
 
+import crystal_graph_v4_import  # noqa: F401,E402  (RPToleranceFactor on path)
+from crystal_field_aom import CF_SCHEMA as _CF_SCHEMA  # noqa: E402
+
 DOS_DIR = "database/datafiles/MP/dos_rebuild"
 CIF_DIR = os.path.join(DOS_DIR, "cifs")
 OUT_GRAPHS = os.path.join(DOS_DIR, "graphs_v4_cf")
 INDEX_IN = os.path.join(DOS_DIR, "dos_all_index.pickle")
 INDEX_OUT = os.path.join(DOS_DIR, "dos_all_index_cf")
-PHYS_KEYS = ("dos", "bandgap", "forces", "magmom", "stress")
+# Per-STRUCTURE physics only: atom-aligned keys (forces/magmom) and the
+# frame-tied stress must NOT be carried onto a re-fetched structure whose site
+# count/order can differ from the original calc (gap-sweep 2026-07-28). The
+# DOS graphs carry only 'dos' in practice; this restriction makes it a rule.
+PHYS_KEYS = ("dos", "bandgap")
 
 
 def cif_name(mp_id: str) -> str:
@@ -120,8 +128,16 @@ def build_all(workers=None):
         if not os.path.exists(cif):
             drop_nocif.append(mid)
             continue
-        if os.path.exists(out):        # resumable: completed graphs skipped
-            continue
+        if os.path.exists(out):
+            # resumable — but only if the existing graph carries the CURRENT
+            # cf schema; a resume across a physics-fix boundary must re-bake
+            # (gap-sweep 2026-07-28: schema-less survivors mixed physics).
+            try:
+                with open(out) as f:
+                    if json.load(f).get("cf_schema") == _CF_SCHEMA:
+                        continue
+            except Exception:  # noqa: BLE001
+                pass
         tasks.append((mid, cif, row["graph_path"], out))
     print(f"{len(tasks):,} graphs to build ({len(drop_nocif):,} no-cif dropped, "
           f"{len(df) - len(tasks) - len(drop_nocif):,} already built)", flush=True)

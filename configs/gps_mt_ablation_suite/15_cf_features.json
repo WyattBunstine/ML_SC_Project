@@ -2,7 +2,7 @@
   "architecture": "gps",
   "index_path": [
     "/scratch4/tmcquee2/wbunsti1/ML_SC_Proj/MPtrj/packed_v4_cf",
-    "/scratch4/tmcquee2/wbunsti1/ML_SC_Proj/MP/dos_pack_ef1_cf",
+    "/scratch4/tmcquee2/wbunsti1/ML_SC_Proj/MP/dos_pack_ef1_cf2",
     "/scratch4/tmcquee2/wbunsti1/ML_SC_Proj/MP/disorder_pack_cf"
   ],
   "target_column": "formation_energy_per_atom",
