@@ -33,7 +33,7 @@ from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_target
                       _select_target_key, build_data_rows, subsample_frames_by_group,
                       rows_meanstd,
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
-                      valence_node_features, VALENCE_NODE_FEA_LEN, CF_FEA_LEN,
+                      valence_node_features, VALENCE_NODE_FEA_LEN, CF_FEA_LEN, BVS_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN,
                       DIHEDRAL_FEA_LEN, DOS_N_ENERGY)
 
@@ -49,6 +49,7 @@ _FIELDS = {
     "dih_node":  (np.float32, DIHEDRAL_FEA_LEN),   # atom-aligned 4-body torsion summary
     "valence":   (np.float32, VALENCE_NODE_FEA_LEN),  # baked subshells (v4.3 graphs; zeros else)
     "cf":        (np.float32, CF_FEA_LEN),            # baked AOM crystal-field block (v4.3)
+    "bvs":       (np.float32, BVS_FEA_LEN),           # baked bond-valence block (v4.4)
     "forces":    (np.float32, 3),    # atom-aligned multitask TARGET (NaN where absent)
     "magmom":    (np.float32, 1),    # atom-aligned multitask TARGET (NaN where absent)
     "bond_cnt":  (np.int32, None),
@@ -109,8 +110,8 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
     offsets = {col: [] for col in _OFFSET_COLS}
     kept_pos, failures, lattices, dih_any, stresses, doses = [], [], [], [], [], []
     phys_any = {"forces": False, "magmom": False, "stress": False, "dos": False}  # any finite -> has_X
-    baked_any = {"valence": False, "cf": False}  # v4.3 baked node blocks present -> has_*
-    baked_seen = {"valence": [0, 0], "cf": [0, 0]}  # [with-block, without] -> mixed refusal
+    baked_any = {"valence": False, "cf": False, "bvs": False}  # baked blocks -> has_*
+    baked_seen = {"valence": [0, 0], "cf": [0, 0], "bvs": [0, 0]}  # mixed refusal
     jimage_any = [False]   # any nonzero bond_jimage -> graphs carry exact PBC images
     start = time.time()
 
@@ -139,7 +140,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
             offsets["n_angv"].append(len(r["ang_vcos"]))
             for name, (dtype, _w) in _FIELDS.items():
                 arr = r.get(name)
-                if arr is None and name in ("valence", "cf"):
+                if arr is None and name in ("valence", "cf", "bvs"):
                     # legacy graph without baked blocks: zero-fill the uniform bin;
                     # the has_* header flags below restore None semantics at read.
                     # MIXED coverage is refused at finalize — the has_* flags are
@@ -148,7 +149,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
                     # corruption, 2026-07-28).
                     baked_seen[name][1] += 1
                     arr = np.zeros((int(r["n_atoms"]), _FIELDS[name][1]), dtype=dtype)
-                elif name in ("valence", "cf"):
+                elif name in ("valence", "cf", "bvs"):
                     baked_seen[name][0] += 1
                 _write(name, arr, dtype)
             lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
@@ -159,6 +160,8 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
                 baked_any["valence"] = True
             if not baked_any["cf"] and r.get("cf") is not None:
                 baked_any["cf"] = True
+            if not baked_any["bvs"] and r.get("bvs") is not None:
+                baked_any["bvs"] = True
             for _k in phys_any:
                 if not phys_any[_k] and np.isfinite(r[_k]).any():
                     phys_any[_k] = True
@@ -231,6 +234,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
         "has_dihedrals": bool(any(dih_any)),
         "has_valence_baked": bool(baked_any["valence"]),
         "has_cf": bool(baked_any["cf"]),
+        "has_bvs": bool(baked_any["bvs"]),
         "has_forces": phys_any["forces"],
         "has_magmom": phys_any["magmom"],
         "has_stress": phys_any["stress"],
@@ -270,6 +274,7 @@ class PackedCIFDataV4(Dataset):
                  build_angle_bias=False, use_rich_node_features=False,
                  use_dihedrals=False, multitask=False, frame_subsample=1,
                  use_valence_features=False, use_cf_features=False,
+                 use_bvs_features=False,
                  n_energy=None, dos_per_atom=True):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
@@ -313,6 +318,10 @@ class PackedCIFDataV4(Dataset):
         self.use_rich_node_features = use_rich_node_features
         self.use_valence_features = use_valence_features
         self.use_cf_features = use_cf_features
+        self.use_bvs_features = use_bvs_features
+        if use_bvs_features and not self._header.get("has_bvs"):
+            raise ValueError(f"use_bvs_features=True but pack {pack_dir} carries no "
+                             "baked bvs block — repack from builder-v4.4 graphs.")
         if use_cf_features and not self._header.get("has_cf"):
             raise ValueError(f"use_cf_features=True but pack {pack_dir} carries no baked "
                              "cf block — repack from builder-v4.3 graphs.")
@@ -433,6 +442,8 @@ class PackedCIFDataV4(Dataset):
                    if "valence" in mm and self._header.get("has_valence_baked") else None)
         cf = (mm["cf"][a0:a0 + n]
               if "cf" in mm and self._header.get("has_cf") else None)
+        bvs = (mm["bvs"][a0:a0 + n]
+               if "bvs" in mm and self._header.get("has_bvs") else None)
         bjimage = (mm["bond_jimage"][b0:b0 + nb] if "bond_jimage" in mm
                    else np.zeros((nb, 3), dtype=np.int16))
         # Multitask targets: atom-aligned forces/magmom + per-sample stress. Absent
@@ -454,6 +465,7 @@ class PackedCIFDataV4(Dataset):
             "dih_node": dih,
             "valence": valence,
             "cf": cf,
+            "bvs": bvs,
             "lattice": lattice,
             "forces": forces,
             "magmom": magmom,
@@ -487,7 +499,8 @@ class PackedCIFDataV4(Dataset):
                                   use_rich_node_features=self.use_rich_node_features,
                                   use_dihedrals=self.use_dihedrals,
                                   use_valence_features=self.use_valence_features,
-                                  use_cf_features=self.use_cf_features)
+                                  use_cf_features=self.use_cf_features,
+                                  use_bvs_features=self.use_bvs_features)
         if self.multitask:
             bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
             targets, masks = _assemble_targets(r, energy=target, bandgap=bg,
@@ -527,6 +540,8 @@ class PackedCIFDataV4(Dataset):
                 node = np.concatenate([node, val], axis=1)
             if self.use_cf_features:
                 node = np.concatenate([node, np.asarray(r["cf"], dtype=np.float32)], axis=1)
+            if self.use_bvs_features:
+                node = np.concatenate([node, np.asarray(r["bvs"], dtype=np.float32)], axis=1)
             if self.use_dihedrals:
                 node = np.concatenate([node, np.asarray(r["dih_node"], dtype=np.float32)], axis=1)
             node_rows.append(node)
@@ -560,6 +575,7 @@ class PackedCIFDataV4(Dataset):
         node_dim = (NODE_FEA_LEN + (RICH_NODE_FEA_LEN if self.use_rich_node_features else 0)
                     + (VALENCE_NODE_FEA_LEN if self.use_valence_features else 0)
                     + (CF_FEA_LEN if self.use_cf_features else 0)
+                    + (BVS_FEA_LEN if self.use_bvs_features else 0)
                     + (DIHEDRAL_FEA_LEN if self.use_dihedrals else 0))
         return {
             "node": rows_meanstd(_cat(node_rows, node_dim), node_dim),
