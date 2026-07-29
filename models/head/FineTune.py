@@ -126,6 +126,24 @@ def run(cfg, out_dir, device):
     # Optional zero-shot family hold-out: force the listed ids into TEST (and out of
     # train/val) so the model gets ZERO exposure to that family — e.g. the oxide
     # nickelates, to test whether cuprate-learned physics transfers Cu->Ni.
+    # Optional curated exclusions (label artifacts — see docs/data_curation/):
+    # rows dropped ENTIRELY before splitting, never train/val/test. Off by
+    # default; adopt per evaluation ROUND so all compared arms share it.
+    if cfg.get("exclude_ids_csv"):
+        import pandas as _pd
+        _ex = set(_pd.read_csv(cfg["exclude_ids_csv"])["id"].astype(str))
+        _keep = [r for r, i in enumerate(ids) if i not in _ex]
+        _n_drop = len(ids) - len(_keep)
+        import numpy as _np
+        _keep = _np.asarray(_keep)
+        for _key in ("phys", "tc", "label", "family", "group", "gs"):
+            if _key in data:
+                data[_key] = data[_key][_keep]
+        data["ids"] = [ids[r] for r in _keep]
+        split = [split[r] for r in _keep]
+        ids = list(data["ids"])
+        print(f"[ft] exclusions: dropped {_n_drop} curated label-artifact rows")
+
     if cfg.get("holdout_ids_csv"):
         import pandas as _pd
         _ho = set(_pd.read_csv(cfg["holdout_ids_csv"])["id"].astype(str))

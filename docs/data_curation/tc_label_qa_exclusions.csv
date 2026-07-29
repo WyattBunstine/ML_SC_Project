@@ -1,0 +1,5 @@
+id,tc,reason
+Cr1Cu1O2-MP-mp-510625.cif,132.0,"CuCrO2 delafossite (linear Cu+ d10) — not a 132K SC; dirty SuperCon entry, perfect formula match so totreldiff cannot catch it"
+Cr0.95Cu1Fe0.05O2-MP-mp-510625-synth_doped.cif,117.5,doped variant of the CuCrO2 artifact (doper propagated the bad label)
+Cr0.9Cu1Fe0.1O2-MP-mp-510625-synth_doped.cif,98.0,doped variant of the CuCrO2 artifact
+H4Si1-MP-mp-23739.cif,17.0,silane SC only above ~100 GPa; no pressure feature in our representation — ambient-looking structure with a high-pressure label

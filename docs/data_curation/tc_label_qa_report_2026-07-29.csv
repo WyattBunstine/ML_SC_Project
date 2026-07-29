@@ -1,0 +1,9 @@
+finding,disposition,notes
+"CuCrO2 family (3 rows, 98-132K)",EXCLUDE,Cu+ d10 delafossite; poisons the >100K tail (3 of 21 rows) and cuprate-class stats
+H4Si1 (17K),EXCLUDE,"pressure-only SC; the other 14 hydride rows (PdHx series, Th4H15) are genuine ambient SCs — keep"
+"Ba2Ca1Cu2Tl1O8 (106K), Ba2Cu1Tl1O5 (95K) + 5 more Tl rows",KEEP + oxidation follow-up,REAL cuprates; oxidation guess assigns Cu +3.0-3.5 (Tl+3 charge balance dumped on Cu) -> d6.5 features on top-tail materials
+"Hg-1201 O4.3x series (5 rows, 37-81K)",KEEP + oxidation follow-up,real; interstitial O over-oxidizes Cu to +2.6-2.74
+"Bi2(Ca,Y)Cu2I1Sr2O8 iodine-intercalated (3 rows, 67-79K)",KEEP,"genuine intercalated Bi-2212; I- soaks charge, Cu ~+1.4 is plausible"
+"Cu3Dy1Pb2Sr2O8 (76.5K), Bi1Ca0.35Cu2Pb1Sr2Y0.65O8 (76K)",KEEP (manual-review note),"Pb-cuprate families, labels plausible; near screen threshold"
+24 SC rows with Cu > +2.6 total,oxidation follow-up,bounded list; cap-and-redistribute rule for Tl/Hg-excess-O parents is the successor to the 2026-07-08 Hg+1/Tl+1 fixes
+Duplicate-composition conflicts,NONE FOUND,0 compositions with Tc spread > 2K — 3DSC dedup is clean
