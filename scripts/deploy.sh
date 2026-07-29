@@ -662,10 +662,7 @@ EOF
 
     echo ">> Syncing builder + code + the 12 GB MPtrj JSON (one-time; resumable)..."
     ssh "${SSH}" "mkdir -p '${remote_rp}' '${REMOTE_PATH}/database/datafiles/MPtrj' '${REMOTE_PATH}/logs' '${REMOTE_PATH}/jobs' '${SCRATCH_MPTRJ_GRAPHS}'"
-    # v4.3+: the builder's import closure is BOTH files (crystal_graph_v4
-    # top-level-imports crystal_field_aom) — shipping one alone dies at import.
-    rsync -a ../RPToleranceFactor/crystal_graph_v4.py \
-        ../RPToleranceFactor/crystal_field_aom.py "${SSH}:${remote_rp}/"
+    ship_builder
     rsync -a main.py            "${SSH}:${REMOTE_PATH}/"
     rsync -a database/*.py      "${SSH}:${REMOTE_PATH}/database/"
     rsync -a --info=progress2 --partial \
@@ -771,6 +768,20 @@ EOF
 # pack-mptrj [out_dir]: default writes packed_v1; pass ${SCRATCH_MPTRJ_PACK_V2}
 # after augment-positions to build the positioned v2 pack without clobbering v1.
 # ---------------------------------------------------------------------------
+# The RPToleranceFactor builder's import closure — ONE list, used by every
+# command that ships the builder. Grew silently twice (crystal_field_aom,
+# then bond_valence) with per-command rsync lists; each growth killed a
+# queued cluster job at import (review altitude finding, 3rd occurrence).
+BUILDER_FILES="crystal_graph_v4.py crystal_field_aom.py bond_valence.py"
+ship_builder() {
+    local remote_rp="${REMOTE_PATH%/*}/RPToleranceFactor"
+    ssh "${SSH}" "mkdir -p '${remote_rp}'"
+    local f files=()
+    for f in ${BUILDER_FILES}; do files+=("../RPToleranceFactor/${f}"); done
+    rsync -a "${files[@]}" "${SSH}:${remote_rp}/"
+}
+
+# ---------------------------------------------------------------------------
 # Backfill baked v4.3 valence+cf blocks onto the remote MPtrj graphs (in place,
 # resumable/atomic — scripts/augment_cf.py), then pack into a NEW pack so the
 # legacy packed_v4 stays untouched for older configs:
@@ -785,9 +796,7 @@ augment_cf() {
     sync_code
     rsync -a main.py "${SSH}:${REMOTE_PATH}/"
     rsync -a database/*.py "${SSH}:${REMOTE_PATH}/database/"
-    ssh "${SSH}" "mkdir -p '${remote_rp}'"
-    rsync -a ../RPToleranceFactor/crystal_graph_v4.py \
-        ../RPToleranceFactor/crystal_field_aom.py "${SSH}:${remote_rp}/"
+    ship_builder
     submit_cpu_job "augment_cf" "12:00:00" "$(cat <<EOF
 export RP_TOLERANCE_FACTOR_PATH="${remote_rp}"
 python scripts/augment_cf.py --index database/datafiles/MPtrj/MPtrj_V4.pickle \\
