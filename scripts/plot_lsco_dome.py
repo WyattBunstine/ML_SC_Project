@@ -106,8 +106,7 @@ ax.plot(gx, guide, "-", color="0.15", lw=2.4, zorder=4)
 ax.set_xlabel("formal Cu oxidation state  (2 = undoped)", fontsize=24)
 ax.set_ylabel("$T_c$ (K)", fontsize=24)
 ax.tick_params(axis="both", labelsize=21)
-ax.set_title("La$_2$CuO$_4$ family (mp-1077929) doping series — actual (●) vs predicted (○), test set",
-             fontsize=24)
+ax.set_title("La$_2$CuO$_4$ family doping series", fontsize=24)
 ax.set_xlim(1.6, 2.6)
 # bottom margin below the tc=0 row so the region labels sit in their own band
 ax.set_ylim(bottom=-6)
