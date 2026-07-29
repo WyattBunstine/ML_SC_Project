@@ -2,7 +2,7 @@
   "architecture": "gps",
   "index_path": [
     "${ML_SC_DATA}/MPtrj/packed_v4_cf",
-    "${ML_SC_DATA}/MP/dos_pack_ef1_cf",
+    "${ML_SC_DATA}/MP/dos_pack_ef1_cf2",
     "${ML_SC_DATA}/MP/disorder_pack_cf"
   ],
   "target_column": "formation_energy_per_atom",
