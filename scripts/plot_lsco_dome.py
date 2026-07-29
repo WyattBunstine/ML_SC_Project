@@ -72,8 +72,12 @@ fig, ax = plt.subplots(figsize=(13, 8))
 ax.axvspan(1.5, 2.0, color="aliceblue", zorder=0)
 ax.axvspan(2.0, 2.7, color="mistyrose", alpha=0.6, zorder=0)
 ax.axvline(2.0, color="0.4", ls="--", lw=1.2, zorder=1)
-ax.text(1.75, 41, "electron-doped", color="steelblue", ha="center", fontsize=12)
-ax.text(2.18, 41, "hole-doped", color="firebrick", ha="center", fontsize=12)
+import matplotlib.transforms as mtransforms
+_blend = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+ax.text(1.66, 0.03, "electron-doped", color="steelblue", ha="center",
+        fontsize=15, transform=_blend)
+ax.text(2.37, 0.03, "hole-doped", color="firebrick", ha="center",
+        fontsize=15, transform=_blend)
 
 # per-material: gray connector + actual (filled) & predicted (open) circles, colored by dopant
 for r in l.itertuples():
@@ -99,10 +103,11 @@ sigma_pts = SMOOTH_EV / ((gx.max() - gx.min()) / (len(gx) - 1))
 guide = np.clip(gaussian_filter1d(np.interp(gx, bx, by), sigma=sigma_pts), 0, None)
 ax.plot(gx, guide, "-", color="0.15", lw=2.4, zorder=4)
 
-ax.set_xlabel("formal Cu oxidation state  (2 = undoped)", fontsize=12)
-ax.set_ylabel("$T_c$ (K)", fontsize=12)
+ax.set_xlabel("formal Cu oxidation state  (2 = undoped)", fontsize=16)
+ax.set_ylabel("$T_c$ (K)", fontsize=16)
+ax.tick_params(axis="both", labelsize=14)
 ax.set_title("La$_2$CuO$_4$ family (mp-1077929) doping series — actual (●) vs predicted (○), test set",
-             fontsize=13)
+             fontsize=16)
 ax.set_ylim(bottom=-2)
 
 # legend: dopant colors (present) + actual/predicted/guide marker styles, 2 columns
@@ -114,7 +119,7 @@ for dp in ["Eu", "Zn", "Ni"]:
 handles += [Line2D([], [], marker="o", ls="", mfc="0.3", mec="0.3", label="actual"),
             Line2D([], [], marker="o", ls="", mfc="none", mec="0.3", label="predicted"),
             Line2D([], [], color="0.15", lw=2.4, label="predicted dome (guide)")]
-ax.legend(handles=handles, ncol=2, loc="upper right", fontsize=9, framealpha=0.9)
+ax.legend(handles=handles, ncol=2, loc="upper right", fontsize=12, framealpha=0.9)
 ax.grid(alpha=0.2)
 fig.tight_layout()
 fig.savefig(OUT, dpi=150)
