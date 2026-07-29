@@ -35,6 +35,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "database"))
 import crystal_graph_v4_import  # noqa: F401,E402  (RPToleranceFactor on path)
 from crystal_field_aom import CF_SCHEMA, site_cf_features, site_valence_subshells  # noqa: E402
+from bond_valence import site_bvs_mixed  # noqa: E402
 
 FORCE = False
 
@@ -80,6 +81,7 @@ def augment_graph(path):
         # cart_vec points AWAY from the center; ECoN weight from the center's
         # own perspective; only anion-role neighbors exert a ligand field.
         nbrs = [[] for _ in nodes]
+        bvs_nbrs = [[] for _ in nodes]
         for e in g.get("edges", []):
             s, t = int(e["source"]), int(e["target"])
             img = np.asarray(e.get("to_jimage") or (0, 0, 0), dtype=float)
@@ -92,6 +94,10 @@ def augment_graph(path):
                 nbrs[t].append({"vec": -vec, "weight": float(e["ecn_weight_tgt"]),
                                 "ligand": _symbol(nodes[s]["Z"]),
                                 "chi": nodes[s].get("chi_pauling")})
+            if nodes[s]["ion_role"] != nodes[t]["ion_role"]:
+                d = float(np.linalg.norm(vec))
+                bvs_nbrs[s].append({"dist": d, "ligand": _symbol(nodes[t]["Z"])})
+                bvs_nbrs[t].append({"dist": d, "ligand": _symbol(nodes[s]["Z"])})
 
         g["cf_schema"] = CF_SCHEMA
         for i, n in enumerate(nodes):
@@ -102,6 +108,9 @@ def augment_graph(path):
             cf = site_cf_features(species, nbrs[i], default_oxidation=oxi)
             n["cf"] = (cf["cf_levels"] + cf["cf_occ"]
                        + [cf["cf_frontier_gap"], cf["cf_unpaired"]])
+            b = site_bvs_mixed(species, bvs_nbrs[i], default_oxidation=oxi)
+            n["bvs"] = round(float(b), 6)
+            n["bvs_mismatch"] = round(float(b - oxi), 6)
 
         tmp = path + ".tmp"
         with open(tmp, "w") as f:

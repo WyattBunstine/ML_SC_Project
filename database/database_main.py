@@ -209,6 +209,9 @@ def _compact_v4_graph(graph: dict) -> dict:
                 + [float(x) for x in node["cf_occ"]]
                 + [float(node["cf_frontier_gap"]), float(node["cf_unpaired"])])
             has_cf_nodes = True
+        if "bvs" in node:
+            compact_nodes[-1]["bvs"] = float(node["bvs"])
+            compact_nodes[-1]["bvs_mismatch"] = float(node.get("bvs_mismatch", 0.0))
 
     compact_edges = []
     for edge in graph["edges"]:

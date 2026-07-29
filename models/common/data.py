@@ -242,6 +242,9 @@ VALENCE_NODE_FEA_LEN = 4
 # deliberately NO load-time fallback: use_cf_features on a cf-less graph/pack
 # raises, so a masked union can't silently mix real and zero CF blocks.
 CF_FEA_LEN = 12
+# Bond-valence block (builder schema v4.4 / CF_SCHEMA 3): [bvs, bvs_mismatch].
+# Baked-only, fail-loud like cf (see the CF_FEA_LEN note above).
+BVS_FEA_LEN = 2
 _L = {"s": 0, "p": 1, "d": 2, "f": 3}
 _NOBLE_Z = [2, 10, 18, 36, 54, 86]
 
@@ -556,6 +559,7 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
     use_rich = getattr(dataset, "use_rich_node_features", False)
     use_val = getattr(dataset, "use_valence_features", False)
     use_cf = getattr(dataset, "use_cf_features", False)
+    use_bvs = getattr(dataset, "use_bvs_features", False)
     use_dih = getattr(dataset, "use_dihedrals", False)
     node_rows, edge_rows, poly_rows = [], [], []
     zero_ang = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
@@ -575,6 +579,12 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
                     raise ValueError("use_cf_features=True but graph nodes carry no baked "
                                      "cf block — rebuild with builder schema >= v4.3.")
                 feat = np.concatenate([feat, np.asarray(n["cf"], dtype=np.float32)])
+            if use_bvs:
+                if "bvs" not in n:
+                    raise ValueError("use_bvs_features=True but graph nodes carry no "
+                                     "baked bvs block — rebuild with schema >= v4.4.")
+                feat = np.concatenate([feat, np.asarray([n["bvs"], n.get("bvs_mismatch", 0.0)],
+                                                        dtype=np.float32)])
             if use_dih:
                 feat = np.concatenate([feat, dih[ni]])
             node_rows.append(feat)
@@ -784,6 +794,16 @@ def _extract_ragged(graph):
                          for n in graph["nodes"]])
     valence_baked = _baked_block("valence", VALENCE_NODE_FEA_LEN)
     cf_baked = _baked_block("cf", CF_FEA_LEN)
+    # bvs is stored as two scalar node keys; assemble into the 2-wide block
+    if any("bvs" in n for n in graph["nodes"]):
+        stamped = sum("bvs" in n for n in graph["nodes"])
+        if stamped != n_atoms:
+            raise ValueError(f"graph has 'bvs' on {stamped}/{n_atoms} nodes — "
+                             "corrupt or partially-baked; rebuild it")
+        bvs_baked = np.array([[n["bvs"], n.get("bvs_mismatch", 0.0)]
+                              for n in graph["nodes"]], dtype=np.float32)
+    else:
+        bvs_baked = None
 
     # Multi-task TARGET tensors carried alongside the inputs: per-atom forces (N,3) +
     # magmom (N,1), per-structure stress (3,3). Absent in a graph -> NaN sentinel, so
@@ -817,6 +837,7 @@ def _extract_ragged(graph):
         "dih_node": dih_node,
         "valence": valence_baked,
         "cf": cf_baked,
+        "bvs": bvs_baked,
         "forces": forces,
         "magmom": magmom,
         "dos": dos,
@@ -840,7 +861,8 @@ def _extract_ragged(graph):
 def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
                      use_poly_edges, use_bond_angles, build_angle_bias, *,
                      use_rich_node_features=False, use_dihedrals=False,
-                     use_valence_features=False, use_cf_features=False):
+                     use_valence_features=False, use_cf_features=False,
+                     use_bvs_features=False):
     """Truncate/pad a ragged extraction into the model's padded sample tensors.
 
     Replicates the historical _build_sample behavior exactly: closest-first
@@ -932,6 +954,13 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
                 "— rebuild it with builder schema >= v4.3 (crystal_field_aom).")
         cf = torch.from_numpy(np.array(r["cf"], dtype=np.float32, copy=True))
         atom_fea = torch.cat([atom_fea, cf], dim=1)
+    if use_bvs_features:
+        if r.get("bvs") is None:
+            raise ValueError(
+                "use_bvs_features=True but this graph/pack carries no baked bvs "
+                "block — rebuild it with builder schema >= v4.4 (bond_valence).")
+        bvs = torch.from_numpy(np.array(r["bvs"], dtype=np.float32, copy=True))
+        atom_fea = torch.cat([atom_fea, bvs], dim=1)
     if use_dihedrals:
         # Concat the per-atom 4-body torsion summary (zeros on a dihedral-less pack).
         # Order is [base | rich | dihedral] -- the stats paths mirror this exactly.
@@ -1023,7 +1052,7 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom
 def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_poly_edges, use_bond_angles, build_angle_bias=False, *,
                   use_rich_node_features=False, use_valence_features=False,
-                  use_cf_features=False,
+                  use_cf_features=False, use_bvs_features=False,
                   use_dihedrals=False, multitask=False, bandgap=float("nan"),
                   dos_per_atom=True):
     """Build one fully-padded crystal sample from its graph JSON on disk.
@@ -1050,7 +1079,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                               use_rich_node_features=use_rich_node_features,
                               use_dihedrals=use_dihedrals,
                               use_valence_features=use_valence_features,
-                              use_cf_features=use_cf_features)
+                              use_cf_features=use_cf_features,
+                              use_bvs_features=use_bvs_features)
 
     if multitask:
         targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap,
@@ -1108,12 +1138,13 @@ class CIFDataV4(Dataset):
                  build_angle_bias: bool = False, use_rich_node_features: bool = False,
                  use_dihedrals: bool = False, multitask: bool = False,
                  frame_subsample: int = 1, use_valence_features: bool = False,
-                 use_cf_features: bool = False,
+                 use_cf_features: bool = False, use_bvs_features: bool = False,
                  n_energy: int = None, dos_per_atom: bool = True):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
         self.use_valence_features = use_valence_features
         self.use_cf_features = use_cf_features
+        self.use_bvs_features = use_bvs_features
         self.use_dihedrals = use_dihedrals
         # DOS target width: graph JSONs carry the CURRENT fetch grid only (DOS_N_ENERGY),
         # so this backend can't serve a different width — fail loudly, don't mis-shape.
@@ -1255,6 +1286,7 @@ class CIFDataV4(Dataset):
                                    use_rich_node_features=self.use_rich_node_features,
                                    use_valence_features=self.use_valence_features,
                                    use_cf_features=self.use_cf_features,
+                                   use_bvs_features=self.use_bvs_features,
                                    use_dihedrals=self.use_dihedrals,
                                    multitask=self.multitask,
                                    bandgap=self._bandgap_by_id.get(str(rec[0]), float("nan")),
@@ -1292,6 +1324,7 @@ class CIFDataV4(Dataset):
                                use_rich_node_features=self.use_rich_node_features,
                                use_valence_features=self.use_valence_features,
                                use_cf_features=self.use_cf_features,
+                               use_bvs_features=self.use_bvs_features,
                                use_dihedrals=self.use_dihedrals,
                                multitask=self.multitask,
                                bandgap=self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")),
@@ -1400,6 +1433,7 @@ def load_cif_dataset_from_args(index_path, args, **overrides):
         use_rich_node_features=args.get("use_rich_node_features", False),
         use_valence_features=args.get("use_valence_features", False),
         use_cf_features=args.get("use_cf_features", False),
+        use_bvs_features=args.get("use_bvs_features", False),
         use_dihedrals=args.get("use_dihedrals", False),
     )
     kw.update(overrides)
