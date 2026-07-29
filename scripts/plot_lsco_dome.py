@@ -69,7 +69,7 @@ l = l.dropna(subset=["cu"]).sort_values("cu")
 
 fig, ax = plt.subplots(figsize=(16, 10))
 # shaded doping regions + undoped line + region labels (as in the original)
-ax.axvspan(1.5, 2.0, color="aliceblue", zorder=0)
+ax.axvspan(1.4, 2.0, color="aliceblue", zorder=0)
 ax.axvspan(2.0, 2.7, color="mistyrose", alpha=0.6, zorder=0)
 ax.axvline(2.0, color="0.4", ls="--", lw=1.2, zorder=1)
 import matplotlib.transforms as mtransforms
