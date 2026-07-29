@@ -121,7 +121,7 @@ for dp in ["Eu", "Zn", "Ni"]:
 handles += [Line2D([], [], marker="o", ls="", mfc="0.3", mec="0.3", label="actual"),
             Line2D([], [], marker="o", ls="", mfc="none", mec="0.3", label="predicted"),
             Line2D([], [], color="0.15", lw=2.4, label="predicted dome (guide)")]
-ax.legend(handles=handles, ncol=2, loc="upper right", fontsize=18, framealpha=0.9)
+ax.legend(handles=handles, ncol=2, loc="upper left", fontsize=18, framealpha=0.9)
 ax.grid(alpha=0.2)
 fig.tight_layout()
 fig.savefig(OUT, dpi=150)
