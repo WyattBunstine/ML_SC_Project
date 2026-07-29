@@ -41,7 +41,7 @@ for i in $(seq 1 96); do    # up to 16h (queue + 2.5h run)
 done
 AUG_LOG="$RP/logs/augment_cf_*-${AUG_JID}.out"
 ssh "$SSH" "grep -qE 'DONE in .*, 0 failed' $AUG_LOG" || die "augment reported failures (job $AUG_JID)"
-ssh "$SSH" "grep -q 'Pack done: 1,578,895 samples (0 failed)' $AUG_LOG" || die "MPtrj repack incomplete"
+ssh "$SSH" "grep -qE 'Pack done: 1,?578,?895 samples \(0 failed\)' $AUG_LOG" || die "MPtrj repack incomplete"
 ssh "$SSH" "python3 -c \"
 import json
 h = json.load(open('/scratch4/tmcquee2/wbunsti1/ML_SC_Proj/MPtrj/packed_v4_cf/pack_header.json'))
