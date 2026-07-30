@@ -22,6 +22,7 @@ from pymatgen.core import Composition
 PRED = sys.argv[1] if len(sys.argv) > 1 else \
     "model_data/2026-07-09/gps_tc_3dsc_doped_ft_forces2_oxifix_2026-07-09_11-36-22/predictions.csv"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "docs/figures/tc_vs_cu_oxidation_mp1077929_dome.png"
+TITLE = sys.argv[3] if len(sys.argv) > 3 else "La$_2$CuO$_4$ family doping series"
 
 OX = {"La": 3, "Sr": 2, "Ba": 2, "Ce": 4, "Nd": 3, "Eu": 3, "Gd": 3, "Sm": 3,
       "Pr": 3, "Ca": 2, "K": 1, "Na": 1, "Li": 1, "Zn": 2, "Ni": 2, "O": -2}
@@ -106,7 +107,7 @@ ax.plot(gx, guide, "-", color="0.15", lw=2.4, zorder=4)
 ax.set_xlabel("formal Cu oxidation state  (2 = undoped)", fontsize=24)
 ax.set_ylabel("$T_c$ (K)", fontsize=24)
 ax.tick_params(axis="both", labelsize=21)
-ax.set_title("La$_2$CuO$_4$ family doping series", fontsize=24)
+ax.set_title(TITLE, fontsize=24)
 ax.set_xlim(1.4, 2.6)
 # bottom margin below the tc=0 row so the region labels sit in their own band
 ax.set_ylim(bottom=-6)
