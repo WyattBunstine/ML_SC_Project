@@ -47,6 +47,7 @@ def _init_force(force):
 
 # compact ion_role encoding (database_main ion_role_map)
 _ANION = -1
+_ROLE_STR = {1: "cation", -1: "anion", 0: "neutral"}
 
 _Z_TO_SYMBOL = {}
 
@@ -96,8 +97,12 @@ def augment_graph(path):
                                 "chi": nodes[s].get("chi_pauling")})
             if nodes[s]["ion_role"] != nodes[t]["ion_role"]:
                 d = float(np.linalg.norm(vec))
-                bvs_nbrs[s].append({"dist": d, "ligand": _symbol(nodes[t]["Z"])})
-                bvs_nbrs[t].append({"dist": d, "ligand": _symbol(nodes[s]["Z"])})
+                # ligand_oxi mirrors the CF_SCHEMA-4 builder: the BA override
+                # row is keyed on the bond's CATION end whichever side sums.
+                bvs_nbrs[s].append({"dist": d, "ligand": _symbol(nodes[t]["Z"]),
+                                    "ligand_oxi": float(nodes[t].get("oxidation_state") or 0.0)})
+                bvs_nbrs[t].append({"dist": d, "ligand": _symbol(nodes[s]["Z"]),
+                                    "ligand_oxi": float(nodes[s].get("oxidation_state") or 0.0)})
 
         g["cf_schema"] = CF_SCHEMA
         for i, n in enumerate(nodes):
@@ -108,7 +113,9 @@ def augment_graph(path):
             cf = site_cf_features(species, nbrs[i], default_oxidation=oxi)
             n["cf"] = (cf["cf_levels"] + cf["cf_occ"]
                        + [cf["cf_frontier_gap"], cf["cf_unpaired"]])
-            b = site_bvs_mixed(species, bvs_nbrs[i], default_oxidation=oxi)
+            b = site_bvs_mixed(species, bvs_nbrs[i], default_oxidation=oxi,
+                               center_role=_ROLE_STR.get(int(n.get("ion_role", 0)),
+                                                         "neutral"))
             n["bvs"] = round(float(b), 6)
             n["bvs_mismatch"] = round(float(b - oxi), 6)
 
