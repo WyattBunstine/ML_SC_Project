@@ -60,7 +60,12 @@ def _encoder(checkpoint_path, index_path, device):
     return model.to(device), ds, collate_pool_geom
 
 
-VALID_LOSSES = ("l1", "msle", "mse_k", "wl1_k")
+VALID_LOSSES = ("l1", "msle", "mse_k", "wl1_k", "huber_k")
+
+# huber_k transition point (Kelvin): quadratic below (mse_k-like amplitude
+# seeking), linear above (robust to the high-Tc label-noise rows that make
+# pure mse_k gradients outlier-dominated). ~ the SC-only MAE scale.
+HUBER_BETA_K = 10.0
 
 
 def reg_loss(z, y_z_sel, tc_sel, loss_type, tc_mean, tc_std, k_var=1.0, k_wmean=1.0):
@@ -79,6 +84,10 @@ def reg_loss(z, y_z_sel, tc_sel, loss_type, tc_mean, tc_std, k_var=1.0, k_wmean=
                by Var(Tc_train) for optimizer-scale sanity.
       wl1_k  — L1 in z weighted by (1+Tc_true): the same emphasis direction,
                robust to high-Tc label noise (the 130 K near-duplicate problem).
+      huber_k — SmoothL1 in KELVIN (beta = HUBER_BETA_K): quadratic below beta
+               (amplitude-seeking like mse_k), linear above (a 100 K outlier
+               costs ~10x a 10 K miss, not 100x). Same exponent cap as mse_k;
+               normalized by beta so the tail gradient is ~L1-in-z scale.
     """
     if loss_type == "msle":
         return F.mse_loss(z, y_z_sel)
@@ -88,6 +97,9 @@ def reg_loss(z, y_z_sel, tc_sel, loss_type, tc_mean, tc_std, k_var=1.0, k_wmean=
     if loss_type == "wl1_k":
         w = (1.0 + tc_sel) / k_wmean
         return (w * (z - y_z_sel).abs()).mean()
+    if loss_type == "huber_k":
+        k = torch.expm1((z * tc_std + tc_mean).clamp(max=30.0))
+        return F.smooth_l1_loss(k, tc_sel, beta=HUBER_BETA_K) / HUBER_BETA_K
     if loss_type == "l1":
         return F.l1_loss(z, y_z_sel)
     raise ValueError(f"unknown loss {loss_type!r} (use one of {VALID_LOSSES})")
