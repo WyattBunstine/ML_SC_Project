@@ -52,7 +52,7 @@
   "slurm": {
     "gpus": 4,
     "cpus": 48,
-    "mem": "96G",
+    "mem": "128G",
     "time": "72:00:00",
     "partition": "ica100,a100"
   },
