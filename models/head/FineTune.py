@@ -156,9 +156,26 @@ def run(cfg, out_dir, device):
         ids = list(data["ids"])
         print(f"[ft] exclusions: dropped {_n_drop} curated label-artifact rows")
 
+    # Optional forced-TRAIN ids: family relatives that must supervise the model
+    # (e.g. other-dopant La-cuprate variants when only the Sr/Ce series is the
+    # held-out question). Applied BEFORE the holdout force so a conflicting id
+    # ends up in test — the zero-exposure guarantee always wins.
+    if cfg.get("train_ids_csv"):
+        import pandas as _pd
+        _tr = set(_pd.read_csv(cfg["train_ids_csv"])["id"].astype(str))
+        _n = 0
+        for r, i in enumerate(ids):
+            if i in _tr:
+                split[r] = "train"
+                _n += 1
+        print(f"[ft] train-force: {_n} ids forced into train")
     if cfg.get("holdout_ids_csv"):
         import pandas as _pd
         _ho = set(_pd.read_csv(cfg["holdout_ids_csv"])["id"].astype(str))
+        if cfg.get("train_ids_csv"):
+            _both = _ho & set(_pd.read_csv(cfg["train_ids_csv"])["id"].astype(str))
+            if _both:
+                print(f"[ft] WARN: {len(_both)} ids in BOTH train-force and holdout -> held out")
         _n = 0
         for r, i in enumerate(ids):
             if i in _ho:
