@@ -213,6 +213,13 @@ def run(cfg, out_dir, device):
     gs_w = float(cfg.get("gs_loss_weight", 1.0))
     gs_t = torch.as_tensor(data["gs"], device=device).long()
     is_pos = tc_t > 0                                   # regression-supervised rows
+    # BINARY hurdle (gs_binary + n_gs_classes:2): no mag_order labels needed —
+    # every tc=0 row is an observed non-superconductor (3DSC convention), so it
+    # supervises class 1 directly instead of being masked. Without this, an index
+    # lacking mag_order gives the classifier zero negatives and P(SC) degenerates
+    # to ~1 (the hurdle silently becomes plain regression-on-positives).
+    if use_gs and bool(cfg.get("gs_binary", False)):
+        gs_t = (~is_pos).long()
 
     def batch_static(cif_ids):
         rows = [id2row[c] for c in cif_ids]
