@@ -198,8 +198,14 @@ def run(cfg, out_dir, device):
     # missing from predictions; test overlap with the intended fold was chance-level).
     from data import dataset_ids
     ds_ids = dataset_ids(ds)
-    assert len(ds_ids) == len(id2split) and set(ds_ids) == set(id2split), \
-        "dataset/static-table id mismatch"
+    # Every id in the static tables must resolve in the dataset (the 2026-07-14
+    # positional-split lesson). The dataset MAY carry extra rows — exactly the
+    # exclude_ids_csv case: excluded ids stay in the index/dataset but are
+    # absent from id2split, so split_indices routes them to no fold.
+    assert set(id2split) <= set(ds_ids), "dataset/static-table id mismatch"
+    if len(ds_ids) != len(id2split):
+        print(f"[ft] dataset carries {len(ds_ids) - len(id2split)} rows outside "
+              "the static tables (exclusions) — never loaded")
 
     def split_indices(s):  # dataset indices that are SC and in split s
         return [i for i, cid in enumerate(ds_ids)
