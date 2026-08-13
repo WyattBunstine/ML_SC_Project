@@ -1,6 +1,6 @@
 {
   "name": "gps_tc_v4_la_series_20cfbvsfnd",
-  "checkpoint": "PATCHED_BY_EVAL_AUTOPILOT",
+  "checkpoint": "model_data/2026-08-12/gps_mt_20_cf_bvs_fixed_nd/gps_mt_20_cf_bvs_fixed_nd_2026-08-12_22-32-02/result_cf_bvs_f_nd_model_best.pth.tar",
   "embed_source": "database/datafiles/MP/SC_pack_doped_v45",
   "index_path": "database/datafiles/MP/SC_MP_V4_doped_v45.pickle",
   "embed_dir": "database/datafiles/MP/embeddings/la_series_20cfbvsfnd",

@@ -1,6 +1,6 @@
 {
   "name": "gps_tc_probe_19cfbvsf",
-  "checkpoint": "PATCHED_BY_EVAL_AUTOPILOT",
+  "checkpoint": "model_data/2026-08-12/gps_mt_19_cf_bvs_fixed/gps_mt_19_cf_bvs_fixed_2026-08-12_12-32-36/result_cf_bvs_f_model_best.pth.tar",
   "embed_source": "database/datafiles/MP/SC_pack_doped_v45",
   "index_path": "database/datafiles/MP/SC_MP_V4_doped_v45.pickle",
   "embed_dir": "database/datafiles/MP/embeddings/probe_19cfbvsf",
