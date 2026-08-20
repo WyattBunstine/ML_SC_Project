@@ -553,6 +553,11 @@ PY
     echo ">> Pushing code + configs..."
     sync_code
 
+    # Optional bad-node blacklist: SLURM_EXCLUDE=icgpu04 ./scripts/deploy.sh run ...
+    # (icgpu04 ran GPS training ~30x slower with ~0 data-wait twice, 2026-08-17/19.)
+    local exclude_line=""
+    [ -n "${SLURM_EXCLUDE:-}" ] && exclude_line="#SBATCH --exclude=${SLURM_EXCLUDE}"
+
     # Build the sbatch script. Unquoted heredoc so local vars expand now;
     # %x/%j are SLURM runtime tokens (job name / job id), left literal.
     local account_line=""
@@ -589,6 +594,7 @@ ${account_line}
 #SBATCH --gpus-per-node=${s_gpus}
 #SBATCH --cpus-per-task=${s_cpus}
 #SBATCH --mem=${s_mem}
+${exclude_line}
 ${mail_lines}
 #SBATCH --output=${REMOTE_PATH}/logs/%x-%j.out
 #SBATCH --error=${REMOTE_PATH}/logs/%x-%j.err
