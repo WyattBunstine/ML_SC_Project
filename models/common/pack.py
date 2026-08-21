@@ -274,7 +274,7 @@ class PackedCIFDataV4(Dataset):
                  build_angle_bias=False, use_rich_node_features=False,
                  use_dihedrals=False, multitask=False, frame_subsample=1,
                  use_valence_features=False, use_cf_features=False,
-                 use_bvs_features=False,
+                 use_bvs_features=False, mask_oxidation_feature=False,
                  n_energy=None, dos_per_atom=True):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
@@ -319,6 +319,7 @@ class PackedCIFDataV4(Dataset):
         self.use_valence_features = use_valence_features
         self.use_cf_features = use_cf_features
         self.use_bvs_features = use_bvs_features
+        self.mask_oxidation_feature = mask_oxidation_feature
         if use_bvs_features and not self._header.get("has_bvs"):
             raise ValueError(f"use_bvs_features=True but pack {pack_dir} carries no "
                              "baked bvs block — repack from builder-v4.4 graphs.")
@@ -500,7 +501,8 @@ class PackedCIFDataV4(Dataset):
                                   use_dihedrals=self.use_dihedrals,
                                   use_valence_features=self.use_valence_features,
                                   use_cf_features=self.use_cf_features,
-                                  use_bvs_features=self.use_bvs_features)
+                                  use_bvs_features=self.use_bvs_features,
+                                  mask_oxidation_feature=self.mask_oxidation_feature)
         if self.multitask:
             bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
             targets, masks = _assemble_targets(r, energy=target, bandgap=bg,
@@ -531,6 +533,8 @@ class PackedCIFDataV4(Dataset):
         for i in idx:
             r = self._ragged(self.data[i][2])
             node = np.asarray(r["atom_fea"], dtype=np.float32)
+            if getattr(self, "mask_oxidation_feature", False):
+                node = node.copy(); node[:, 1] = 0.0
             if self.use_rich_node_features:   # match assemble order: [base | rich | val | dih]
                 node = np.concatenate([node, rich_node_features(node[:, 0])], axis=1)
             if self.use_valence_features:
