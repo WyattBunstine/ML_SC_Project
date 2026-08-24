@@ -123,17 +123,20 @@ ILM_BONDS = [(0, 7), (0, 8), (0, 9), (0, 10), (0, 11), (0, 12),
 ILM_FACE = [13, 14, 15]  # shared O3 face of the upper Ti-Fe pair
 
 
-def ilmenite(K=1.0, phi=-55.0):
-    """One primitive rhombohedral cell (distorted cube standing on its corner):
-    cations along the body diagonal as two face-sharing Fe-Ti pairs.  Tipped
-    22 deg toward the viewer (opens the horizontal O3 triangles) and leaned
-    phi deg in the screen plane so the long cell diagonal fills the panel."""
+def ilmenite(K=1.0, phi=-15.0, tip=50.0, spin=15.0):
+    """One primitive rhombohedral cell, oblique view ("option Q" of the
+    2026-08-17 orientation sweep): spin = pre-rotation about the 3-fold axis
+    (= body diagonal, +z; staggers the O3 triangles), tip = rotation of that
+    axis toward the viewer about the horizontal screen axis (0 = axis vertical
+    in the page, 90 = straight out of the page; 50 shows the face-sharing
+    Fe-Ti pairs with real depth), phi = in-screen lean."""
     cph, sph = np.cos(np.radians(phi)), np.sin(np.radians(phi))
     post = lambda xy: (cph * xy[0] - sph * xy[1], sph * xy[0] + cph * xy[1])
-    T = np.radians(22)
+    T, S = np.radians(tip), np.radians(spin)
 
     def rx(p):
         x, y, z = p
+        x, y = x * np.cos(S) - y * np.sin(S), x * np.sin(S) + y * np.cos(S)
         return (x, y * np.cos(T) - z * np.sin(T), y * np.sin(T) + z * np.cos(T))
 
     pan = Panel(post=post)
@@ -148,25 +151,30 @@ def ilmenite(K=1.0, phi=-55.0):
     pos = {i: rx(tuple(K * c for c in p)) for i, (el, p) in enumerate(ILM_ATOMS)}
     for i, j in ILM_BONDS:
         pan.bond(pos[i], pos[j])
-    STYLE = {"Fe": ("matomA", RA), "Ti": ("matomB", RB), "O": ("matomO", RO)}
+    # Fe drawn at Ti's radius (keeping the A-site colour): unlike the
+    # perovskite A-site, ilmenite's Fe2+ is octahedral with a radius similar
+    # to Ti4+ -- a big A-site ball would misrepresent the structure.
+    STYLE = {"Fe": ("matomA, minimum size=3.8mm", RB),
+             "Ti": ("matomB", RB), "O": ("matomO", RO)}
     for i, (el, p) in enumerate(ILM_ATOMS):
         sty, r = STYLE[el]
         pan.atom(pos[i], sty, r)
-    for idx, txt, ox, oy in [(3, "Fe", 0.40, 0.06), (1, "Ti", 0.66, 0.02)]:
+    for idx, txt, anc, ox, oy in [(3, "Fe", "west", 0.40, 0.06),
+                                  (1, "Ti", "east", -0.39, -0.34)]:
         px, py = sp(pos[idx])
         pan.raw(-99, 0.1,
-                f"  \\node[psub, anchor=west] at ({fmt(px+ox)}+@DX,{fmt(py+oy)}+@DY) {{{txt}}};")
+                f"  \\node[psub, anchor={anc}] at ({fmt(px+ox)}+@DX,{fmt(py+oy)}+@DY) {{{txt}}};")
     return pan
 
 
-def fit_ilmenite(wmax=3.15, hmax=2.48):
+def fit_ilmenite(wmax=3.15, hmax=2.48, **kw):
     K = 1.0
     for _ in range(3):
-        p = ilmenite(K)
+        p = ilmenite(K, **kw)
         w = max(px + r for px, py, r in p.pts) - min(px - r for px, py, r in p.pts)
         h = max(py + r for px, py, r in p.pts) - min(py - r for px, py, r in p.pts)
         K *= min(wmax / w, hmax / h)
-    return ilmenite(K)
+    return ilmenite(K, **kw)
 
 
 def render_panel(pan, shift, comment, extra=()):
@@ -181,19 +189,15 @@ def render_panel(pan, shift, comment, extra=()):
 
 print("SrTiO3");  p1 = perovskite()
 print("GdFeO3");  p2 = perovskite(tilt=0.20)
-print("BaTiO3");  p3 = perovskite(polar=0.15)
-print("FeTiO3");  p4 = fit_ilmenite()
+print("FeTiO3");  p4 = fit_ilmenite()   # option Q: tip 50, phi -15, spin 15
 
 blocks = [
     render_panel(p1, "0", "% SrTiO3: cubic cell, straight B-O-B cage, A at body centre"),
     render_panel(p2, "4.3", "% GdFeO3: edge O tangentially displaced (octahedral tilt)"),
-    render_panel(p3, "8.6", "% BaTiO3: all B displaced along +z (polar axis)",
-                 extra=["  \\draw[-{Stealth[length=2.6mm,width=2.2mm]}, ink!75, line width=1.5pt]"
-                        " (3.18,0.70) -- (3.18,1.70);",
-                        "  \\node[psub] at (3.36,1.20) {$P$};"]),
-    render_panel(p4, "12.9",
-                 "% FeTiO3: one primitive rhombohedral cell; cations along the\n"
-                 "% body diagonal as two face-sharing Fe-Ti pairs",
+    render_panel(p4, "8.6",
+                 "% FeTiO3: primitive rhombohedral cell, oblique view (orientation\n"
+                 "% sweep option Q): the two face-sharing Fe-Ti pairs along the body\n"
+                 "% diagonal with the shared O3 triangles shown in depth",
                  ),
 ]
 
