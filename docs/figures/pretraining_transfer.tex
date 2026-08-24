@@ -1,0 +1,19 @@
+% =====================================================================
+%  Pretraining -> T_c transfer schematic — standalone WRAPPER
+% ---------------------------------------------------------------------
+%  The drawing lives in pretraining_transfer_fig.tex (preamble-free
+%  fragment).  This wrapper compiles a cropped preview PDF:
+%
+%     pdflatex pretraining_transfer.tex
+%
+%  The paper should \input the fragment instead (see the usage note at
+%  the top of pretraining_transfer_fig.tex).
+% =====================================================================
+\documentclass[border=10pt]{standalone}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc,fit,backgrounds,shapes.geometric}
+
+\begin{document}
+\input{pretraining_transfer_fig}
+\end{document}
