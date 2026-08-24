@@ -1,6 +1,6 @@
 {
   "name": "gps_tc_la_series_24abl",
-  "checkpoint": "PATCHED_BY_EVAL_AUTOPILOT",
+  "checkpoint": "model_data/2026-08-17/gps_mt_24_no_angle/gps_mt_24_no_angle_2026-08-17_21-38-06/result_nA_model_best.pth.tar",
   "embed_source": "database/datafiles/MP/SC_pack_doped_v45",
   "index_path": "database/datafiles/MP/SC_MP_V4_doped_v45.pickle",
   "embed_dir": "database/datafiles/MP/embeddings/la_series_24abl",
