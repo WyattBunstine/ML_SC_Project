@@ -298,7 +298,7 @@ class GPSCrystalNet(nn.Module):
                  use_bond_edges=True, shell_aggregation="attention", use_angle_bias=True,
                  use_dist_bias=False, dist_cutoff=8.0, n_dist_rbf=16,
                  classification=False, tasks=None, n_energy=256, dos_per_atom=True,
-                 n_phonon=128,
+                 n_phonon=256,
                  differentiable_geometry=False):
         super().__init__()
         if atom_pooling not in self._POOLINGS:
@@ -601,7 +601,7 @@ class GPSCrystalNet(nn.Module):
             tasks=(set(args["tasks"]) if multitask else None),
             differentiable_geometry=multitask,
             n_energy=args.get("n_energy", 256),
-            n_phonon=args.get("n_phonon", 128),
+            n_phonon=args.get("n_phonon", 256),
             dos_per_atom=args.get("dos_per_atom", True),
         )
 
