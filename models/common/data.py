@@ -29,6 +29,12 @@ torch.manual_seed(0)
 # needed for graphs that predate these features.
 NODE_FEA_LEN = 14
 
+# Base-block columns derived from the RELAXED GEOMETRY (ecn_value, shannon_radius,
+# cn_core, hist_corner/edge/face/other). mask_geometry_features zeroes exactly these,
+# leaving the composition-only columns (Z, oxidation, ion_role, chi x2, IE, EA) —
+# the "structure-independent encoder input" rung of the no-pretrain ladder.
+GEO_FEATURE_COLS = slice(5, 12)
+
 # Edge features (7 total), in order:
 #   bond_length, bond_length_over_sum_radii,
 #   voronoi_weight_center, voronoi_weight_nbr,
@@ -562,6 +568,7 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
     use_bvs = getattr(dataset, "use_bvs_features", False)
     use_dih = getattr(dataset, "use_dihedrals", False)
     mask_ox = getattr(dataset, "mask_oxidation_feature", False)
+    mask_geo = getattr(dataset, "mask_geometry_features", False)
     node_rows, edge_rows, poly_rows = [], [], []
     zero_ang = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
     for i in idx:
@@ -571,6 +578,8 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
             feat = _node_to_fea(n)
             if mask_ox:
                 feat[1] = 0.0
+            if mask_geo:
+                feat[GEO_FEATURE_COLS] = 0.0
             if use_rich:        # match the assemble-time concat order: [base | rich | val | cf | dih]
                 feat = np.concatenate([feat, rich_node_features([n["Z"]])[0]])
             if use_val:
@@ -613,6 +622,8 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
     # nan-safe mean/std via the shared helper (see rows_meanstd).
     node_dim = (NODE_FEA_LEN + (RICH_NODE_FEA_LEN if use_rich else 0)
                 + (VALENCE_NODE_FEA_LEN if use_val else 0)
+                + (CF_FEA_LEN if use_cf else 0)
+                + (BVS_FEA_LEN if use_bvs else 0)
                 + (DIHEDRAL_FEA_LEN if use_dih else 0))
     return {
         "node": rows_meanstd(node_rows, node_dim),
@@ -865,7 +876,8 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
                      use_poly_edges, use_bond_angles, build_angle_bias, *,
                      use_rich_node_features=False, use_dihedrals=False,
                      use_valence_features=False, use_cf_features=False,
-                     use_bvs_features=False, mask_oxidation_feature=False):
+                     use_bvs_features=False, mask_oxidation_feature=False,
+                     mask_geometry_features=False):
     """Truncate/pad a ragged extraction into the model's padded sample tensors.
 
     Replicates the historical _build_sample behavior exactly: closest-first
@@ -939,6 +951,10 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
         # electronic-configuration channel. Width unchanged; the zero column
         # normalizes to 0 (std floor 1.0).
         atom_fea[:, 1] = 0.0
+    if mask_geometry_features:
+        # Composition-only rung of the no-pretrain ladder: zero the geometry-
+        # derived base columns (see GEO_FEATURE_COLS). Width unchanged.
+        atom_fea[:, GEO_FEATURE_COLS] = 0.0
     if use_rich_node_features:
         # Concat element features looked up from the stored Z (atom_fea[:, 0]).
         rich = torch.from_numpy(rich_node_features(atom_fea[:, 0].numpy()))
@@ -1063,7 +1079,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_rich_node_features=False, use_valence_features=False,
                   use_cf_features=False, use_bvs_features=False,
                   use_dihedrals=False, multitask=False, bandgap=float("nan"),
-                  dos_per_atom=True, mask_oxidation_feature=False):
+                  dos_per_atom=True, mask_oxidation_feature=False,
+                  mask_geometry_features=False):
     """Build one fully-padded crystal sample from its graph JSON on disk.
 
     Module-level (not a method) so it is picklable by a ``spawn`` multiprocessing
@@ -1090,7 +1107,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                               use_valence_features=use_valence_features,
                               use_cf_features=use_cf_features,
                               use_bvs_features=use_bvs_features,
-                              mask_oxidation_feature=mask_oxidation_feature)
+                              mask_oxidation_feature=mask_oxidation_feature,
+                              mask_geometry_features=mask_geometry_features)
 
     if multitask:
         targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap,
@@ -1150,13 +1168,15 @@ class CIFDataV4(Dataset):
                  frame_subsample: int = 1, use_valence_features: bool = False,
                  use_cf_features: bool = False, use_bvs_features: bool = False,
                  n_energy: int = None, dos_per_atom: bool = True,
-                 mask_oxidation_feature: bool = False):
+                 mask_oxidation_feature: bool = False,
+                 mask_geometry_features: bool = False):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
         self.use_valence_features = use_valence_features
         self.use_cf_features = use_cf_features
         self.use_bvs_features = use_bvs_features
         self.mask_oxidation_feature = mask_oxidation_feature
+        self.mask_geometry_features = mask_geometry_features
         self.use_dihedrals = use_dihedrals
         # DOS target width: graph JSONs carry the CURRENT fetch grid only (DOS_N_ENERGY),
         # so this backend can't serve a different width — fail loudly, don't mis-shape.
@@ -1300,6 +1320,7 @@ class CIFDataV4(Dataset):
                                    use_cf_features=self.use_cf_features,
                                    use_bvs_features=self.use_bvs_features,
                                    mask_oxidation_feature=getattr(self, 'mask_oxidation_feature', False),
+                                   mask_geometry_features=getattr(self, 'mask_geometry_features', False),
                                    use_dihedrals=self.use_dihedrals,
                                    multitask=self.multitask,
                                    bandgap=self._bandgap_by_id.get(str(rec[0]), float("nan")),
@@ -1338,7 +1359,8 @@ class CIFDataV4(Dataset):
                                use_valence_features=self.use_valence_features,
                                use_cf_features=self.use_cf_features,
                                use_bvs_features=self.use_bvs_features,
-                                   mask_oxidation_feature=getattr(self, 'mask_oxidation_feature', False),
+                               mask_oxidation_feature=getattr(self, 'mask_oxidation_feature', False),
+                               mask_geometry_features=getattr(self, 'mask_geometry_features', False),
                                use_dihedrals=self.use_dihedrals,
                                multitask=self.multitask,
                                bandgap=self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")),
@@ -1450,6 +1472,7 @@ def load_cif_dataset_from_args(index_path, args, **overrides):
         use_bvs_features=args.get("use_bvs_features", False),
         use_dihedrals=args.get("use_dihedrals", False),
         mask_oxidation_feature=args.get("mask_oxidation_feature", False),
+        mask_geometry_features=args.get("mask_geometry_features", False),
     )
     kw.update(overrides)
     return load_cif_dataset(index_path, **kw)
