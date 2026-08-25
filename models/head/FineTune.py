@@ -41,22 +41,80 @@ from models.head.HeadData import (assemble, chemsys_groups, family_mae_report,
 from models.head.HeadModel import TcHead
 
 
-def _encoder(checkpoint_path, index_path, device):
+class _IdentityEncoder(torch.nn.Module):
+    """No-pretrain ladder, feature rungs: encode() returns the STANDARDIZED raw
+    node features, so the Tc head trains directly on the atom encodings. Mirrors
+    GPSCrystalNet's buffer-based normalization (the head expects unit-scale
+    per-atom inputs); has no trainable parameters — phase B is skipped upstream."""
+
+    def __init__(self, node_dim):
+        super().__init__()
+        self.atom_fea_len = node_dim
+        self.register_buffer("node_mean", torch.zeros(node_dim))
+        self.register_buffer("node_std", torch.ones(node_dim))
+
+    def encode(self, atom_fea, *rest):
+        return (atom_fea - self.node_mean) / self.node_std
+
+    def set_feature_stats(self, node, nbr=None, poly=None):
+        # GPSCrystalNet-compatible signature so run() fits both encoder kinds
+        # through one call; only the node stats exist here.
+        self.node_mean.copy_(torch.as_tensor(node[0], dtype=self.node_mean.dtype))
+        self.node_std.copy_(torch.as_tensor(node[1], dtype=self.node_std.dtype))
+
+
+def _encoder(checkpoint_path, index_path, device, encoder_args=None):
     """Rebuild + load the pretrained encoder and the matching graph dataset. The
     feature-flag enumeration lives in ONE place (data.load_cif_dataset_from_args,
     shared with embed_index/embed_raw/smoke) so this dataset is always built in the
-    exact feature space the encoder was trained with — no per-consumer drift."""
+    exact feature space the encoder was trained with — no per-consumer drift.
+
+    encoder_args (the NO-PRETRAIN ladder): a config-supplied args dict replaces the
+    checkpoint's; no checkpoint is loaded. type "identity" -> the raw normalized
+    node features ARE the per-atom representation; type "scratch" -> a randomly-
+    initialized GPSCrystalNet trained on Tc only (pair with ft_unfreeze "all" and a
+    real encoder LR). Both come back with UNIT normalizer buffers — run() fits them
+    on the TRAIN fold once splits are known (compute_feature_stats' train-only
+    contract; a checkpoint encoder instead carries its pretraining-corpus stats)."""
     for _p in (os.path.join("models", "common"), os.path.join("models", "GPSTransformer")):
         if _p not in sys.path:
             sys.path.insert(0, _p)
     from data import load_cif_dataset_from_args, collate_pool_geom
     from model import GPSCrystalNet
-    ckpt = torch.load(checkpoint_path, map_location=device)
-    a = ckpt.get("args", {})
+    # A config carrying BOTH (or NEITHER) of checkpoint/encoder_args is a config
+    # mistake, not a preference — refuse instead of silently picking one (the
+    # silent-config-key trap has produced two invalid pretrain runs already).
+    if (checkpoint_path is not None) == (encoder_args is not None):
+        raise ValueError("head config must set EXACTLY ONE of 'checkpoint' "
+                         "(pretrained encoder) or 'encoder_args' (no-pretrain ladder); "
+                         f"got checkpoint={checkpoint_path!r}, encoder_args="
+                         f"{'set' if encoder_args is not None else 'missing'}")
+    if encoder_args is None:
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        a = ckpt.get("args", {})
+        ds = load_cif_dataset_from_args(index_path, a)
+        sa, sn, _, sp, _, _ = ds[0][0][:6]
+        model = GPSCrystalNet.from_args(a, (sa.shape[-1], sn.shape[-1], sp.shape[-1]))
+        model.load_state_dict(ckpt["state_dict"])
+        return model.to(device), ds, collate_pool_geom
+    a = dict(encoder_args)
+    # 'type' is REQUIRED: a scratch config that dropped the key would silently
+    # become an identity run (plausible-looking numbers, wrong experiment).
+    kind = a.get("type")
+    if kind not in ("identity", "scratch"):
+        raise ValueError(f"encoder_args['type'] must be 'identity' or 'scratch', got {kind!r}")
     ds = load_cif_dataset_from_args(index_path, a)
     sa, sn, _, sp, _, _ = ds[0][0][:6]
-    model = GPSCrystalNet.from_args(a, (sa.shape[-1], sn.shape[-1], sp.shape[-1]))
-    model.load_state_dict(ckpt["state_dict"])
+    if kind == "identity":
+        model = _IdentityEncoder(sa.shape[-1])
+    else:
+        # Seeded so the ladder rung is reproducible; every seed's fine-tune restarts
+        # from THIS one draw (matching the pretrained protocol, where base_state is
+        # the same checkpoint for all seeds — seed spread stays head + batch order).
+        torch.manual_seed(int(a.get("init_seed", 0)))
+        model = GPSCrystalNet.from_args(a, (sa.shape[-1], sn.shape[-1], sp.shape[-1]))
+    print(f"[ft] encoder_args mode '{kind}': enc_dim {model.atom_fea_len}, "
+          f"{sum(p.numel() for p in model.parameters()):,} params, no checkpoint")
     return model.to(device), ds, collate_pool_geom
 
 
@@ -188,7 +246,9 @@ def run(cfg, out_dir, device):
     phys_np = data["phys"].astype(np.float32)
 
     # ---- encoder + graph dataset; align dataset order to the static tables by cif id ----
-    model, ds, collate = _encoder(cfg["checkpoint"], cfg["index_path"], device)
+    model, ds, collate = _encoder(cfg.get("checkpoint"), cfg["index_path"], device,
+                                  encoder_args=cfg.get("encoder_args"))
+    identity_enc = isinstance(model, _IdentityEncoder)
     enc_dim = model.atom_fea_len
     # Loader positions MUST be computed in the DATASET's OWN id order: CIFDataV4
     # seed-shuffles its rows at load (build_data_rows), so index-pickle order does
@@ -223,6 +283,17 @@ def run(cfg, out_dir, device):
     loaders = {s: mk_loader(s) for s in ("train", "val", "test")}
     # (No first-batch spin-up check here: the ds_ids set-equality assert above already
     # guarantees every dataset id resolves in the static tables.)
+
+    # No-pretrain encoders (encoder_args) arrive with unit normalizer buffers:
+    # fit them on the TRAIN fold only — compute_feature_stats' no-leakage
+    # contract — never on val/test. Checkpoint encoders keep their
+    # pretraining-corpus stats untouched.
+    if cfg.get("encoder_args") is not None:
+        from data import compute_feature_stats
+        tr_idx = split_indices("train")
+        stats = compute_feature_stats(ds, tr_idx)
+        model.set_feature_stats(stats["node"], stats["edge"], stats["poly"])
+        print(f"[ft] encoder_args: feature normalizers fit on {len(tr_idx)} train rows")
 
     phys_t = torch.as_tensor(phys_np, device=device)
     tc_t = torch.as_tensor(data["tc"], device=device).float()
@@ -414,34 +485,20 @@ def run(cfg, out_dir, device):
         print(f"[ft] {tag} DONE: best val_z_mae {best:.4f} @ep{best_ep} ({ep + 1} epochs)", flush=True)
         return best
 
-    seed_preds, seed_probs, seed_logs, te_ids = [], [], [], None
-    base_state = copy.deepcopy(model.state_dict())   # restore the pretrained encoder per seed
-    for seed in range(cfg.get("n_seeds", 3)):
-        model.load_state_dict(base_state)
-        head = make_head(seed)
-        y_z = head.target_to_z(tc_t)            # tc_t and head buffers both on `device`
-        log = []
-
-        # ---- phase A: head warmup (encoder frozen; cached embeddings, no re-encode) ----
-        for p in model.parameters():
-            p.requires_grad = False
-        head._frozen_enc = True
-        _rng = random.Random(seed)                     # deterministic warmup batch order
-        fit_phase(head, head.parameters(), cfg["tc_lr"], cfg["tc_weight_decay"],
-                  cfg.get("ft_warmup_epochs", 60), cfg.get("ft_patience", 30), y_z,
-                  f"s{seed}-warmup", log,
-                  epoch_fn=lambda h_, o_, y_: warmup_epoch(h_, o_, y_, _rng),
-                  val_fn=warmup_val)
-
-        # ---- phase B: unfreeze the selected encoder subset, tiny encoder LR ----
-        # ft_unfreeze picks WHERE gradients enter the encoder (params in parens):
-        #   "blocks:k"  top-k GPS blocks (default, k=ft_unfreeze_blocks; 333k/block)
-        #   "norms"     every LayerNorm (3.1k)  — global scale recalibration
-        #   "bitfit"    every bias (12k)        — slightly richer recalibration
-        #   "embedding" the input Linear (2.4k) — re-mix input features (e.g. re-weight
-        #               the valence dims that physics pretraining weighted for energies)
-        #   "ffn:k"     the FFNs of the top-k blocks (132k/block) — computation, not attention
-        #   "attn:k"    the shell attentions of the top-k blocks (200k/block)
+    def _phase_b(head, y_z, log, seed):
+        """Phase B: unfreeze the selected encoder subset, tiny encoder LR.
+        ft_unfreeze picks WHERE gradients enter the encoder (params in parens):
+          "blocks:k"  top-k GPS blocks (default, k=ft_unfreeze_blocks; 333k/block)
+          "norms"     every LayerNorm (3.1k)  — global scale recalibration
+          "bitfit"    every bias (12k)        — slightly richer recalibration
+          "embedding" the input Linear (2.4k) — re-mix input features (e.g. re-weight
+                      the valence dims that physics pretraining weighted for energies)
+          "ffn:k"     the FFNs of the top-k blocks (132k/block) — computation, not attention
+          "attn:k"    the shell attentions of the top-k blocks (200k/block)
+          "all"       the whole encoder — for the no-pretrain ladder's from-scratch
+                      rungs (pair with a real ft_encoder_lr; 1e-5 barely moves a
+                      random init)
+        Returns (mode, enc_params, best val)."""
         mode = cfg.get("ft_unfreeze", f"blocks:{cfg.get('ft_unfreeze_blocks', 1)}")
         kind, _, karg = mode.partition(":")
         k = int(karg) if karg else 1
@@ -455,12 +512,17 @@ def run(cfg, out_dir, device):
                     for n, m in blk.named_children() if n.endswith("_attn")]
         elif kind == "embedding":
             mods = [model.embedding]
-        elif kind in ("norms", "bitfit"):
+        elif kind in ("all", "norms", "bitfit"):
             mods = []                               # selected by parameter name below
         else:
             raise ValueError(f"unknown ft_unfreeze mode {mode!r}")
         enc_params = [p for m_ in mods for p in m_.parameters()]
-        if kind == "norms":
+        if kind == "all":
+            # whole encoder, but never the pretraining heads — they don't feed
+            # encode() and would only pollute the optimizer/param count.
+            enc_params = [p for n, p in model.named_parameters()
+                          if "heads." not in n]
+        elif kind == "norms":
             enc_params = [p for n, p in model.named_parameters()
                           if "norm" in n.lower() and "heads." not in n]
         elif kind == "bitfit":
@@ -482,6 +544,37 @@ def run(cfg, out_dir, device):
                     "weight_decay": cfg.get("ft_encoder_wd", 1e-4)}],
             cfg["tc_lr"], 0.0, cfg.get("ft_epochs", 200), cfg.get("ft_patience", 30),
             y_z, f"s{seed}-finetune", log)
+        return mode, enc_params, val_z
+
+    seed_preds, seed_probs, seed_logs, te_ids = [], [], [], None
+    base_state = copy.deepcopy(model.state_dict())   # restore the pretrained encoder per seed
+    for seed in range(cfg.get("n_seeds", 3)):
+        model.load_state_dict(base_state)
+        head = make_head(seed)
+        y_z = head.target_to_z(tc_t)            # tc_t and head buffers both on `device`
+        log = []
+
+        # ---- phase A: head warmup (encoder frozen; cached embeddings, no re-encode) ----
+        for p in model.parameters():
+            p.requires_grad = False
+        head._frozen_enc = True
+        _rng = random.Random(seed)                     # deterministic warmup batch order
+        warm_best = fit_phase(
+            head, head.parameters(), cfg["tc_lr"], cfg["tc_weight_decay"],
+            cfg.get("ft_warmup_epochs", 60), cfg.get("ft_patience", 30), y_z,
+            f"s{seed}-warmup", log,
+            epoch_fn=lambda h_, o_, y_: warmup_epoch(h_, o_, y_, _rng),
+            val_fn=warmup_val)
+
+        # ---- identity encoder (no-pretrain feature rungs): nothing to unfreeze —
+        # phase A IS the whole training (raw features -> head); phase B is skipped
+        # and control falls through to the shared per-seed test block below.
+        if identity_enc:
+            mode, enc_params, val_z = "identity", [], warm_best
+            if seed == 0:
+                print("[ft] identity encoder: phase B skipped (no encoder params)", flush=True)
+        else:
+            mode, enc_params, val_z = _phase_b(head, y_z, log, seed)
 
         # ---- test predictions for this seed ----
         model.eval(); head.eval()
