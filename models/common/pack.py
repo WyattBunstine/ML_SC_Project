@@ -35,6 +35,7 @@ from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_target
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
                       valence_node_features, VALENCE_NODE_FEA_LEN, CF_FEA_LEN, BVS_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN, GEO_FEATURE_COLS,
+                      poly_node_summary, POLY_SUMMARY_FEA_LEN,
                       DIHEDRAL_FEA_LEN, DOS_N_ENERGY)
 
 PACK_VERSION = 1
@@ -275,7 +276,8 @@ class PackedCIFDataV4(Dataset):
                  use_dihedrals=False, multitask=False, frame_subsample=1,
                  use_valence_features=False, use_cf_features=False,
                  use_bvs_features=False, mask_oxidation_feature=False,
-                 mask_geometry_features=False, n_energy=None, dos_per_atom=True):
+                 mask_geometry_features=False, use_poly_node_summary=False,
+                 n_energy=None, dos_per_atom=True):
         with open(os.path.join(pack_dir, "pack_header.json")) as f:
             self._header = json.load(f)
         if self._header["version"] != PACK_VERSION:
@@ -321,6 +323,7 @@ class PackedCIFDataV4(Dataset):
         self.use_bvs_features = use_bvs_features
         self.mask_oxidation_feature = mask_oxidation_feature
         self.mask_geometry_features = mask_geometry_features
+        self.use_poly_node_summary = use_poly_node_summary
         if use_bvs_features and not self._header.get("has_bvs"):
             raise ValueError(f"use_bvs_features=True but pack {pack_dir} carries no "
                              "baked bvs block — repack from builder-v4.4 graphs.")
@@ -504,7 +507,8 @@ class PackedCIFDataV4(Dataset):
                                   use_cf_features=self.use_cf_features,
                                   use_bvs_features=self.use_bvs_features,
                                   mask_oxidation_feature=self.mask_oxidation_feature,
-                                  mask_geometry_features=getattr(self, "mask_geometry_features", False))
+                                  mask_geometry_features=getattr(self, "mask_geometry_features", False),
+                                  use_poly_node_summary=getattr(self, "use_poly_node_summary", False))
         if self.multitask:
             bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
             targets, masks = _assemble_targets(r, energy=target, bandgap=bg,
@@ -550,6 +554,8 @@ class PackedCIFDataV4(Dataset):
                 node = np.concatenate([node, np.asarray(r["cf"], dtype=np.float32)], axis=1)
             if self.use_bvs_features:
                 node = np.concatenate([node, np.asarray(r["bvs"], dtype=np.float32)], axis=1)
+            if getattr(self, "use_poly_node_summary", False):
+                node = np.concatenate([node, poly_node_summary(r)], axis=1)
             if self.use_dihedrals:
                 node = np.concatenate([node, np.asarray(r["dih_node"], dtype=np.float32)], axis=1)
             node_rows.append(node)
@@ -584,6 +590,7 @@ class PackedCIFDataV4(Dataset):
                     + (VALENCE_NODE_FEA_LEN if self.use_valence_features else 0)
                     + (CF_FEA_LEN if self.use_cf_features else 0)
                     + (BVS_FEA_LEN if self.use_bvs_features else 0)
+                    + (POLY_SUMMARY_FEA_LEN if getattr(self, "use_poly_node_summary", False) else 0)
                     + (DIHEDRAL_FEA_LEN if self.use_dihedrals else 0))
         return {
             "node": rows_meanstd(_cat(node_rows, node_dim), node_dim),

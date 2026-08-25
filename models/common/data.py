@@ -365,6 +365,30 @@ def _edge_to_fea(edge: dict, center_is_source: bool = True) -> np.ndarray:
     ], dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
 
+# Per-node summary of incident polyhedral edges, for encoders WITHOUT a poly
+# message-passing path (the no-pretrain ladder's identity mode): mean of the
+# node's POLY_FEA_LEN edge features over its poly neighbors + log1p(count).
+# Nodes with no poly edges emit zeros. Consumed via use_poly_node_summary,
+# concat order [base | rich | valence | cf | bvs | poly_summary | dih].
+POLY_SUMMARY_FEA_LEN = POLY_FEA_LEN + 1
+
+
+def poly_node_summary(r) -> np.ndarray:
+    """(n_atoms, POLY_SUMMARY_FEA_LEN) from a ragged extraction's per-node
+    CSR poly lists (poly_cnt + flat poly_fea)."""
+    n = int(r["n_atoms"])
+    out = np.zeros((n, POLY_SUMMARY_FEA_LEN), dtype=np.float32)
+    fea = np.asarray(r["poly_fea"], dtype=np.float32)
+    p0 = 0
+    for i in range(n):
+        c = int(r["poly_cnt"][i])
+        if c:
+            out[i, :POLY_FEA_LEN] = fea[p0:p0 + c].mean(axis=0)
+            out[i, POLY_FEA_LEN] = np.log1p(c)
+        p0 += c
+    return out
+
+
 def _poly_edge_to_fea(pe: dict) -> np.ndarray:
     # shared_count first so it sits at POLY_WEIGHT_IDX (== 0).
     # nan_to_num guards against undefined geometry stats (e.g. std_angle_deg from a
@@ -569,11 +593,14 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
     use_dih = getattr(dataset, "use_dihedrals", False)
     mask_ox = getattr(dataset, "mask_oxidation_feature", False)
     mask_geo = getattr(dataset, "mask_geometry_features", False)
+    use_psum = getattr(dataset, "use_poly_node_summary", False)
     node_rows, edge_rows, poly_rows = [], [], []
     zero_ang = np.zeros(ANGLE_FEA_LEN, dtype=np.float32)
     for i in idx:
         graph = dataset._read_graph(dataset.data[i][2])
         dih = dihedral_node_features(graph, len(graph["nodes"])) if use_dih else None
+        # Same ragged extraction as sample assembly, so the summary can't drift.
+        psum = poly_node_summary(_extract_ragged(graph)) if use_psum else None
         for ni, n in enumerate(graph["nodes"]):
             feat = _node_to_fea(n)
             if mask_ox:
@@ -597,6 +624,8 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
                                      "baked bvs block — rebuild with schema >= v4.4.")
                 feat = np.concatenate([feat, np.asarray([n["bvs"], n.get("bvs_mismatch", 0.0)],
                                                         dtype=np.float32)])
+            if use_psum:
+                feat = np.concatenate([feat, psum[ni]])
             if use_dih:
                 feat = np.concatenate([feat, dih[ni]])
             node_rows.append(feat)
@@ -624,6 +653,7 @@ def compute_feature_stats(dataset, indices, max_graphs=4000, seed=123):
                 + (VALENCE_NODE_FEA_LEN if use_val else 0)
                 + (CF_FEA_LEN if use_cf else 0)
                 + (BVS_FEA_LEN if use_bvs else 0)
+                + (POLY_SUMMARY_FEA_LEN if use_psum else 0)
                 + (DIHEDRAL_FEA_LEN if use_dih else 0))
     return {
         "node": rows_meanstd(node_rows, node_dim),
@@ -877,7 +907,7 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
                      use_rich_node_features=False, use_dihedrals=False,
                      use_valence_features=False, use_cf_features=False,
                      use_bvs_features=False, mask_oxidation_feature=False,
-                     mask_geometry_features=False):
+                     mask_geometry_features=False, use_poly_node_summary=False):
     """Truncate/pad a ragged extraction into the model's padded sample tensors.
 
     Replicates the historical _build_sample behavior exactly: closest-first
@@ -986,6 +1016,8 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
                 "block — rebuild it with builder schema >= v4.4 (bond_valence).")
         bvs = torch.from_numpy(np.array(r["bvs"], dtype=np.float32, copy=True))
         atom_fea = torch.cat([atom_fea, bvs], dim=1)
+    if use_poly_node_summary:
+        atom_fea = torch.cat([atom_fea, torch.from_numpy(poly_node_summary(r))], dim=1)
     if use_dihedrals:
         # Concat the per-atom 4-body torsion summary (zeros on a dihedral-less pack).
         # Order is [base | rich | dihedral] -- the stats paths mirror this exactly.
@@ -1080,7 +1112,7 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_cf_features=False, use_bvs_features=False,
                   use_dihedrals=False, multitask=False, bandgap=float("nan"),
                   dos_per_atom=True, mask_oxidation_feature=False,
-                  mask_geometry_features=False):
+                  mask_geometry_features=False, use_poly_node_summary=False):
     """Build one fully-padded crystal sample from its graph JSON on disk.
 
     Module-level (not a method) so it is picklable by a ``spawn`` multiprocessing
@@ -1108,7 +1140,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                               use_cf_features=use_cf_features,
                               use_bvs_features=use_bvs_features,
                               mask_oxidation_feature=mask_oxidation_feature,
-                              mask_geometry_features=mask_geometry_features)
+                              mask_geometry_features=mask_geometry_features,
+                              use_poly_node_summary=use_poly_node_summary)
 
     if multitask:
         targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap,
@@ -1169,7 +1202,8 @@ class CIFDataV4(Dataset):
                  use_cf_features: bool = False, use_bvs_features: bool = False,
                  n_energy: int = None, dos_per_atom: bool = True,
                  mask_oxidation_feature: bool = False,
-                 mask_geometry_features: bool = False):
+                 mask_geometry_features: bool = False,
+                 use_poly_node_summary: bool = False):
         assert os.path.exists(index_path), f"Index file not found: {index_path}"
         self.use_rich_node_features = use_rich_node_features
         self.use_valence_features = use_valence_features
@@ -1177,6 +1211,7 @@ class CIFDataV4(Dataset):
         self.use_bvs_features = use_bvs_features
         self.mask_oxidation_feature = mask_oxidation_feature
         self.mask_geometry_features = mask_geometry_features
+        self.use_poly_node_summary = use_poly_node_summary
         self.use_dihedrals = use_dihedrals
         # DOS target width: graph JSONs carry the CURRENT fetch grid only (DOS_N_ENERGY),
         # so this backend can't serve a different width — fail loudly, don't mis-shape.
@@ -1321,6 +1356,7 @@ class CIFDataV4(Dataset):
                                    use_bvs_features=self.use_bvs_features,
                                    mask_oxidation_feature=getattr(self, 'mask_oxidation_feature', False),
                                    mask_geometry_features=getattr(self, 'mask_geometry_features', False),
+                                   use_poly_node_summary=getattr(self, 'use_poly_node_summary', False),
                                    use_dihedrals=self.use_dihedrals,
                                    multitask=self.multitask,
                                    bandgap=self._bandgap_by_id.get(str(rec[0]), float("nan")),
@@ -1361,6 +1397,7 @@ class CIFDataV4(Dataset):
                                use_bvs_features=self.use_bvs_features,
                                mask_oxidation_feature=getattr(self, 'mask_oxidation_feature', False),
                                mask_geometry_features=getattr(self, 'mask_geometry_features', False),
+                               use_poly_node_summary=getattr(self, 'use_poly_node_summary', False),
                                use_dihedrals=self.use_dihedrals,
                                multitask=self.multitask,
                                bandgap=self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")),
@@ -1473,6 +1510,7 @@ def load_cif_dataset_from_args(index_path, args, **overrides):
         use_dihedrals=args.get("use_dihedrals", False),
         mask_oxidation_feature=args.get("mask_oxidation_feature", False),
         mask_geometry_features=args.get("mask_geometry_features", False),
+        use_poly_node_summary=args.get("use_poly_node_summary", False),
     )
     kw.update(overrides)
     return load_cif_dataset(index_path, **kw)

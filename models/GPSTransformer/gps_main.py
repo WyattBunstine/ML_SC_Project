@@ -126,6 +126,7 @@ def main():
         use_bvs_features=args.get("use_bvs_features", False),
         mask_oxidation_feature=args.get("mask_oxidation_feature", False),
         mask_geometry_features=args.get("mask_geometry_features", False),
+        use_poly_node_summary=args.get("use_poly_node_summary", False),
         # Per-atom 4-body torsion summary concatenated to the node vector. Needs a pack
         # re-built with dihedrals (has_dihedrals=true, e.g. packed_v3); zeros otherwise.
         use_dihedrals=args.get("use_dihedrals", False),
@@ -245,7 +246,7 @@ def main():
                 "per_atom_head", "use_bond_edges", "shell_aggregation", "use_angle_bias",
                 "use_dist_bias", "use_rich_node_features", "use_valence_features", "use_cf_features",
                 "use_bvs_features", "use_dihedrals", "mask_oxidation_feature",
-                "mask_geometry_features",
+                "mask_geometry_features", "use_poly_node_summary",
                 "tasks", "differentiable_geometry", "n_energy", "dos_per_atom",
                 "atom_pooling", "use_poly_edges")},
             "training": {k: args.get(k) for k in (
