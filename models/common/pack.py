@@ -388,6 +388,13 @@ class PackedCIFDataV4(Dataset):
         self._bandgap = (pd.to_numeric(meta["bandgap"], errors="coerce")
                          .to_numpy().astype(np.float32)
                          if "bandgap" in meta.columns else None)
+        # Electron-phonon scalars (Cerqueira pack meta only; NaN-masked elsewhere).
+        self._eph_lambda = (pd.to_numeric(meta["eph_lambda"], errors="coerce")
+                            .to_numpy().astype(np.float32)
+                            if "eph_lambda" in meta.columns else None)
+        self._eph_wlog = (pd.to_numeric(meta["eph_wlog"], errors="coerce")
+                          .to_numpy().astype(np.float32)
+                          if "eph_wlog" in meta.columns else None)
 
         # Shared row construction (MPNNData.build_data_rows — bit-identical to
         # CIFDataV4 so the same seed yields the same splits across backends);
@@ -511,8 +518,12 @@ class PackedCIFDataV4(Dataset):
                                   use_poly_node_summary=getattr(self, "use_poly_node_summary", False))
         if self.multitask:
             bg = float(self._bandgap[pos]) if self._bandgap is not None else float("nan")
-            targets, masks = _assemble_targets(r, energy=target, bandgap=bg,
-                                               dos_per_atom=self.dos_per_atom)
+            _la = getattr(self, "_eph_lambda", None)
+            _wl = getattr(self, "_eph_wlog", None)
+            targets, masks = _assemble_targets(
+                r, energy=target, bandgap=bg, dos_per_atom=self.dos_per_atom,
+                eph_lambda=float(_la[pos]) if _la is not None else float("nan"),
+                eph_wlog=float(_wl[pos]) if _wl is not None else float("nan"))
             return (sample, targets, masks, cif_id)
         return (sample, torch.FloatTensor([float(target)]),
                 torch.LongTensor([int(label)]), cif_id)

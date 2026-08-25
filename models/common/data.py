@@ -1067,7 +1067,8 @@ def _assemble_sample(r, max_num_nbr, max_num_poly_nbr,
 STRESS_KBAR_TO_EVA3 = -1.0 / 1602.1766208
 
 
-def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom=True):
+def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom=True,
+                      eph_lambda=float("nan"), eph_wlog=float("nan")):
     """Build the (targets, masks) dicts for masked multitask training.
 
     Per-atom: forces (N,3), magmom (N,1) (from the ragged extraction). Per-structure:
@@ -1099,10 +1100,16 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom
                                                # ablation cell.
     energy_t, m_e = _scalar(energy)        # (1,)
     bandgap_t, m_bg = _scalar(bandgap)     # (1,)
+    # Electron-phonon scalars (Cerqueira DFPT set): coupling constant lambda and
+    # log-moment omega_log (K, raw — std-normalized by compute_target_stats).
+    eph_la_t, m_la = _scalar(eph_lambda)   # (1,)
+    eph_wl_t, m_wl = _scalar(eph_wlog)     # (1,)
     targets = {"forces": forces, "magmom": magmom, "stress": stress, "dos": dos,
-               "energy": energy_t, "bandgap": bandgap_t}
+               "energy": energy_t, "bandgap": bandgap_t,
+               "eph_lambda": eph_la_t, "eph_wlog": eph_wl_t}
     masks = {"forces": m_f, "magmom": m_m, "stress": m_s, "dos": m_dos,
-             "energy": m_e, "bandgap": m_bg}
+             "energy": m_e, "bandgap": m_bg,
+             "eph_lambda": m_la, "eph_wlog": m_wl}
     return targets, masks
 
 
@@ -1112,7 +1119,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
                   use_cf_features=False, use_bvs_features=False,
                   use_dihedrals=False, multitask=False, bandgap=float("nan"),
                   dos_per_atom=True, mask_oxidation_feature=False,
-                  mask_geometry_features=False, use_poly_node_summary=False):
+                  mask_geometry_features=False, use_poly_node_summary=False,
+                  eph_lambda=float("nan"), eph_wlog=float("nan")):
     """Build one fully-padded crystal sample from its graph JSON on disk.
 
     Module-level (not a method) so it is picklable by a ``spawn`` multiprocessing
@@ -1145,7 +1153,8 @@ def _build_sample(data_row, max_num_nbr, max_num_poly_nbr,
 
     if multitask:
         targets, masks = _assemble_targets(ragged, energy=target, bandgap=bandgap,
-                                           dos_per_atom=dos_per_atom)
+                                           dos_per_atom=dos_per_atom,
+                                           eph_lambda=eph_lambda, eph_wlog=eph_wlog)
         return (sample, targets, masks, cif_id)
     target = torch.FloatTensor([float(target)])
     label = torch.LongTensor([int(label)])
@@ -1256,6 +1265,15 @@ class CIFDataV4(Dataset):
             dict(zip(index_df["id"].astype(str),
                      pd.to_numeric(index_df["bandgap"], errors="coerce")))
             if "bandgap" in index_df.columns else {})
+        # Electron-phonon scalar targets (Cerqueira pack indexes only).
+        self._eph_lambda_by_id = (
+            dict(zip(index_df["id"].astype(str),
+                     pd.to_numeric(index_df["eph_lambda"], errors="coerce")))
+            if "eph_lambda" in index_df.columns else {})
+        self._eph_wlog_by_id = (
+            dict(zip(index_df["id"].astype(str),
+                     pd.to_numeric(index_df["eph_wlog"], errors="coerce")))
+            if "eph_wlog" in index_df.columns else {})
 
         # `label` (1 = SC, 0 = non-SC) defaults to 1 for older indexes without the
         # column, leaving the regression path unaffected. Rows whose chosen target
@@ -1360,6 +1378,8 @@ class CIFDataV4(Dataset):
                                    use_dihedrals=self.use_dihedrals,
                                    multitask=self.multitask,
                                    bandgap=self._bandgap_by_id.get(str(rec[0]), float("nan")),
+                                   eph_lambda=getattr(self, '_eph_lambda_by_id', {}).get(str(rec[0]), float("nan")),
+                                   eph_wlog=getattr(self, '_eph_wlog_by_id', {}).get(str(rec[0]), float("nan")),
                                    dos_per_atom=self.dos_per_atom)
             if dev.type != "cpu":
                 sample = _sample_to_device(sample, dev)
@@ -1401,6 +1421,8 @@ class CIFDataV4(Dataset):
                                use_dihedrals=self.use_dihedrals,
                                multitask=self.multitask,
                                bandgap=self._bandgap_by_id.get(str(self.data[idx][0]), float("nan")),
+                               eph_lambda=getattr(self, '_eph_lambda_by_id', {}).get(str(self.data[idx][0]), float("nan")),
+                               eph_wlog=getattr(self, '_eph_wlog_by_id', {}).get(str(self.data[idx][0]), float("nan")),
                                dos_per_atom=self.dos_per_atom)
 
         # Store the built sample for reuse on later epochs (LRU-bounded).
@@ -1622,6 +1644,8 @@ def collate_pool_multitask(dataset_list):
         "dos": torch.stack([t["dos"] for t in tds], dim=0),        # (B, DOS_N_ENERGY)
         "energy": torch.cat([t["energy"] for t in tds], dim=0),    # (B,)
         "bandgap": torch.cat([t["bandgap"] for t in tds], dim=0),  # (B,)
+        "eph_lambda": torch.cat([t["eph_lambda"] for t in tds], dim=0),  # (B,)
+        "eph_wlog": torch.cat([t["eph_wlog"] for t in tds], dim=0),      # (B,)
     }
     masks = {k: torch.stack([m[k] for m in mds], dim=0) for k in mds[0]}  # each (B,)
     return base_input, targets, masks, cif_ids
