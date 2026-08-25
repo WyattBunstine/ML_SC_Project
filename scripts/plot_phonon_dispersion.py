@@ -101,11 +101,12 @@ def force_constants(at, tau, qd, nat, grid):
                     for j in range(nat):
                         blk = C[3 * i:3 * i + 3, 3 * j:3 * j + 3].real
                         Csum[i] += blk
-                        # minimal-image fold of R + tau_j - tau_i
+                        # minimal-image fold of R + tau_j - tau_i; no folding
+                        # freedom along unsampled (N_i = 1) directions
                         best, cands = None, []
-                        for m1 in (-1, 0, 1):
-                            for m2 in (-1, 0, 1):
-                                for m3 in (-1, 0, 1):
+                        for m1 in ((-1, 0, 1) if N[0] > 1 else (0,)):
+                            for m2 in ((-1, 0, 1) if N[1] > 1 else (0,)):
+                                for m3 in ((-1, 0, 1) if N[2] > 1 else (0,)):
                                     Rc = (Rf + N * np.array([m1, m2, m3])) @ at
                                     d = np.linalg.norm(Rc + tau[j] - tau[i])
                                     if best is None or d < best - 1e-6:
@@ -161,8 +162,16 @@ def recover_basis(qs, tol=1e-5):
             if np.abs(M - np.round(M)).max() < 1e-4:
                 break
             basis = basis[:2]     # last pick fails integrality: try the next
-    else:
-        raise ValueError("could not recover a generating basis from the q set")
+    if len(basis) < 3:
+        # Rank-deficient q set: grids with N_i = 1 (e.g. 5x5x1 layered
+        # sampling) span only a plane/line. The unsampled directions carry no
+        # phase information (their R components are always 0), so completing
+        # the basis with null-space unit vectors is exact, not approximate.
+        if basis:
+            _, _, Vt = np.linalg.svd(np.array(basis).reshape(len(basis), 3))
+            basis = list(np.array(basis)) + list(Vt[len(basis):])
+        else:
+            basis = list(np.eye(3))
     G = np.array(basis)
     return G
 
@@ -202,8 +211,10 @@ def dense_phdos(mat_dir, centers, sigma=0.15, mesh_cap=16):
     errs = [np.abs(np.sort(freqs_at(np.array(q), entries, zero, m, nat))
                    - np.sort(np.array(r))).max() for q, r in freq_ref.items()]
     grid_err = max(errs) if errs else float("nan")
-    # dense mesh (offset to avoid duplicating the calculated points exactly)
-    Mm = np.minimum(mesh_cap, np.maximum(12, 3 * N))
+    # dense mesh (offset to avoid duplicating the calculated points exactly);
+    # unsampled (N_i = 1) directions get a single point — interpolation is
+    # constant along them by construction
+    Mm = np.where(N == 1, 1, np.minimum(mesh_cap, np.maximum(12, 3 * N)))
     fr = [(np.arange(Mi) + 0.5) / Mi for Mi in Mm]
     mesh = np.array(np.meshgrid(*fr, indexing="ij")).reshape(3, -1).T @ (G * N[:, None])
     # group entries by (i, j) pair for vectorized assembly

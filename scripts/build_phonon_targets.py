@@ -169,6 +169,15 @@ def cmd_phdos(dry_run=False):
     dirs = sorted(d for d in glob.glob(os.path.join(EPH, "a2f_raw", "batch-*", "*_agm*"))
                   if glob.glob(os.path.join(d, "qe.dyn[1-9]*")))
     graph_dir = os.path.join(EPH, "graphs_v45_eph")
+    if ONLY_MISSING:
+        def _done(d):
+            gp = os.path.join(graph_dir, d.rsplit("_", 1)[-1] + ".json")
+            if not os.path.exists(gp):
+                return True                       # no graph -> nothing to bake
+            pd = json.load(open(gp)).get("ph_dos")
+            return pd is not None and len(pd) == PHONON_N_BINS
+        dirs = [d for d in dirs if not _done(d)]
+        print(f"only-missing: {len(dirs)} materials to (re)bake")
     n_ok = n_fail = 0
     kept_fr, errs = [], []
     with Pool(min(12, os.cpu_count() or 1)) as pool:
@@ -198,9 +207,14 @@ def cmd_phdos(dry_run=False):
               f"| <95% stable: {(kept_fr < 0.95).sum()} materials")
 
 
+ONLY_MISSING = False
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["a2f", "phdos"])
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only-missing", action="store_true",
+                    help="phdos: skip graphs already carrying a PHONON_N_BINS ph_dos")
     a = ap.parse_args()
+    ONLY_MISSING = a.only_missing
     (cmd_a2f if a.cmd == "a2f" else cmd_phdos)(dry_run=a.dry_run)
