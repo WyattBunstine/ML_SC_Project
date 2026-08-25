@@ -25,10 +25,11 @@ def main(limit=None):
     if not key:
         sys.exit("MP_API_KEY not set")
     with MPRester(key) as m:
-        docs = m.materials.summary.search(has_props=["phonon_dos"],
+        docs = m.materials.summary.search(has_props=["phonon"],
                                           fields=["material_id"])
         ids = sorted({str(d.material_id) for d in docs})
-        print(f"{len(ids)} materials advertise phonon_dos", flush=True)
+        print(f"{len(ids)} materials advertise phonon data "
+              f"(dfpt 1,513 + pheasy 26,237 docs)", flush=True)
         if limit:
             ids = ids[:limit]
         n_ok = n_skip = n_fail = 0
@@ -37,17 +38,29 @@ def main(limit=None):
             if os.path.exists(dest):
                 n_skip += 1
                 continue
-            try:
-                dos = m.get_phonon_dos_by_material_id(mid)
+            # Method priority: dfpt (curated Petretto set) over pheasy (the 2025
+            # 26k expansion). The method is stored so pack-time source selection
+            # can rank sources (dfpt > togo > pheasy) explicitly.
+            dos = method = None
+            for meth in ("dfpt", "pheasy"):
+                try:
+                    dos = m.materials.phonon.get_dos_from_material_id(mid, meth)
+                    method = meth
+                    break
+                except Exception:  # noqa: BLE001 — try the next method
+                    continue
+            if dos is None:
+                n_fail += 1
+                if n_fail <= 20 or n_fail % 100 == 0:
+                    print(f"fail {mid}: no dos under any method", flush=True)
+            else:
                 np.savez_compressed(dest + ".tmp.npz",
                                     frequencies=np.asarray(dos.frequencies, dtype=np.float64),
-                                    densities=np.asarray(dos.densities, dtype=np.float64))
+                                    densities=np.asarray(dos.densities, dtype=np.float64),
+                                    method=np.array(method))
                 os.replace(dest + ".tmp.npz", dest)
                 n_ok += 1
-            except Exception as e:  # noqa: BLE001 — log, continue; rerun retries
-                n_fail += 1
-                print(f"fail {mid}: {str(e)[:100]}", flush=True)
-            if (i + 1) % 100 == 0:
+            if (i + 1) % 200 == 0:
                 print(f"  {i+1}/{len(ids)} (ok {n_ok}, skip {n_skip}, fail {n_fail})",
                       flush=True)
         print(f"fetch done: ok {n_ok}, skip {n_skip}, fail {n_fail}", flush=True)
