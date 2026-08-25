@@ -35,7 +35,7 @@ from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_target
                       accumulate_slot_rbf, rich_node_features, RICH_NODE_FEA_LEN,
                       valence_node_features, VALENCE_NODE_FEA_LEN, CF_FEA_LEN, BVS_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN, GEO_FEATURE_COLS,
-                      poly_node_summary, POLY_SUMMARY_FEA_LEN,
+                      poly_node_summary, POLY_SUMMARY_FEA_LEN, PHONON_N_BINS,
                       DIHEDRAL_FEA_LEN, DOS_N_ENERGY)
 
 PACK_VERSION = 1
@@ -110,7 +110,9 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
     totals = {name: 0 for name in _FIELDS}   # element rows written per field
     offsets = {col: [] for col in _OFFSET_COLS}
     kept_pos, failures, lattices, dih_any, stresses, doses = [], [], [], [], [], []
-    phys_any = {"forces": False, "magmom": False, "stress": False, "dos": False}  # any finite -> has_X
+    a2fs, ph_doses = [], []
+    phys_any = {"forces": False, "magmom": False, "stress": False, "dos": False,
+                "a2f": False, "ph_dos": False}  # any finite -> has_X
     baked_any = {"valence": False, "cf": False, "bvs": False}  # baked blocks -> has_*
     baked_seen = {"valence": [0, 0], "cf": [0, 0], "bvs": [0, 0]}  # mixed refusal
     jimage_any = [False]   # any nonzero bond_jimage -> graphs carry exact PBC images
@@ -156,6 +158,8 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
             lattices.append(np.asarray(r["lattice"], dtype=np.float32).reshape(9))
             stresses.append(np.asarray(r["stress"], dtype=np.float32).reshape(9))
             doses.append(np.asarray(r["dos"], dtype=np.float32).reshape(DOS_N_ENERGY))
+            a2fs.append(np.asarray(r["a2f"], dtype=np.float32).reshape(PHONON_N_BINS))
+            ph_doses.append(np.asarray(r["ph_dos"], dtype=np.float32).reshape(PHONON_N_BINS))
             dih_any.append(bool(np.any(r["dih_node"])))
             if not baked_any["valence"] and r.get("valence") is not None:
                 baked_any["valence"] = True
@@ -203,6 +207,10 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
         meta["stress"] = list(np.stack(stresses))
     if doses and phys_any["dos"]:
         meta["dos"] = list(np.stack(doses))
+    if a2fs and phys_any["a2f"]:
+        meta["a2f"] = list(np.stack(a2fs))
+    if ph_doses and phys_any["ph_dos"]:
+        meta["ph_dos"] = list(np.stack(ph_doses))
     # Opt-in material-split key for single-structure-per-material packs (the DOS
     # pack): id IS the material id, so mp_id = id minus a trailing .cif. Only when
     # the index didn't already carry mp_id (never clobber an explicit one).
@@ -240,6 +248,8 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
         "has_magmom": phys_any["magmom"],
         "has_stress": phys_any["stress"],
         "has_dos": phys_any["dos"],
+        "has_a2f": phys_any["a2f"],
+        "has_ph_dos": phys_any["ph_dos"],
         # any nonzero per-edge image -> graphs carry EXACT to_jimage (rebuilt). False on a
         # pack of un-rebuilt graphs (all (0,0,0)) -> exact PBC forces would be wrong; verify
         # this is true on packed_v4 before multitask training.
@@ -384,6 +394,14 @@ class PackedCIFDataV4(Dataset):
                     f"(128 = ±1 eV dos_pack_ef1, 256 = legacy -10..+5 eV dos_pack) or "
                     f"fix n_energy.")
             self.n_energy = stored
+        # Phonon spectra on the fixed PHONON grid: width contract enforced like dos
+        # (a mismatched pack must raise, never silently re-split rows).
+        self._a2f = _phys_col("a2f", "has_a2f")
+        self._ph_dos = _phys_col("ph_dos", "has_ph_dos")
+        for _nm, _c in (("a2f", self._a2f), ("ph_dos", self._ph_dos)):
+            if _c is not None and int(_c.shape[1]) != PHONON_N_BINS:
+                raise ValueError(f"pack {pack_dir} stores {int(_c.shape[1])}-bin {_nm} "
+                                 f"but this code uses PHONON_N_BINS={PHONON_N_BINS} — repack.")
         # Coerce non-numeric cells (e.g. '' for missing) to NaN before float cast.
         self._bandgap = (pd.to_numeric(meta["bandgap"], errors="coerce")
                          .to_numpy().astype(np.float32)
@@ -468,6 +486,10 @@ class PackedCIFDataV4(Dataset):
                   else np.full((3, 3), np.nan, dtype=np.float32))
         dos = (self._dos[pos] if self._dos is not None
                else np.full(self.n_energy, np.nan, dtype=np.float32))
+        a2f = (self._a2f[pos] if getattr(self, "_a2f", None) is not None
+               else np.full(PHONON_N_BINS, np.nan, dtype=np.float32))
+        ph_dos = (self._ph_dos[pos] if getattr(self, "_ph_dos", None) is not None
+                  else np.full(PHONON_N_BINS, np.nan, dtype=np.float32))
         lattice = (self._lattice[pos] if self._lattice is not None
                    else np.zeros((3, 3), dtype=np.float32))
         return {
@@ -483,6 +505,8 @@ class PackedCIFDataV4(Dataset):
             "magmom": magmom,
             "stress": stress,
             "dos": dos,
+            "a2f": a2f,
+            "ph_dos": ph_dos,
             "bond_cnt": mm["bond_cnt"][a0:a0 + n],
             "bond_nbr": mm["bond_nbr"][b0:b0 + nb],
             "bond_fea": mm["bond_fea"][b0:b0 + nb],

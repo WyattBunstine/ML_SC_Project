@@ -397,7 +397,8 @@ def run_regression(args, model, criterion, optimizer, scheduler, loaders, normal
 
 _DEFAULT_LOSS_WEIGHTS = {"energy": 1.0, "forces": 10.0, "stress": 1.0,
                          "magmom": 1.0, "bandgap": 1.0, "dos": 1.0,
-                         "eph_lambda": 1.0, "eph_wlog": 1.0}
+                         "eph_lambda": 1.0, "eph_wlog": 1.0,
+                         "eph_a2f": 1.0, "ph_dos": 1.0}
 
 
 def compute_target_stats(dataset, indices, max_samples=2000, seed=123):
@@ -478,6 +479,10 @@ def _mt_loss(out, targets, masks, stats, weights, seg):
         scalar("eph_wlog", (out["eph_wlog"] - targets["eph_wlog"]).abs())
     if "dos" in out and "dos" in targets:
         scalar("dos", (out["dos"] - targets["dos"]).abs().mean(1))
+    if "eph_a2f" in out and "eph_a2f" in targets:
+        scalar("eph_a2f", (out["eph_a2f"] - targets["eph_a2f"]).abs().mean(1))
+    if "ph_dos" in out and "ph_dos" in targets:
+        scalar("ph_dos", (out["ph_dos"] - targets["ph_dos"]).abs().mean(1))
 
     if not losses:
         raise ValueError("multitask loss has no terms: the model's tasks and the batch's "
