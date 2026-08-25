@@ -365,6 +365,28 @@ def _edge_to_fea(edge: dict, center_is_source: bool = True) -> np.ndarray:
     ], dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
 
+# --- Phonon-spectrum targets (eph_a2f: Eliashberg alpha^2F; ph_dos: phonon DOS) ---
+# One SHARED fixed grid for both, in THz: 128 bins over 0-60 THz covers the
+# corpus (Cerqueira batch-a omega_max: median 8.7, p95 37.9, max 60.8 THz —
+# hydrides carry the tail; rare >60 THz weight is clipped). Spectra are baked
+# into graph JSONs as "a2f" / "ph_dos" keys (bin-averaged, see bin_spectrum),
+# NaN-masked when absent — same flow as the electronic "dos" target.
+PHONON_N_BINS = 128
+PHONON_W_MAX_THZ = 60.0
+
+
+def bin_spectrum(w_thz, y, n_bins=PHONON_N_BINS, w_max=PHONON_W_MAX_THZ):
+    """Integral-preserving bin average of a spectrum onto the fixed grid:
+    resample the piecewise-linear curve on a fine grid (zero outside the data
+    range) and average within each bin, so sum(bins)*dw ~= the original
+    integral and downstream lambda/omega_log integrals survive binning."""
+    w_thz = np.asarray(w_thz, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    fine = np.linspace(0.0, w_max, n_bins * 32, endpoint=False) + w_max / (n_bins * 64)
+    yf = np.interp(fine, w_thz, y, left=0.0, right=0.0)
+    return yf.reshape(n_bins, 32).mean(axis=1).astype(np.float32)
+
+
 # Per-node summary of incident polyhedral edges, for encoders WITHOUT a poly
 # message-passing path (the no-pretrain ladder's identity mode): mean of the
 # node's POLY_FEA_LEN edge features over its poly neighbors + log1p(count).
@@ -872,6 +894,14 @@ def _extract_ragged(graph):
     dv = graph.get("dos")
     dos = (np.asarray(dv, dtype=np.float32).reshape(DOS_N_ENERGY)
            if dv is not None else np.full(DOS_N_ENERGY, np.nan, dtype=np.float32))
+    # Phonon-spectrum targets on the shared PHONON grid (see bin_spectrum);
+    # absent -> NaN -> masked, exactly like dos. Loud reshape on width mismatch.
+    av = graph.get("a2f")
+    a2f = (np.asarray(av, dtype=np.float32).reshape(PHONON_N_BINS)
+           if av is not None else np.full(PHONON_N_BINS, np.nan, dtype=np.float32))
+    pv = graph.get("ph_dos")
+    ph_dos = (np.asarray(pv, dtype=np.float32).reshape(PHONON_N_BINS)
+              if pv is not None else np.full(PHONON_N_BINS, np.nan, dtype=np.float32))
 
     return {
         "n_atoms": n_atoms,
@@ -885,6 +915,8 @@ def _extract_ragged(graph):
         "forces": forces,
         "magmom": magmom,
         "dos": dos,
+        "a2f": a2f,
+        "ph_dos": ph_dos,
         "stress": stress,
         "bond_cnt": bond_cnt,
         "bond_nbr": _arr(bond_nbr, np.int32),
@@ -1098,6 +1130,13 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom
                                                # head. False -> legacy extensive total DOS
                                                # (segment-SUM head), for the old-window
                                                # ablation cell.
+    # Phonon spectra on the shared PHONON grid. alpha^2F is INTENSIVE by
+    # construction (a Fermi-surface average) — no per-atom division; phonon DOS
+    # is EXTENSIVE (3N modes) — per-atom like the electronic DOS, matching the
+    # segment-MEAN heads.
+    a2f, m_a2f = _t(r["a2f"])              # (PHONON_N_BINS,)
+    ph_dos, m_ph = _t(r["ph_dos"])         # (PHONON_N_BINS,)
+    ph_dos = ph_dos / max(int(r["n_atoms"]), 1)
     energy_t, m_e = _scalar(energy)        # (1,)
     bandgap_t, m_bg = _scalar(bandgap)     # (1,)
     # Electron-phonon scalars (Cerqueira DFPT set): coupling constant lambda and
@@ -1106,10 +1145,12 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom
     eph_wl_t, m_wl = _scalar(eph_wlog)     # (1,)
     targets = {"forces": forces, "magmom": magmom, "stress": stress, "dos": dos,
                "energy": energy_t, "bandgap": bandgap_t,
-               "eph_lambda": eph_la_t, "eph_wlog": eph_wl_t}
+               "eph_lambda": eph_la_t, "eph_wlog": eph_wl_t,
+               "eph_a2f": a2f, "ph_dos": ph_dos}
     masks = {"forces": m_f, "magmom": m_m, "stress": m_s, "dos": m_dos,
              "energy": m_e, "bandgap": m_bg,
-             "eph_lambda": m_la, "eph_wlog": m_wl}
+             "eph_lambda": m_la, "eph_wlog": m_wl,
+             "eph_a2f": m_a2f, "ph_dos": m_ph}
     return targets, masks
 
 
@@ -1646,6 +1687,8 @@ def collate_pool_multitask(dataset_list):
         "bandgap": torch.cat([t["bandgap"] for t in tds], dim=0),  # (B,)
         "eph_lambda": torch.cat([t["eph_lambda"] for t in tds], dim=0),  # (B,)
         "eph_wlog": torch.cat([t["eph_wlog"] for t in tds], dim=0),      # (B,)
+        "eph_a2f": torch.stack([t["eph_a2f"] for t in tds], dim=0),      # (B, PHONON_N_BINS)
+        "ph_dos": torch.stack([t["ph_dos"] for t in tds], dim=0),        # (B, PHONON_N_BINS)
     }
     masks = {k: torch.stack([m[k] for m in mds], dim=0) for k in mds[0]}  # each (B,)
     return base_input, targets, masks, cif_ids
