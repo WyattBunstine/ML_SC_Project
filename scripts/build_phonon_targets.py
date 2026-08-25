@@ -115,7 +115,23 @@ def cmd_a2f(dry_run=False):
 
 
 _FREQ_RE = re.compile(r"freq\s*\(\s*\d+\s*\)\s*=\s*(-?[\d.]+)\s*\[THz\]")
-PHDOS_SIGMA_THZ = 0.25          # smearing for the coarse (3^3-4^3) q grids
+PHDOS_SIGMA_THZ = 0.15          # dense interpolated mesh -> tight smearing
+
+
+def _phdos_one(d):
+    """Worker: dense-mesh DOS for one material dir -> (agm, dos, kept, err) or
+    (agm, None, msg, None) on failure."""
+    sys.path.insert(0, os.path.join(_ROOT, "scripts"))
+    from plot_phonon_dispersion import dense_phdos
+    centers = (np.arange(PHONON_N_BINS) + 0.5) * (PHONON_W_MAX_THZ / PHONON_N_BINS)
+    agm = d.rsplit("_", 1)[-1]
+    try:
+        dos, nat, kept, err = dense_phdos(d, centers, sigma=PHDOS_SIGMA_THZ)
+        if not np.isfinite(err) or err > 0.02:
+            return agm, None, f"grid validation err {err}", None
+        return agm, dos, kept, err
+    except Exception as e:  # noqa: BLE001 — per-material isolation
+        return agm, None, str(e)[:120], None
 
 
 def read_dyn_freqs(mat_dir):
@@ -146,53 +162,40 @@ def read_dyn_freqs(mat_dir):
 
 
 def cmd_phdos(dry_run=False):
-    dirs = glob.glob(os.path.join(EPH, "a2f_raw", "batch-*", "*_agm*"))
+    """Dense-mesh phonon DOS (interpolated force constants, basis recovered
+    from the q set — lattice-convention-free) baked per material; each worker
+    self-validates against QE's listed grid frequencies (skip if err > 0.02 THz)."""
+    from multiprocessing import Pool
+    dirs = sorted(d for d in glob.glob(os.path.join(EPH, "a2f_raw", "batch-*", "*_agm*"))
+                  if glob.glob(os.path.join(d, "qe.dyn[1-9]*")))
     graph_dir = os.path.join(EPH, "graphs_v45_eph")
-    centers = (np.arange(PHONON_N_BINS) + 0.5) * (PHONON_W_MAX_THZ / PHONON_N_BINS)
-    dw = PHONON_W_MAX_THZ / PHONON_N_BINS
-    n_ok = n_nodyn = n_badgrid = 0
-    imag_frac, clip_frac = [], []
-    for d in sorted(dirs):
-        agm = d.rsplit("_", 1)[-1]
-        gpath = os.path.join(graph_dir, agm + ".json")
-        freqs, w, nat, grid_total = read_dyn_freqs(d)
-        if not freqs or nat is None or not os.path.exists(gpath):
-            n_nodyn += 1
-            continue
-        if grid_total is not None and int(w.sum()) != grid_total:
-            n_badgrid += 1                       # count, but keep — weights still relative
-        allf = np.concatenate(freqs)
-        allw = np.concatenate([np.full(len(f), ww) for f, ww in zip(freqs, w)])
-        pos = allf > 0
-        imag_frac.append(1.0 - allw[pos].sum() / allw.sum())
-        # Gaussian smear onto the fixed grid; renormalize the KEPT weight to
-        # 3*nat*(kept fraction) so dropped imaginary modes don't inflate the rest.
-        dos = np.zeros(PHONON_N_BINS)
-        for f0, ww in zip(allf[pos], allw[pos]):
-            dos += ww * np.exp(-0.5 * ((centers - f0) / PHDOS_SIGMA_THZ) ** 2)
-        dos /= (PHDOS_SIGMA_THZ * np.sqrt(2 * np.pi))
-        clip_frac.append(float(allw[pos & (allf > PHONON_W_MAX_THZ)].sum() / allw.sum()))
-        target_modes = 3.0 * nat * (allw[pos].sum() / allw.sum())
-        integ = dos.sum() * dw
-        if integ > 0:
-            dos *= target_modes / integ
-        if not dry_run:
-            g = json.load(open(gpath))
-            g["ph_dos"] = [round(float(x), 8) for x in dos]
-            tmp = gpath + ".tmp"
-            json.dump(g, open(tmp, "w"))
-            os.replace(tmp, gpath)
-        n_ok += 1
-        if n_ok % 500 == 0:
-            print(f"  baked {n_ok}", flush=True)
-    imag_frac = np.array(imag_frac)
-    print(f"phdos bake: {n_ok} baked, {n_nodyn} without dyn/graph, "
-          f"{n_badgrid} weight-sum != dyn0 grid")
-    if len(imag_frac):
-        print(f"imaginary-mode weight: median {np.median(imag_frac)*100:.2f}% "
-              f"p95 {np.percentile(imag_frac,95)*100:.2f}% "
-              f"| >5% imag: {(imag_frac>0.05).sum()} materials "
-              f"| clipped >60THz: {(np.array(clip_frac)>0.01).sum()} materials")
+    n_ok = n_fail = 0
+    kept_fr, errs = [], []
+    with Pool(min(12, os.cpu_count() or 1)) as pool:
+        for agm, dos, kept, err in pool.imap_unordered(_phdos_one, dirs, chunksize=8):
+            gpath = os.path.join(graph_dir, agm + ".json")
+            if dos is None or not os.path.exists(gpath):
+                n_fail += 1
+                if n_fail <= 15:
+                    print(f"  skip {agm}: {kept}", flush=True)
+                continue
+            if not dry_run:
+                g = json.load(open(gpath))
+                g["ph_dos"] = [round(float(x), 8) for x in dos]
+                tmp = gpath + ".tmp"
+                json.dump(g, open(tmp, "w"))
+                os.replace(tmp, gpath)
+            kept_fr.append(kept)
+            errs.append(err)
+            n_ok += 1
+            if n_ok % 500 == 0:
+                print(f"  baked {n_ok}", flush=True)
+    kept_fr, errs = np.array(kept_fr), np.array(errs)
+    print(f"phdos bake (dense mesh): {n_ok} baked, {n_fail} skipped")
+    if len(kept_fr):
+        print(f"grid-validation err: median {np.median(errs):.5f} max {errs.max():.5f} THz")
+        print(f"stable-mode fraction: median {np.median(kept_fr)*100:.2f}% "
+              f"| <95% stable: {(kept_fr < 0.95).sum()} materials")
 
 
 if __name__ == "__main__":

@@ -366,12 +366,14 @@ def _edge_to_fea(edge: dict, center_is_source: bool = True) -> np.ndarray:
 
 
 # --- Phonon-spectrum targets (eph_a2f: Eliashberg alpha^2F; ph_dos: phonon DOS) ---
-# One SHARED fixed grid for both, in THz: 128 bins over 0-60 THz covers the
+# One SHARED fixed grid for both, in THz: 256 bins over 0-60 THz covers the
 # corpus (Cerqueira batch-a omega_max: median 8.7, p95 37.9, max 60.8 THz —
-# hydrides carry the tail; rare >60 THz weight is clipped). Spectra are baked
+# hydrides carry the tail; rare >60 THz weight is clipped). 256 bins = 0.23
+# THz/bin: enough to resolve van Hove structure in the ~7-THz-wide metallic
+# spectra (128/0.47 THz washed it out — review 2026-08-25). Spectra are baked
 # into graph JSONs as "a2f" / "ph_dos" keys (bin-averaged, see bin_spectrum),
 # NaN-masked when absent — same flow as the electronic "dos" target.
-PHONON_N_BINS = 128
+PHONON_N_BINS = 256
 PHONON_W_MAX_THZ = 60.0
 
 
