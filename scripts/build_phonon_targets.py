@@ -9,7 +9,17 @@ Subcommands:
            spectrum vs McMillan.dat — the binning-fidelity report.
            Re-runnable (idempotent: overwrites the key).
 
-  python scripts/build_phonon_targets.py a2f [--dry-run]
+  phdos  — Cerqueira phonon DOS from the qe.dyn* dynamical-matrix files: each
+           qe.dynN (N>=1) lists its irreducible q's star multiplicity (count of
+           'Dynamical  Matrix' blocks) and the frequencies ALREADY in THz
+           ('freq (i) = x [THz]'); qe.dyn0 gives the full q-grid size for a
+           weight sanity check. DOS = Gaussian-smeared weighted histogram on
+           the shared PHONON grid, normalized so the integral is 3*nat
+           (extensive — _assemble_targets divides by n_atoms). Imaginary
+           (negative) modes are dropped with their weight reported.
+           Writes g["ph_dos"] into graphs_v45_eph/<agm>.json. Re-runnable.
+
+  python scripts/build_phonon_targets.py a2f|phdos [--dry-run]
 """
 import argparse
 import glob
@@ -104,9 +114,90 @@ def cmd_a2f(dry_run=False):
               f"p95 {np.percentile(np.abs(err_w),95)*100:.2f}% max {np.abs(err_w).max()*100:.2f}%")
 
 
+_FREQ_RE = re.compile(r"freq\s*\(\s*\d+\s*\)\s*=\s*(-?[\d.]+)\s*\[THz\]")
+PHDOS_SIGMA_THZ = 0.25          # smearing for the coarse (3^3-4^3) q grids
+
+
+def read_dyn_freqs(mat_dir):
+    """(freqs_THz, weights, nat, grid_total) from a material's qe.dyn* files.
+    One irreducible q per file; weight = its star multiplicity (count of
+    'Dynamical  Matrix' blocks); frequencies parsed from the pre-diagonalized
+    listing. grid_total from qe.dyn0 (n1*n2*n3) for the weight sanity check."""
+    freqs, weights = [], []
+    nat = grid_total = None
+    d0 = os.path.join(mat_dir, "qe.dyn0")
+    if os.path.exists(d0):
+        with open(d0) as f:
+            grid_total = int(np.prod([int(x) for x in f.readline().split()[:3]]))
+    for p in sorted(glob.glob(os.path.join(mat_dir, "qe.dyn[1-9]*"))):
+        txt = open(p).read()
+        if nat is None:
+            for line in txt.splitlines():
+                t = line.split()
+                if len(t) >= 3 and t[0].isdigit() and t[1].isdigit():
+                    nat = int(t[1])
+                    break
+        mult = txt.count("Dynamical  Matrix in cartesian axes")
+        fq = [float(x) for x in _FREQ_RE.findall(txt)]
+        if mult and fq:
+            freqs.append(np.asarray(fq))
+            weights.append(mult)
+    return freqs, np.asarray(weights, float), nat, grid_total
+
+
+def cmd_phdos(dry_run=False):
+    dirs = glob.glob(os.path.join(EPH, "a2f_raw", "batch-*", "*_agm*"))
+    graph_dir = os.path.join(EPH, "graphs_v45_eph")
+    centers = (np.arange(PHONON_N_BINS) + 0.5) * (PHONON_W_MAX_THZ / PHONON_N_BINS)
+    dw = PHONON_W_MAX_THZ / PHONON_N_BINS
+    n_ok = n_nodyn = n_badgrid = 0
+    imag_frac, clip_frac = [], []
+    for d in sorted(dirs):
+        agm = d.rsplit("_", 1)[-1]
+        gpath = os.path.join(graph_dir, agm + ".json")
+        freqs, w, nat, grid_total = read_dyn_freqs(d)
+        if not freqs or nat is None or not os.path.exists(gpath):
+            n_nodyn += 1
+            continue
+        if grid_total is not None and int(w.sum()) != grid_total:
+            n_badgrid += 1                       # count, but keep — weights still relative
+        allf = np.concatenate(freqs)
+        allw = np.concatenate([np.full(len(f), ww) for f, ww in zip(freqs, w)])
+        pos = allf > 0
+        imag_frac.append(1.0 - allw[pos].sum() / allw.sum())
+        # Gaussian smear onto the fixed grid; renormalize the KEPT weight to
+        # 3*nat*(kept fraction) so dropped imaginary modes don't inflate the rest.
+        dos = np.zeros(PHONON_N_BINS)
+        for f0, ww in zip(allf[pos], allw[pos]):
+            dos += ww * np.exp(-0.5 * ((centers - f0) / PHDOS_SIGMA_THZ) ** 2)
+        dos /= (PHDOS_SIGMA_THZ * np.sqrt(2 * np.pi))
+        clip_frac.append(float(allw[pos & (allf > PHONON_W_MAX_THZ)].sum() / allw.sum()))
+        target_modes = 3.0 * nat * (allw[pos].sum() / allw.sum())
+        integ = dos.sum() * dw
+        if integ > 0:
+            dos *= target_modes / integ
+        if not dry_run:
+            g = json.load(open(gpath))
+            g["ph_dos"] = [round(float(x), 8) for x in dos]
+            tmp = gpath + ".tmp"
+            json.dump(g, open(tmp, "w"))
+            os.replace(tmp, gpath)
+        n_ok += 1
+        if n_ok % 500 == 0:
+            print(f"  baked {n_ok}", flush=True)
+    imag_frac = np.array(imag_frac)
+    print(f"phdos bake: {n_ok} baked, {n_nodyn} without dyn/graph, "
+          f"{n_badgrid} weight-sum != dyn0 grid")
+    if len(imag_frac):
+        print(f"imaginary-mode weight: median {np.median(imag_frac)*100:.2f}% "
+              f"p95 {np.percentile(imag_frac,95)*100:.2f}% "
+              f"| >5% imag: {(imag_frac>0.05).sum()} materials "
+              f"| clipped >60THz: {(np.array(clip_frac)>0.01).sum()} materials")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["a2f"])
+    ap.add_argument("cmd", choices=["a2f", "phdos"])
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    cmd_a2f(dry_run=a.dry_run)
+    (cmd_a2f if a.cmd == "a2f" else cmd_phdos)(dry_run=a.dry_run)
