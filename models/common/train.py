@@ -396,7 +396,8 @@ def run_regression(args, model, criterion, optimizer, scheduler, loaders, normal
 # gradients) and the geometry collate (collate_pool_multitask).
 
 _DEFAULT_LOSS_WEIGHTS = {"energy": 1.0, "forces": 10.0, "stress": 1.0,
-                         "magmom": 1.0, "bandgap": 1.0, "dos": 1.0}
+                         "magmom": 1.0, "bandgap": 1.0, "dos": 1.0,
+                         "eph_lambda": 1.0, "eph_wlog": 1.0}
 
 
 def compute_target_stats(dataset, indices, max_samples=2000, seed=123):
@@ -471,6 +472,10 @@ def _mt_loss(out, targets, masks, stats, weights, seg):
         per_atom("magmom", (out["magmom"] - targets["magmom"]).abs().sum(-1))
     if "bandgap" in out and "bandgap" in targets:
         scalar("bandgap", (out["bandgap"] - targets["bandgap"]).abs())
+    if "eph_lambda" in out and "eph_lambda" in targets:
+        scalar("eph_lambda", (out["eph_lambda"] - targets["eph_lambda"]).abs())
+    if "eph_wlog" in out and "eph_wlog" in targets:
+        scalar("eph_wlog", (out["eph_wlog"] - targets["eph_wlog"]).abs())
     if "dos" in out and "dos" in targets:
         scalar("dos", (out["dos"] - targets["dos"]).abs().mean(1))
 

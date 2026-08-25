@@ -20,7 +20,7 @@ def customwarn(message, category, filename, lineno, file=None, line=None):
 # the config's `target_column` key (see models/MPNN/MPNNData.py). `tc` stays the
 # default/legacy target; extend this tuple to add new targets.
 KNOWN_TARGET_COLUMNS = ("tc", "e_above_hull", "formation_energy_per_atom",
-                        "energy_per_atom", "bandgap")
+                        "energy_per_atom", "bandgap", "eph_lambda", "eph_wlog")
 
 
 def _load_id_prop(csv_path, has_header=True):

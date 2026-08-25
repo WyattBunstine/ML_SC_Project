@@ -366,7 +366,8 @@ class GPSCrystalNet(nn.Module):
         # the single-scalar readout below stays bit-identical (MPNN/run_regression).
         self.tasks = set(tasks) if tasks is not None else None
         if self.tasks is not None:
-            _known = {"energy", "forces", "stress", "magmom", "bandgap", "dos"}
+            _known = {"energy", "forces", "stress", "magmom", "bandgap", "dos",
+                      "eph_lambda", "eph_wlog"}
             bad = self.tasks - _known
             if bad:
                 raise ValueError(f"unknown task(s) {sorted(bad)}; valid: {sorted(_known)}")
@@ -397,6 +398,12 @@ class GPSCrystalNet(nn.Module):
                 self.heads["magmom"] = self._build_head(1)
             if "bandgap" in self.tasks:
                 self.heads["bandgap"] = self._build_head(1)
+            # e-ph scalars: intensive per-structure quantities like bandgap
+            # (lambda dimensionless, omega_log in K) -> segment-mean readout.
+            if "eph_lambda" in self.tasks:
+                self.heads["eph_lambda"] = self._build_head(1)
+            if "eph_wlog" in self.tasks:
+                self.heads["eph_wlog"] = self._build_head(1)
             if "dos" in self.tasks:
                 self.heads["dos"] = self._build_head(n_energy, softplus_out=True)
 
@@ -484,6 +491,10 @@ class GPSCrystalNet(nn.Module):
             out["magmom"] = self.heads["magmom"](h)                         # (N,1) per-atom
         if "bandgap" in self.tasks:
             out["bandgap"] = self._segment_mean(self.heads["bandgap"](h), seg, B).squeeze(-1)
+        if "eph_lambda" in self.tasks:
+            out["eph_lambda"] = self._segment_mean(self.heads["eph_lambda"](h), seg, B).squeeze(-1)
+        if "eph_wlog" in self.tasks:
+            out["eph_wlog"] = self._segment_mean(self.heads["eph_wlog"](h), seg, B).squeeze(-1)
         if "dos" in self.tasks:
             # per-atom (intensive) DOS: mean over atoms, not sum — removes the system-size
             # confound (total DOS ~ #atoms). Paired with a per-atom DOS target (/ n_atoms).
