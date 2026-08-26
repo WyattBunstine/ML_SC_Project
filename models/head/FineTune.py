@@ -118,7 +118,7 @@ def _encoder(checkpoint_path, index_path, device, encoder_args=None):
     return model.to(device), ds, collate_pool_geom
 
 
-VALID_LOSSES = ("l1", "msle", "mse_k", "wl1_k", "huber_k")
+VALID_LOSSES = ("l1", "msle", "mse_k", "wl1_k", "huber_k", "l1_k")
 
 # huber_k transition point (Kelvin): quadratic below (mse_k-like amplitude
 # seeking), linear above (robust to the high-Tc label-noise rows that make
@@ -152,6 +152,12 @@ def reg_loss(z, y_z_sel, tc_sel, loss_type, tc_mean, tc_std, k_var=1.0, k_wmean=
     if loss_type == "mse_k":
         k = torch.expm1((z * tc_std + tc_mean).clamp(max=30.0))
         return F.mse_loss(k, tc_sel) / k_var
+    if loss_type == "l1_k":
+        # MAE in ABSOLUTE KELVIN — the objective equals the headline metric
+        # (mae_tc_pos_K). Same exponent cap as mse_k; std-normalized so the
+        # optimizer scale matches the z-space losses.
+        k = torch.expm1((z * tc_std + tc_mean).clamp(max=30.0))
+        return F.l1_loss(k, tc_sel) / (k_var ** 0.5)
     if loss_type == "wl1_k":
         w = (1.0 + tc_sel) / k_wmean
         return (w * (z - y_z_sel).abs()).mean()
