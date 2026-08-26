@@ -306,6 +306,15 @@ def main():
             dataset, list(sc_idx), max_samples=args.get("target_stat_samples", 2000),
             seed=args.get("split_seed", 123))
         target_stats = broadcast_object(target_stats, dist_info, src=0)
+        # A configured task with NO finite targets anywhere in the training data
+        # would train as a silent no-op (masked loss contributes 0) — the run's
+        # distinguishing task could supervise nothing for 72 GPU-hours with no
+        # visible symptom (review 2026-08-26). Fail at startup instead.
+        _dataless = sorted(set(args.get("tasks", [])) - set(target_stats))
+        if _dataless:
+            sys.exit(f"tasks {_dataless} have NO finite targets in the sampled "
+                     f"training data (stats keys: {sorted(target_stats)}) — wrong "
+                     "pack, or the target was never baked into the graphs.")
         weights = {**_DEFAULT_LOSS_WEIGHTS, **args.get("loss_weights", {})}
         run_multitask(args, model, optimizer, scheduler, loaders, target_stats, weights,
                       dist_info=dist_info)

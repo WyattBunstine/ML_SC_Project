@@ -36,6 +36,11 @@ def registry():
         m = ROW.match(line)
         if m:
             rows.append((f"mp-{m.group(1)}", m.group(2), m.group(3), m.group(4)))
+    if len(rows) < 1000:
+        # A format drift / truncated response must not poison the cache: a
+        # 0-row registry.csv would make every later run "succeed" doing nothing.
+        raise ValueError(f"registry parse found only {len(rows)} rows "
+                         f"(expected ~10,034) — README format changed?")
     os.makedirs(OUT, exist_ok=True)
     with open(path, "w") as f:
         f.write("mp_id,formula,spacegroup,url\n")

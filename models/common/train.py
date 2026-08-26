@@ -582,7 +582,8 @@ def run_multitask(args, model, optimizer, scheduler, loaders, stats, weights,
         from resmon import ResourceMonitor
         monitor = ResourceMonitor(interval=2.0).start()
         print(ResourceMonitor.describe())
-    task_cols = [k for k in ("energy", "forces", "stress", "magmom", "bandgap", "dos")
+    task_cols = [k for k in ("energy", "forces", "stress", "magmom", "bandgap", "dos",
+                             "eph_lambda", "eph_wlog", "eph_a2f", "ph_dos")
                  if k in stats]
     if is_main:
         print(f"Multitask targets (with data): {task_cols}; loss weights: "
