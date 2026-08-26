@@ -30,6 +30,7 @@ import json
 import os
 import random
 import sys
+import time
 
 import numpy as np
 import torch
@@ -493,16 +494,25 @@ def run(cfg, out_dir, device):
         opt = torch.optim.AdamW(params, lr=lr, weight_decay=wd)
         best, best_state, bad, best_ep = np.inf, None, 0, -1
         for ep in range(epochs):
+            e0 = time.time()
             tr = epoch_fn(head, opt, y_z) if epoch_fn else epoch_pass(head, True, opt, y_z)
             v = val_fn(head, y_z) if val_fn else val_z_mae(head, y_z)
-            if v < best - 1e-6:
+            is_best = v < best - 1e-6
+            if is_best:
                 best, bad, best_ep = v, 0, ep
                 best_state = (copy.deepcopy(model.state_dict()), copy.deepcopy(head.state_dict()))
             else:
                 bad += 1
-            log.append({"phase": tag, "epoch": ep, "train_loss": tr, "val_z_mae": v})
-            if ep % 20 == 0 or bad >= patience:
-                print(f"[ft] {tag} ep{ep:3d} val_z_mae {v:.4f} (best {best:.4f}@{best_ep})", flush=True)
+            log.append({"phase": tag, "epoch": ep, "train_loss": round(tr, 5),
+                        "val_loss": round(v, 5), "best_val": round(best, 5),
+                        "is_best": int(is_best), "bad_epochs": bad,
+                        "epoch_sec": round(time.time() - e0, 2)})
+            # Pretraining-style telemetry: a line every 5 epochs (and on stop),
+            # with timing — a stalled/diverging run is visible from the log.
+            if ep % 5 == 0 or bad >= patience or ep == epochs - 1:
+                print(f"[ft] {tag} ep{ep:3d}  train {tr:.4f}  val {v:.4f}  "
+                      f"(best {best:.4f}@{best_ep}, bad {bad}/{patience}, "
+                      f"{time.time() - e0:.1f}s)", flush=True)
             if bad >= patience:
                 break
         if best_state is not None:
@@ -631,9 +641,9 @@ def run(cfg, out_dir, device):
                                              if seed_pos.any() else None),
                           "unfreeze": mode,
                           "encoder_params_unfrozen": int(sum(p.numel() for p in enc_params))})
+        with open(os.path.join(out_dir, f"ft_log_seed{seed}.csv"), "w", newline="") as f:
+            w_ = csv.DictWriter(f, fieldnames=list(log[0].keys())); w_.writeheader(); w_.writerows(log)
         if seed == 0:
-            with open(os.path.join(out_dir, "ft_log_seed0.csv"), "w", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=list(log[0].keys())); w.writeheader(); w.writerows(log)
             te_ids = bids
 
     # ---- ensemble over the shared test ids: Kelvin-mean (default) or log-space ----
