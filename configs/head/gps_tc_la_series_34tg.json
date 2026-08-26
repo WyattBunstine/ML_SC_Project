@@ -1,6 +1,6 @@
 {
   "name": "gps_tc_la_series_34tg",
-  "checkpoint": "PATCHED_AT_EVAL_TIME",
+  "checkpoint": "model_data/2026-08-26/gps_mt_34_t_eph/gps_mt_34_t_eph_2026-08-26_05-05-29/result_t34_model_best.pth.tar",
   "embed_source": "database/datafiles/MP/SC_pack_doped_v45",
   "index_path": "database/datafiles/MP/SC_MP_V4_doped_v45.pickle",
   "embed_dir": "database/datafiles/MP/embeddings/la_series_34tg",
