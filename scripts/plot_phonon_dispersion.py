@@ -192,7 +192,7 @@ def assign_grid(G, qs, grid_dims):
     raise ValueError(f"no grid-dim assignment of {grid_dims} covers the q set")
 
 
-def dense_phdos(mat_dir, centers, sigma=0.15, mesh_cap=16):
+def dense_phdos(mat_dir, centers, sigma=0.15, mesh_cap=16, per_atom=False):
     """Phonon DOS on the fixed grid from a DENSE interpolated q-mesh (vectorized
     D(q) assembly + batched eigh). Returns (dos, nat, kept_frac, grid_err) or
     raises. grid_err = max |interpolated - QE-listed| at the calculated q's
@@ -243,7 +243,13 @@ def dense_phdos(mat_dir, centers, sigma=0.15, mesh_cap=16):
         dos += np.exp(-0.5 * ((centers[:, None] - f[None, :]) / sigma) ** 2).sum(axis=1)
     dos /= sigma * np.sqrt(2 * np.pi)
     dw = centers[1] - centers[0]
-    target = 3.0 * nat * kept
+    # per_atom: integral = 3*kept states PER ATOM — the consumer must rescale by
+    # ITS OWN cell's atom count. The QE/phonopy cell and the graph cell are NOT
+    # always the same (primitive vs conventional: ~5% of the Cerqueira corpus,
+    # e.g. agm002137061 nat 3 vs graph 6 — review 2026-08-26), so normalizing
+    # to this cell's 3*nat and dividing by the graph's n_atoms downstream was
+    # silently wrong by an integer factor for those materials.
+    target = 3.0 * kept * (1.0 if per_atom else nat)
     if dos.sum() * dw > 0:
         dos *= target / (dos.sum() * dw)
     return dos.astype(np.float32), nat, kept, grid_err
@@ -278,6 +284,10 @@ def run(mat_dir, path_key):
     at, tau, m, qd, freq_ref, nat = parse_dyn_dir(mat_dir)
     grid = [int(x) for x in open(os.path.join(mat_dir, "qe.dyn0")).readline().split()[:3]]
     print(f"{os.path.basename(mat_dir)}: nat {nat}, grid {grid}, {len(qd)} q-points")
+    if at is None:
+        # non-cubic ibrav: same q-set-derived basis the bake path uses
+        qs = np.array(list(qd.keys()))
+        grid, at = assign_grid(recover_basis(qs), qs, grid)
     entries, asr = force_constants(at, tau, qd, nat, grid)
     errs = []
     for q, ref in freq_ref.items():

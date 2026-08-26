@@ -898,6 +898,15 @@ def _extract_ragged(graph):
            if dv is not None else np.full(DOS_N_ENERGY, np.nan, dtype=np.float32))
     # Phonon-spectrum targets on the shared PHONON grid (see bin_spectrum);
     # absent -> NaN -> masked, exactly like dos. Loud reshape on width mismatch.
+    pg = graph.get("phonon_grid")
+    if pg is not None and (int(pg[0]) != PHONON_N_BINS
+                           or abs(float(pg[1]) - PHONON_W_MAX_THZ) > 1e-6):
+        # A width change is caught by the reshape below, but a w_max change is
+        # length-invisible and would silently reinterpret every baked spectrum
+        # on the wrong frequency axis — the grid descriptor makes both loud.
+        raise ValueError(f"graph baked on phonon grid {pg}, code uses "
+                         f"[{PHONON_N_BINS}, {PHONON_W_MAX_THZ}] — re-bake "
+                         "(build_phonon_targets.py).")
     av = graph.get("a2f")
     a2f = (np.asarray(av, dtype=np.float32).reshape(PHONON_N_BINS)
            if av is not None else np.full(PHONON_N_BINS, np.nan, dtype=np.float32))
@@ -1577,6 +1586,12 @@ def load_cif_dataset_from_args(index_path, args, **overrides):
         mask_geometry_features=args.get("mask_geometry_features", False),
         use_poly_node_summary=args.get("use_poly_node_summary", False),
     )
+    # n_phonon is a HEAD-width knob, but the target width is the fixed
+    # PHONON_N_BINS — a mismatch either dies at the first loss step (128) or
+    # silently broadcasts (1). Refuse at open, mirroring the dos width contract.
+    if args.get("n_phonon") is not None and int(args["n_phonon"]) != PHONON_N_BINS:
+        raise ValueError(f"n_phonon={args['n_phonon']} != PHONON_N_BINS="
+                         f"{PHONON_N_BINS} (the fixed phonon target grid)")
     kw.update(overrides)
     return load_cif_dataset(index_path, **kw)
 

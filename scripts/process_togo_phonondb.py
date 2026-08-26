@@ -54,7 +54,11 @@ def process_one(zpath):
         n_prim = len(ph.primitive)
         total = np.trapezoid(d, f_thz)
         pos = f_thz > 0
-        frac_pos = (np.trapezoid(d[pos], f_thz[pos]) / total) if total > 0 else 0.0
+        if total <= 0 or not pos.any():
+            # zero/degenerate DOS (broken force constants, all-imaginary modes):
+            # caching it as "ok" would poison the pack forever via skip-existing.
+            return f"fail {mp_id}: degenerate DOS (total integral {total:.3g})"
+        frac_pos = np.trapezoid(d[pos], f_thz[pos]) / total
         binned = bin_spectrum(f_thz[pos], d[pos])
         dw = PHONON_W_MAX_THZ / PHONON_N_BINS
         target = 3.0 * n_prim * frac_pos

@@ -82,22 +82,28 @@ def cmd_a2f(dry_run=False):
         if not os.path.exists(gpath):
             n_nograph += 1
             continue
-        w, f = read_a2f(a2f_path)
-        binned = bin_spectrum(w, f)
-        # binning-fidelity check vs the author-integrated values
-        mc = open(os.path.join(d, "McMillan.dat")).read()
+        # Per-material isolation: one truncated a2F.dos6 or missing McMillan.dat
+        # must not abort the whole ~8k-material bake (review 2026-08-26).
         try:
+            w, f = read_a2f(a2f_path)
+            if not len(w):
+                raise ValueError("empty/cutoff-only a2F spectrum")
+            binned = bin_spectrum(w, f)
+            # binning-fidelity check vs the author-integrated values
+            mc = open(os.path.join(d, "McMillan.dat")).read()
             la_ref = float(re.search(r"lambda\s*=\s*([\d.Ee+-]+)", mc).group(1))
             wl_ref = float(re.search(r"wlog\[K\]\s*=\s*([\d.Ee+-]+)", mc).group(1))
             la_b, wl_b = lam_wlog(centers, binned.astype(np.float64))
             if la_ref > 0 and wl_ref > 0:
                 err_l.append((la_b - la_ref) / la_ref)
                 err_w.append((wl_b - wl_ref) / wl_ref)
-        except AttributeError:
-            pass
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"  skip {agm}: {str(e)[:80]}", flush=True)
+            continue
         if not dry_run:
             g = json.load(open(gpath))
             g["a2f"] = [round(float(x), 8) for x in binned]
+            g["phonon_grid"] = [PHONON_N_BINS, PHONON_W_MAX_THZ]
             tmp = gpath + ".tmp"
             json.dump(g, open(tmp, "w"))
             os.replace(tmp, gpath)
@@ -126,7 +132,10 @@ def _phdos_one(d):
     centers = (np.arange(PHONON_N_BINS) + 0.5) * (PHONON_W_MAX_THZ / PHONON_N_BINS)
     agm = d.rsplit("_", 1)[-1]
     try:
-        dos, nat, kept, err = dense_phdos(d, centers, sigma=PHDOS_SIGMA_THZ)
+        # per_atom: the graph's OWN atom count rescales in cmd_phdos — the QE
+        # cell is not always the graph cell (primitive vs conventional).
+        dos, nat, kept, err = dense_phdos(d, centers, sigma=PHDOS_SIGMA_THZ,
+                                          per_atom=True)
         if not np.isfinite(err) or err > 0.02:
             return agm, None, f"grid validation err {err}", None
         return agm, dos, kept, err
@@ -190,7 +199,9 @@ def cmd_phdos(dry_run=False):
                 continue
             if not dry_run:
                 g = json.load(open(gpath))
-                g["ph_dos"] = [round(float(x), 8) for x in dos]
+                n_graph = len(g["nodes"])
+                g["ph_dos"] = [round(float(x) * n_graph, 8) for x in dos]
+                g["phonon_grid"] = [PHONON_N_BINS, PHONON_W_MAX_THZ]
                 tmp = gpath + ".tmp"
                 json.dump(g, open(tmp, "w"))
                 os.replace(tmp, gpath)

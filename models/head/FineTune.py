@@ -103,6 +103,25 @@ def _encoder(checkpoint_path, index_path, device, encoder_args=None):
     kind = a.get("type")
     if kind not in ("identity", "scratch"):
         raise ValueError(f"encoder_args['type'] must be 'identity' or 'scratch', got {kind!r}")
+    # Unknown keys are config mistakes, not preferences: a misspelled feature
+    # flag ("use_poly_summary") silently defaults False and the experiment runs
+    # as a DIFFERENT rung with plausible numbers — the silent-config-key trap's
+    # third appearance would invalidate the whole no-pretrain ladder.
+    _known_ea = {"type", "init_seed", "max_num_nbr", "max_num_poly_nbr",
+                 "use_poly_edges", "use_bond_angles", "use_rich_node_features",
+                 "use_valence_features", "use_cf_features", "use_bvs_features",
+                 "use_dihedrals", "mask_oxidation_feature", "mask_geometry_features",
+                 "use_poly_node_summary", "n_phonon",
+                 "atom_feat_len", "n_conv", "h_feat_len", "n_hidden", "dropout",
+                 "set_transformer_heads", "gps_global", "gps_global_heads",
+                 "gps_ffn_mult", "local_transformer", "per_atom_head",
+                 "use_bond_edges", "shell_aggregation", "use_angle_bias",
+                 "use_dist_bias", "dist_cutoff", "n_dist_rbf", "atom_pooling",
+                 "tasks", "n_energy", "dos_per_atom"}
+    _bad = sorted(set(a) - _known_ea)
+    if _bad:
+        raise ValueError(f"unknown encoder_args key(s) {_bad} — misspelled flag? "
+                         f"known keys: {sorted(_known_ea)}")
     ds = load_cif_dataset_from_args(index_path, a)
     sa, sn, _, sp, _, _ = ds[0][0][:6]
     if kind == "identity":
