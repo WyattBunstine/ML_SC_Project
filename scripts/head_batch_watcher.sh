@@ -18,10 +18,13 @@ for J in "$@"; do
 done
 ./scripts/deploy.sh fetch >> model_data/cf_calib/head_batch_fetch.log 2>&1 || { note "HALT: fetch failed"; exit 1; }
 note "fetch done — scoring"
-for NAME in la_series_scratch_e nickelate_nopre_cpoly nickelate_scratch_e nopre_ka_comp \
+# Score list: override with HEAD_BATCH_NAMES="name1 name2 ..." (run-name suffixes
+# after gps_tc_); defaults to the 2026-08-26 wave.
+NAMES="${HEAD_BATCH_NAMES:-la_series_scratch_e nickelate_nopre_cpoly nickelate_scratch_e nopre_ka_comp \
             probe_28tg la_series_28tg probe_29tg la_series_29tg probe_30tg la_series_30tg \
             probe_31tg la_series_31tg probe_32tg la_series_32tg probe_33tg la_series_33tg \
-            probe_34tg la_series_34tg probe_35tg la_series_35tg; do
+            probe_34tg la_series_34tg probe_35tg la_series_35tg}"
+for NAME in $NAMES; do
   RUN=$(ls -dt model_data/*/gps_tc_${NAME}_2* 2>/dev/null | head -1)
   [ -z "$RUN" ] || [ ! -f "$RUN/metrics.json" ] && { note "$NAME: MISSING"; continue; }
   note "$NAME: $(python3 -c "import json;m=json.load(open('$RUN/metrics.json'));print('MAE %.2f pos %.2f msle %.3f'%(m['head']['overall']['mae_K'],m['mae_tc_pos_K'],m['msle']))" 2>/dev/null)"
