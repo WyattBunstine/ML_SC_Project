@@ -276,6 +276,45 @@ def run(cfg, out_dir, device):
                                   encoder_args=cfg.get("encoder_args"))
     identity_enc = isinstance(model, _IdentityEncoder)
     enc_dim = model.atom_fea_len
+    # ---- predicted-physics features (the pf ablation ladder) ----
+    # pred_features: {"per_atom": bool, "global": bool, "latents": bool, "cache": path}
+    # per_atom -> the checkpoint's own predictions become extra per-atom channels
+    # (group P, see pred_features.PER_ATOM_NAMES); latents:false drops the encoder
+    # embedding entirely (the P-/G-only arms). Features are STATIC — one frozen
+    # forward pass cached to disk — so phase-B fine-tuning never drifts them.
+    pf = cfg.get("pred_features") or {}
+    if pf:
+        _bad_pf = sorted(set(pf) - {"per_atom", "global", "latents", "cache"})
+        if _bad_pf:
+            raise ValueError(f"unknown pred_features key(s) {_bad_pf} — misspelled? "
+                             "known: per_atom, global, latents, cache")
+        if cfg.get("checkpoint") is None:
+            raise ValueError("pred_features requires a pretrained 'checkpoint' "
+                             "(the predictions ARE the features)")
+        if pf.get("global"):
+            raise NotImplementedError("pred_features['global'] (group G) is not "
+                                      "implemented yet — group P first")
+    use_pf_atom = bool(pf.get("per_atom", False))
+    use_latents = bool(pf.get("latents", True)) if pf else True
+    if pf and not use_pf_atom and use_latents:
+        raise ValueError("pred_features set but per_atom=false and latents=true — "
+                         "that is the plain baseline; drop the key instead")
+    n_pf = 0
+    pf_feats = None
+    if use_pf_atom:
+        from models.head.pred_features import load_or_build_pred_cache
+        _pc = load_or_build_pred_cache(model, ds, collate, device,
+                                       cfg["checkpoint"], cfg["index_path"],
+                                       cache_path=pf.get("cache"))
+        pf_names = list(_pc["per_atom_names"])
+        pf_feats = dict(_pc["feats"])          # cid -> (n_atoms, n_pf) cpu fp32
+        n_pf = len(pf_names)
+        print(f"[ft] pred_features: {n_pf} per-atom channels {pf_names}; "
+              f"latents {'ON' if use_latents else 'OFF'}")
+    head_in_dim = (enc_dim if use_latents else 0) + n_pf
+    if head_in_dim == 0:
+        raise ValueError("pred_features: latents=false with per_atom=false leaves "
+                         "the head no per-atom input")
     # Loader positions MUST be computed in the DATASET's OWN id order: CIFDataV4
     # seed-shuffles its rows at load (build_data_rows), so index-pickle order does
     # not match dataset positions. Mapping split labels through the INDEX order
@@ -321,6 +360,15 @@ def run(cfg, out_dir, device):
         model.set_feature_stats(stats["node"], stats["edge"], stats["poly"])
         print(f"[ft] encoder_args: feature normalizers fit on {len(tr_idx)} train rows")
 
+    # pf channels standardized with TRAIN-fold statistics only (the same no-leakage
+    # contract as phys/compute_feature_stats), then staged to the device once.
+    if use_pf_atom:
+        _tr_pf = torch.cat([pf_feats[ds_ids[i]] for i in split_indices("train")])
+        pf_mean = _tr_pf.mean(0)
+        pf_std = _tr_pf.std(0).clamp(min=1e-8)
+        pf_feats = {c: ((t - pf_mean) / pf_std).to(device) for c, t in pf_feats.items()}
+        print(f"[ft] pred_features: normalizers fit on {_tr_pf.shape[0]} train atoms")
+
     phys_t = torch.as_tensor(phys_np, device=device)
     tc_t = torch.as_tensor(data["tc"], device=device).float()
     # ---- ground-state HURDLE mode (phase 2 of the magnetic negatives) ----
@@ -345,14 +393,29 @@ def run(cfg, out_dir, device):
         rows = [id2row[c] for c in cif_ids]
         return phys_t[rows], rows
 
+    def with_pf(h, cif_ids, n_rows):
+        """Assemble the head's per-atom input: [latents || pf channels] per the
+        pred_features flags. Row order matches: both h and pf come from the same
+        graph read, batch-concatenated in cif_ids order (asserted)."""
+        parts = [] if h is None else [h]
+        if use_pf_atom:
+            pfb = torch.cat([pf_feats[c] for c in cif_ids])
+            assert pfb.shape[0] == n_rows, \
+                f"pf/latent atom-row mismatch ({pfb.shape[0]} vs {n_rows})"
+            parts.append(pfb)
+        return parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
+
     def forward_batch(head, inp, cif_ids, grad_encoder):
         inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in inp)
         seg = inp[6].to(device).long()
-        if grad_encoder:
+        if not use_latents:
+            h = None            # P-only arm: the encoder never runs
+        elif grad_encoder:
             h = model.encode(*inp)
         else:
             with torch.no_grad():
                 h = model.encode(*inp)
+        h = with_pf(h, cif_ids, seg.numel())
         phys_b, rows = batch_static(cif_ids)
         logits, z = head(h, phys_b, seg=seg, n=len(cif_ids))
         return logits, z, rows
@@ -391,7 +454,7 @@ def run(cfg, out_dir, device):
 
     def make_head(seed):
         torch.manual_seed(seed)
-        head = TcHead(enc_dim, phys_t.shape[1], cfg["pca_k"], cfg["hidden"],
+        head = TcHead(head_in_dim, phys_t.shape[1], cfg["pca_k"], cfg["hidden"],
                       cfg["dropout"], pooling="deepsets", pool_dim=pool_dim,
                       n_classes=(int(cfg.get("n_gs_classes", 4)) if use_gs else 2),
                       head_arch=cfg.get("head_arch", "concat"),
@@ -408,13 +471,25 @@ def run(cfg, out_dir, device):
     # the head on cached tensors — removes ~(warmup_epochs x n_seeds) redundant full
     # encoder passes + per-access JSON graph rebuilds. Phase B fine-tunes the encoder,
     # so it keeps encoding live through the loaders.
-    h_cache = {"train": build_embed_cache(model, loaders["train"], device),
-               "val": build_embed_cache(model, loaders["val"], device)}
+    def _zero_width_cache(loader):
+        # P-only arms: no latents, so phase A needs only each structure's atom
+        # count — cache (n_i, 0) placeholders instead of running the encoder.
+        c = {}
+        for inp, _t, _l, cif_ids in loader:
+            seg = inp[6].long()
+            for i, cid in enumerate(cif_ids):
+                c[cid] = torch.empty(int((seg == i).sum()), 0, device=device)
+        return c
+    _mk_cache = (lambda ldr: build_embed_cache(model, ldr, device)) if use_latents \
+        else _zero_width_cache
+    h_cache = {"train": _mk_cache(loaders["train"]),
+               "val": _mk_cache(loaders["val"])}
     train_ids_sc = [ds_ids[i] for i in split_indices("train")]
     val_ids_sc = [ds_ids[i] for i in split_indices("val")]
 
     def _cached_forward(head, split, bids):
         h, seg = cat_cached(h_cache[split], bids, device)
+        h = with_pf(h, bids, seg.numel())
         phys_b, rows = batch_static(bids)
         logits, z = head(h, phys_b, seg=seg, n=len(bids))
         return logits, z, rows
@@ -601,13 +676,14 @@ def run(cfg, out_dir, device):
             epoch_fn=lambda h_, o_, y_: warmup_epoch(h_, o_, y_, _rng),
             val_fn=warmup_val)
 
-        # ---- identity encoder (no-pretrain feature rungs): nothing to unfreeze —
-        # phase A IS the whole training (raw features -> head); phase B is skipped
-        # and control falls through to the shared per-seed test block below.
-        if identity_enc:
-            mode, enc_params, val_z = "identity", [], warm_best
+        # ---- identity encoder (no-pretrain feature rungs) and P-only pf arms
+        # (latents off): nothing to unfreeze — phase A IS the whole training;
+        # phase B is skipped and control falls through to the shared test block.
+        if identity_enc or not use_latents:
+            mode = "identity" if identity_enc else "pf_no_latents"
+            enc_params, val_z = [], warm_best
             if seed == 0:
-                print("[ft] identity encoder: phase B skipped (no encoder params)", flush=True)
+                print(f"[ft] {mode}: phase B skipped (no encoder in the loop)", flush=True)
         else:
             mode, enc_params, val_z = _phase_b(head, y_z, log, seed)
 
@@ -683,6 +759,10 @@ def run(cfg, out_dir, device):
                "unfreeze": mode,
                "encoder_params_unfrozen": int(sum(p.numel() for p in enc_params)),
                "head": family_mae_report(tc_te, head_K, fam_te, grp_te)}
+    if pf:
+        metrics["pred_features"] = {"per_atom": use_pf_atom, "latents": use_latents,
+                                    "n_channels": n_pf,
+                                    "channels": (pf_names if use_pf_atom else [])}
     if use_gs:
         # ground-state classifier report over the LABELED test rows (gs>=0):
         # per-class precision/recall from the ensemble-averaged probabilities.
