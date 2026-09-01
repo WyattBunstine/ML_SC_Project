@@ -1,9 +1,9 @@
 {
-  "name": "gps_tc_probe_38wt_l1k",
+  "name": "gps_tc_probe_38pf_all_l1k",
   "checkpoint": "model_data/2026-08-31/gps_mt_38_w_magmom2/gps_mt_38_w_magmom2_2026-08-31_23-04-44/result_t38_model_best.pth.tar",
   "embed_source": "database/datafiles/MP/SC_pack_doped_v45",
   "index_path": "database/datafiles/MP/SC_MP_V4_doped_v45.pickle",
-  "embed_dir": "database/datafiles/MP/embeddings/probe_38wt_l1k",
+  "embed_dir": "database/datafiles/MP/embeddings/probe_38pf_all_l1k",
   "descriptors": "database/datafiles/MP/descriptors_doped.pickle",
   "metadata_csv": "database/datafiles/MP/3DSC_MP.csv",
   "split_seed": 123,
@@ -30,5 +30,9 @@
   "ensemble_space": "kelvin",
   "tc_weight_decay": 0.0001,
   "tc_lr": 0.003,
-  "ft_unfreeze": "norms"
+  "ft_unfreeze": "norms",
+  "pred_features": {
+    "per_atom": true,
+    "global": true
+  }
 }

@@ -163,6 +163,84 @@ def _sanity_print(feats, glob, n_phonon):
           + "/".join(f"{v:.3f}" for v in q))
 
 
+THZ_TO_K = 47.9924       # h/k_B: 1 THz in Kelvin
+A2F_WMAX_THZ = 60.0      # the fixed spectrum grid both phonon targets share
+DOS_WINDOW_EV = 2.0      # electronic DOS window: E_F ± 1 eV
+
+GLOBAL_NAMES = (["g_bandgap", "g_energy", "g_pressure", "g_vonmises",
+                 "g_mean_absm", "g_staggered", "g_nef", "g_dos_slope"]
+                + [f"g_dosb{i+1}" for i in range(8)]
+                + ["g_lambda", "g_area", "g_logwlog", "g_logw2",
+                   "g_logtc_ad10", "g_logtc_ad13"]
+                + [f"g_a2fb{i+1}" for i in range(16)])
+
+
+def _allen_dynes_tc(lam, wlog_K, w2_K, mu):
+    """Allen-Dynes Tc (K) with the f1/f2 strong-coupling corrections. Returns 0
+    where the exponent denominator is non-positive (lambda too small for this
+    mu* — the physically correct limit, and the numerical guard)."""
+    den = lam - mu * (1.0 + 0.62 * lam)
+    if den <= 0 or lam <= 0 or wlog_K <= 0:
+        return 0.0
+    r = max(w2_K / max(wlog_K, 1e-12), 1.0)
+    f1 = (1.0 + (lam / (2.46 * (1.0 + 3.8 * mu))) ** 1.5) ** (1.0 / 3.0)
+    l2 = 1.82 * (1.0 + 6.3 * mu) * r
+    f2 = 1.0 + ((r - 1.0) * lam ** 2) / (lam ** 2 + l2 ** 2)
+    import math
+    return f1 * f2 * (wlog_K / 1.2) * math.exp(-1.04 * (1.0 + lam) / den)
+
+
+def derive_global_features(cache):
+    """Group G: the ~38-dim global feature vector per structure from the cached
+    raw predictions (see GLOBAL_NAMES). ω_log / ω̄₂ / Tc_AD enter as log1p —
+    their 30x dynamic range would otherwise dominate the z-scored block."""
+    import math
+    glob, mag_raw = cache["global"], cache["magmom_raw"]
+    _probe = next(iter(glob.values()))
+    missing = [k for k in ("bandgap", "stress", "eph_a2f") if k not in _probe]
+    if missing:
+        raise ValueError(f"pred_features['global'] needs checkpoint heads {missing} "
+                         "— use an a2f-bearing checkpoint (rungs 35+)")
+    n_e = _probe["dos"].numel()
+    n_p = _probe["eph_a2f"].numel()
+    de = DOS_WINDOW_EV / n_e
+    w = (torch.arange(n_p, dtype=torch.float64) + 0.5) * (A2F_WMAX_THZ / n_p)
+    dw = A2F_WMAX_THZ / n_p
+    c = n_e // 2
+    out = {}
+    for cid, g in glob.items():
+        s = g["stress"].double()
+        press = float(-s.trace() / 3.0)
+        dev = s - s.trace() / 3.0 * torch.eye(3, dtype=s.dtype)
+        vm = float((1.5 * (dev * dev).sum()).sqrt())
+        m = mag_raw[cid].double()
+        sabs = float(m.abs().sum())
+        stag = float((sabs - abs(float(m.sum()))) / sabs) if sabs > 1e-6 else 0.0
+        dos = g["dos"].double()
+        nef = float(dos[c - 2:c + 2].mean())
+        slope = float((dos[c + 2:c + 6].mean() - dos[c - 6:c - 2].mean()) / (8 * de))
+        dosb = dos.view(8, -1).mean(1)
+        a2f = g["eph_a2f"].double()
+        # bin 0 skipped everywhere: the extraction's ~12 K soft-mode cutoff
+        lam = float(2.0 * (a2f[1:] / w[1:]).sum() * dw)
+        area = float(a2f.sum() * dw)
+        if lam > 1e-6:
+            wlog_K = math.exp(float((2.0 / lam) * (w[1:].log() * a2f[1:] / w[1:]).sum() * dw)) * THZ_TO_K
+            w2_K = math.sqrt(max(float((2.0 / lam) * (w[1:] * a2f[1:]).sum() * dw), 0.0)) * THZ_TO_K
+        else:
+            wlog_K = w2_K = 0.0
+        a2fb = a2f.view(16, -1).mean(1)
+        vec = ([float(g["bandgap"]), float(g["energy"]), press, vm,
+                float(m.abs().mean()), stag, nef, slope]
+               + [float(x) for x in dosb]
+               + [lam, area, math.log1p(wlog_K), math.log1p(w2_K),
+                  math.log1p(_allen_dynes_tc(lam, wlog_K, w2_K, 0.10)),
+                  math.log1p(_allen_dynes_tc(lam, wlog_K, w2_K, 0.13))]
+               + [float(x) for x in a2fb])
+        out[cid] = torch.tensor(vec, dtype=torch.float32)
+    return list(GLOBAL_NAMES), out
+
+
 def load_or_build_pred_cache(model, ds, collate, device, checkpoint_path, index_path,
                              cache_path=None):
     """Load the cache when (version, checkpoint, index) match; otherwise build+save."""
