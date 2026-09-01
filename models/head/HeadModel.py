@@ -212,6 +212,13 @@ class TcHead(nn.Module):
         elif pooling == "attention":
             self.pool = AttentionPool(enc_dim, pool_dim)
             pooled_dim = self.pool.out_dim
+        elif pooling == "none":
+            # No per-atom branch at all (the pf G-only arms): the trunk sees the
+            # standardized descriptor block alone. Only meaningful with "concat" —
+            # struct_only/resid have nothing to compute without a pooled input.
+            if head_arch != "concat":
+                raise ValueError('pooling "none" requires head_arch "concat"')
+            pooled_dim = 0
         else:
             raise ValueError(f"unknown pooling {pooling!r}")
         self.phys_std = Standardizer(phys_dim)
@@ -257,7 +264,10 @@ class TcHead(nn.Module):
 
     def _pooled(self, x, seg=None, n=None):
         """meanmax: x is the offline-pooled (n,2D) vector -> PCA. learned pools:
-        x is the per-atom (A,D) embedding with segment ids seg into n structures."""
+        x is the per-atom (A,D) embedding with segment ids seg into n structures.
+        "none": no per-atom branch — x is ignored entirely (may be None)."""
+        if self.pooling == "none":
+            return None
         if self.pooling == "meanmax":
             return self.pca(x)
         return self.pool(x, seg, n)
@@ -265,7 +275,8 @@ class TcHead(nn.Module):
     def features(self, x, phys, seg=None, n=None) -> torch.Tensor:
         pooled = self._pooled(x, seg, n)
         if self.head_arch == "concat":
-            pooled = torch.cat([pooled, self.phys_std(phys)], dim=1)
+            ph = self.phys_std(phys)
+            pooled = ph if pooled is None else torch.cat([pooled, ph], dim=1)
         return self.trunk(self.norm(pooled))          # struct_only/resid: structure alone
 
     def forward(self, x, phys, seg=None, n=None):

@@ -291,30 +291,41 @@ def run(cfg, out_dir, device):
         if cfg.get("checkpoint") is None:
             raise ValueError("pred_features requires a pretrained 'checkpoint' "
                              "(the predictions ARE the features)")
-        if pf.get("global"):
-            raise NotImplementedError("pred_features['global'] (group G) is not "
-                                      "implemented yet — group P first")
     use_pf_atom = bool(pf.get("per_atom", False))
+    use_pf_glob = bool(pf.get("global", False))
     use_latents = bool(pf.get("latents", True)) if pf else True
-    if pf and not use_pf_atom and use_latents:
-        raise ValueError("pred_features set but per_atom=false and latents=true — "
-                         "that is the plain baseline; drop the key instead")
+    if pf and not use_pf_atom and not use_pf_glob and use_latents:
+        raise ValueError("pred_features set but per_atom/global both false with "
+                         "latents=true — that is the plain baseline; drop the key")
     n_pf = 0
     pf_feats = None
-    if use_pf_atom:
-        from models.head.pred_features import load_or_build_pred_cache
+    if use_pf_atom or use_pf_glob:
+        from models.head.pred_features import (load_or_build_pred_cache,
+                                               derive_global_features)
         _pc = load_or_build_pred_cache(model, ds, collate, device,
                                        cfg["checkpoint"], cfg["index_path"],
                                        cache_path=pf.get("cache"))
+    if use_pf_atom:
         pf_names = list(_pc["per_atom_names"])
         pf_feats = dict(_pc["feats"])          # cid -> (n_atoms, n_pf) cpu fp32
         n_pf = len(pf_names)
         print(f"[ft] pred_features: {n_pf} per-atom channels {pf_names}; "
               f"latents {'ON' if use_latents else 'OFF'}")
+    if use_pf_glob:
+        # Group G rides the descriptor block: appended to phys BEFORE phys_t is
+        # built, so it flows through the head's train-fit phys standardizer and
+        # every head_arch unchanged (log1p transforms already applied upstream).
+        g_names, g_map = derive_global_features(_pc)
+        _missing_g = [c for c in ids if c not in g_map]
+        assert not _missing_g, f"pred cache missing {len(_missing_g)} ids (stale?)"
+        phys_np = np.concatenate(
+            [phys_np, np.stack([g_map[c].numpy() for c in data["ids"]])], axis=1)
+        print(f"[ft] pred_features: {len(g_names)} global features appended to "
+              f"phys ({phys_np.shape[1]} total)")
     head_in_dim = (enc_dim if use_latents else 0) + n_pf
-    if head_in_dim == 0:
+    if head_in_dim == 0 and not use_pf_glob:
         raise ValueError("pred_features: latents=false with per_atom=false leaves "
-                         "the head no per-atom input")
+                         "the head no input (enable global for the G-only arm)")
     # Loader positions MUST be computed in the DATASET's OWN id order: CIFDataV4
     # seed-shuffles its rows at load (build_data_rows), so index-pickle order does
     # not match dataset positions. Mapping split labels through the INDEX order
@@ -403,6 +414,8 @@ def run(cfg, out_dir, device):
             assert pfb.shape[0] == n_rows, \
                 f"pf/latent atom-row mismatch ({pfb.shape[0]} vs {n_rows})"
             parts.append(pfb)
+        if not parts:
+            return None                       # G-only arm: head pooling "none"
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
 
     def forward_batch(head, inp, cif_ids, grad_encoder):
@@ -454,8 +467,12 @@ def run(cfg, out_dir, device):
 
     def make_head(seed):
         torch.manual_seed(seed)
+        # head_in_dim 0 (G-only arm: no latents, no per-atom pf) -> pooling "none":
+        # the trunk sees the descriptor block (incl. appended G features) alone.
         head = TcHead(head_in_dim, phys_t.shape[1], cfg["pca_k"], cfg["hidden"],
-                      cfg["dropout"], pooling="deepsets", pool_dim=pool_dim,
+                      cfg["dropout"],
+                      pooling=("none" if head_in_dim == 0 else "deepsets"),
+                      pool_dim=pool_dim,
                       n_classes=(int(cfg.get("n_gs_classes", 4)) if use_gs else 2),
                       head_arch=cfg.get("head_arch", "concat"),
                       pool_rank=cfg.get("pool_rank"),
@@ -760,9 +777,10 @@ def run(cfg, out_dir, device):
                "encoder_params_unfrozen": int(sum(p.numel() for p in enc_params)),
                "head": family_mae_report(tc_te, head_K, fam_te, grp_te)}
     if pf:
-        metrics["pred_features"] = {"per_atom": use_pf_atom, "latents": use_latents,
-                                    "n_channels": n_pf,
-                                    "channels": (pf_names if use_pf_atom else [])}
+        metrics["pred_features"] = {"per_atom": use_pf_atom, "global": use_pf_glob,
+                                    "latents": use_latents, "n_channels": n_pf,
+                                    "channels": (pf_names if use_pf_atom else []),
+                                    "global_features": (g_names if use_pf_glob else [])}
     if use_gs:
         # ground-state classifier report over the LABELED test rows (gs>=0):
         # per-class precision/recall from the ensemble-averaged probabilities.
