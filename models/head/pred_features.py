@@ -54,10 +54,10 @@ def default_cache_path(checkpoint_path, index_path):
 
 
 @torch.no_grad()
-def _derive_per_atom(forces, mag, site_e, pa_dos, cart, lattice, seg, nbr_idx, jimage):
-    """The 11 group-P channels (N, 11) from raw predictions + batch geometry."""
-    d_img = torch.einsum("nmk,nkc->nmc", jimage.to(cart.dtype), lattice[seg])
-    d = cart[nbr_idx] + d_img - cart.unsqueeze(1)                    # (N, M, 3)
+def _derive_per_atom(forces, mag, site_e, pa_dos, d, lattice, seg, nbr_idx):
+    """The 11 group-P channels (N, 11) from raw predictions + batch geometry.
+    d (N, M, 3) are the model's OWN PBC bond vectors (model._bond_vectors — the
+    single implementation of the padding/jimage convention)."""
     dn = d.norm(dim=-1)                                              # (N, M)
     real = dn > 1e-6                                                 # pad slots: |d| == 0
     cnt = real.sum(1).clamp(min=1)
@@ -93,6 +93,11 @@ def build_pred_cache(model, ds, collate, device, batch_size=32, num_workers=4):
                  (lambda key: lambda _m, _i, o: grabbed.__setitem__(key, o))(k))
              for k in ("energy", "dos")]
     try:
+        # the training loop's leaf construction (models/common/train.py) — the
+        # collate slots [6..9] (seg, n_crystals, frac, lattice) are the same in
+        # both layouts, and a hand copy here would drift from what the
+        # checkpoint was trained/validated with
+        from train import _build_cart_strain
         for inp, _t, _l, cids in loader:
             # collate layout (collate_pool + geom): [0..5] graph tensors, [6] seg,
             # [7] n_crystals (int), [8] frac, [9] lattice, [10] nbr_jimage —
@@ -100,10 +105,8 @@ def build_pred_cache(model, ds, collate, device, batch_size=32, num_workers=4):
             inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in inp)
             seg = inp[6].long()
             B = int(inp[7])
-            frac, lattice, jimage = inp[8], inp[9], inp[10]
-            cart = torch.einsum("ni,nij->nj", frac, lattice[seg]).detach().requires_grad_(True)
-            strain = torch.zeros(B, 3, 3, device=cart.device, dtype=cart.dtype,
-                                 requires_grad=True)
+            lattice, jimage = inp[9], inp[10]
+            cart, strain = _build_cart_strain(inp)
             grabbed.clear()
             with torch.enable_grad():   # forces need a graph even in eval
                 out = model(*inp, cart=cart, strain=strain)
@@ -111,8 +114,9 @@ def build_pred_cache(model, ds, collate, device, batch_size=32, num_workers=4):
             mag = out["magmom"].detach().squeeze(-1)
             site_e = grabbed["energy"].detach().squeeze(-1)
             pa_dos = grabbed["dos"].detach()
-            pa = _derive_per_atom(forces, mag, site_e, pa_dos, cart.detach(),
-                                  lattice, seg, inp[2], jimage).cpu()
+            d = model._bond_vectors(cart.detach(), lattice, inp[2], jimage, seg)
+            pa = _derive_per_atom(forces, mag, site_e, pa_dos, d,
+                                  lattice, seg, inp[2]).cpu()
             # translation-invariance check: conservative forces sum to ~0 per cell
             fs = torch.zeros(B, 3, device=forces.device).index_add_(0, seg, forces)
             fs = fs.norm(dim=-1)
@@ -152,20 +156,40 @@ def _sanity_print(feats, glob, n_phonon):
               f"p5 {col.quantile(0.05):+.3f}  p95 {col.quantile(0.95):+.3f}")
     if n_phonon is None:
         return
-    # lambda = 2 * sum a2f(w)/w dw on the fixed 0-60 THz grid (skip bin 0 — the
-    # soft-mode smearing tail the 12 K cutoff excludes in the target build)
-    w = (torch.arange(n_phonon, dtype=torch.float32) + 0.5) * (60.0 / n_phonon)
-    dw = 60.0 / n_phonon
-    lam = torch.tensor([float(2.0 * (g["eph_a2f"][1:] / w[1:]).sum() * dw)
-                        for g in glob.values()])
+    lam = torch.tensor([_a2f_moments(g["eph_a2f"])[0] for g in glob.values()])
     q = [float(lam.quantile(x)) for x in (0.05, 0.25, 0.5, 0.75, 0.95)]
     print(f"[pf]   a2f-derived lambda quartiles p5/p25/p50/p75/p95: "
           + "/".join(f"{v:.3f}" for v in q))
 
 
-THZ_TO_K = 47.9924       # h/k_B: 1 THz in Kelvin
-A2F_WMAX_THZ = 60.0      # the fixed spectrum grid both phonon targets share
+# h/k_B (1 THz in K), the exact expression scripts/build_phonon_targets.py uses —
+# duplicated constants drifted once already (the 47.9924 truncation this replaced)
+THZ_TO_K = (13.605693122994 / 8.617333262e-5) / (13605.693122994 / 4.135667696)
 DOS_WINDOW_EV = 2.0      # electronic DOS window: E_F ± 1 eV
+
+
+def _a2f_moments(a2f):
+    """Allen-Dynes moments (lam, wlog_K, w2_K, area) from a binned spectrum on
+    the canonical phonon grid (data.PHONON_N_BINS x PHONON_W_MAX_THZ — imported,
+    not re-declared: data.py enforces that grid on the baked graphs). Bin 0 is
+    skipped everywhere: on this grid it spans 0-11.2 K, the binned analog of the
+    extraction's verified 12 K soft-mode cutoff (build_phonon_targets.CUT_K).
+    The ONE lambda implementation here — the sanity gate and the G features must
+    integrate the same quantity or the gate can't catch a broken feature."""
+    import math
+    from data import PHONON_W_MAX_THZ
+    n = a2f.numel()
+    a2f = a2f.double()
+    w = (torch.arange(n, dtype=torch.float64) + 0.5) * (PHONON_W_MAX_THZ / n)
+    dw = PHONON_W_MAX_THZ / n
+    lam = float(2.0 * (a2f[1:] / w[1:]).sum() * dw)
+    area = float(a2f.sum() * dw)
+    if lam > 1e-6:
+        wlog_K = math.exp(float((2.0 / lam) * (w[1:].log() * a2f[1:] / w[1:]).sum() * dw)) * THZ_TO_K
+        w2_K = math.sqrt(max(float((2.0 / lam) * (w[1:] * a2f[1:]).sum() * dw), 0.0)) * THZ_TO_K
+    else:
+        wlog_K = w2_K = 0.0
+    return lam, wlog_K, w2_K, area
 
 GLOBAL_NAMES = (["g_bandgap", "g_energy", "g_pressure", "g_vonmises",
                  "g_mean_absm", "g_staggered", "g_nef", "g_dos_slope"]
@@ -202,10 +226,7 @@ def derive_global_features(cache):
         raise ValueError(f"pred_features['global'] needs checkpoint heads {missing} "
                          "— use an a2f-bearing checkpoint (rungs 35+)")
     n_e = _probe["dos"].numel()
-    n_p = _probe["eph_a2f"].numel()
     de = DOS_WINDOW_EV / n_e
-    w = (torch.arange(n_p, dtype=torch.float64) + 0.5) * (A2F_WMAX_THZ / n_p)
-    dw = A2F_WMAX_THZ / n_p
     c = n_e // 2
     out = {}
     for cid, g in glob.items():
@@ -220,16 +241,8 @@ def derive_global_features(cache):
         nef = float(dos[c - 2:c + 2].mean())
         slope = float((dos[c + 2:c + 6].mean() - dos[c - 6:c - 2].mean()) / (8 * de))
         dosb = dos.view(8, -1).mean(1)
-        a2f = g["eph_a2f"].double()
-        # bin 0 skipped everywhere: the extraction's ~12 K soft-mode cutoff
-        lam = float(2.0 * (a2f[1:] / w[1:]).sum() * dw)
-        area = float(a2f.sum() * dw)
-        if lam > 1e-6:
-            wlog_K = math.exp(float((2.0 / lam) * (w[1:].log() * a2f[1:] / w[1:]).sum() * dw)) * THZ_TO_K
-            w2_K = math.sqrt(max(float((2.0 / lam) * (w[1:] * a2f[1:]).sum() * dw), 0.0)) * THZ_TO_K
-        else:
-            wlog_K = w2_K = 0.0
-        a2fb = a2f.view(16, -1).mean(1)
+        lam, wlog_K, w2_K, area = _a2f_moments(g["eph_a2f"])
+        a2fb = g["eph_a2f"].double().view(16, -1).mean(1)
         vec = ([float(g["bandgap"]), float(g["energy"]), press, vm,
                 float(m.abs().mean()), stag, nef, slope]
                + [float(x) for x in dosb]
