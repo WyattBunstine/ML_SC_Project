@@ -287,7 +287,8 @@ run_head() {
     local ref_files f
     ref_files="$(python3 - "$@" <<'PYEOF'
 import json, sys
-keys = ("index_path", "descriptors", "metadata_csv", "holdout_ids_csv")
+keys = ("index_path", "descriptors", "metadata_csv", "holdout_ids_csv",
+        "exclude_ids_csv", "train_ids_csv")
 seen = []
 for p in sys.argv[1:]:
     cfg = json.load(open(p))
