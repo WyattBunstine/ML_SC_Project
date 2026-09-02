@@ -104,6 +104,51 @@ if "nemad_iqr" in idx.columns:
     flag(idx.nemad_iqr.fillna(0) > 10, "E_nemad_iqr",
          "NEMAD source IQR >10K — sources disagree by more than a dome width")
 
+# F: NEAR-duplicate conflicts (2026-09-02, the fam_yba Sr-quartet class): same
+# element set, compositions within eps in fractional space, Tc apart by more
+# than a dome height — two reports of the same doping series point that cannot
+# both be right. D only catches EXACT duplicates; this catches the neighbors.
+from pymatgen.core import Composition as _C
+
+def _fvec(f):
+    try:
+        d = _C(f).fractional_composition.get_el_amt_dict()
+        return frozenset(d), d
+    except Exception:
+        return None, None
+_near = pd.Series(False, index=idx.index)
+_fv = idx.formula.map(_fvec)
+# Same MP PARENT required: the index is structure-resolved, so equal
+# compositions on different parents are polymorphs — legitimately different Tc
+# (an MgB2-composition pair on two frames was the false positive). CAVEAT even
+# within a parent: steep dome edges and the LBCO 1/8 stripe anomaly are REAL
+# >30K swings over <1% composition — F is REVIEW tier, never auto-exclude.
+_parent = idx.id.map(lambda i: (str(i).split("-MP-")[1].split("-synth")[0]
+                                if "-MP-" in str(i) else str(i)))
+for (_els, _par), _grp in idx.groupby([_fv.map(lambda t: t[0]), _parent]):
+    if _els is None or len(_grp) < 2:
+        continue
+    rows_ = list(_grp.index)
+    for i_ in range(len(rows_)):
+        for j_ in range(i_ + 1, len(rows_)):
+            a, b = _fv[rows_[i_]][1], _fv[rows_[j_]][1]
+            dist = sum(abs(a[e] - b[e]) for e in _els)
+            if dist < 0.01 and abs(idx.tc[rows_[i_]] - idx.tc[rows_[j_]]) > 30:
+                _near[rows_[i_]] = _near[rows_[j_]] = True
+flag(_near, "F_near_duplicate_conflict",
+     "composition within 1% of a row whose Tc differs by >30K — irreconcilable twin reports")
+
+# G: optimally-doped frame labeled non-SC without a pair-breaker (the fam_yba
+# Eu-O7 class): Cu ox in the dome-apex window, Tc == 0, and no known
+# suppressor cation present. REVIEW tier, not auto-exclude — legitimate
+# spin-glass/competing-order zeros exist; but a plain RE-123 at O7 with 0 K is
+# almost always an oxygen-deficient sample reported at nominal stoichiometry.
+PAIR_BREAKERS = ("Pr", "Ce", "Zn", "Ni", "Fe", "Co", "Mn", "Ga", "Al")
+_no_pb = ~idx.formula.str.contains("|".join(PAIR_BREAKERS))
+flag(is_cu_oxide & idx.cu_ox.between(2.10, 2.35) & (idx.tc == 0) & _no_pb,
+     "G_optimal_doping_zero",
+     "Cu ox 2.10-2.35 (dome apex) with Tc=0 and no pair-breaker — nominal-O artifact")
+
 out = pd.DataFrame(sus)
 os.makedirs("docs/data_curation", exist_ok=True)
 out.to_csv("docs/data_curation/doping_label_suspects.csv", index=False)
