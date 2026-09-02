@@ -375,6 +375,10 @@ def _edge_to_fea(edge: dict, center_is_source: bool = True) -> np.ndarray:
 # NaN-masked when absent — same flow as the electronic "dos" target.
 PHONON_N_BINS = 256
 PHONON_W_MAX_THZ = 60.0
+# site-projected (per-element) phonon DOS grid — coarser than the global
+# spectrum on purpose: per-atom shape needs less resolution and the bins
+# become head-feature dims downstream (rung 41 / pf-v2)
+PHONON_SITE_BINS = 64
 
 
 def bin_spectrum(w_thz, y, n_bins=PHONON_N_BINS, w_max=PHONON_W_MAX_THZ):
