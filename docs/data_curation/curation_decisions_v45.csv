@@ -1,0 +1,198 @@
+id,decision,checks,reason
+B0.67Mg0.33-MP-mp-763-synth_doped.cif,exclude,F_near_duplicate_conflict,MgB2 stoichiometry labeled 6K against canonical 38-39K twins — wrong-phase label
+B0.69Mg0.31-MP-mp-763-synth_doped.cif,exclude,F_near_duplicate_conflict,MgB2 stoichiometry labeled 6K against canonical 38-39K twins — wrong-phase label
+B2Mg0.9-MP-mp-763-synth_doped.cif,keep,F_near_duplicate_conflict,canonical MgB2 38K — the good twins
+B2Mg0.98-MP-mp-763-synth_doped.cif,keep,F_near_duplicate_conflict,canonical MgB2 38K — the good twins
+Ba0.074Cu1La1.926O4-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict,"LBCO 0K contradicted by both neighbors within dx<=0.005 (0.066->22.6, 0.075->24)"
+Ba0.094Cu1La1.906O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,LBCO near-1/8 scatter — partial-suppression reports are real
+Ba0.105Cu1La1.895O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,LBCO 1/8 stripe anomaly — real suppression valley
+Ba0.135Cu1La1.865O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,LBCO 1/8 stripe anomaly — real suppression valley
+Ba0.158Cu1La1.842O4-MP-mp-1077929-synth_doped.cif,exclude,G_optimal_doping_zero,LBCO 0K at doping where interleaved neighbors are 21-28K — irreconcilable twin
+Ba0.174Cu1La1.826O4-MP-mp-1077929-synth_doped.cif,exclude,G_optimal_doping_zero,LBCO 0K at doping where interleaved neighbors are 21-28K — irreconcilable twin
+Ba0.1Cu1F2Sr1.9O2-MP-mp-1025280-synth_doped.cif,exclude,A_undoped_insulator_sc,Sr2CuO2F2+x class: nominal comp charge-balances undoped; Tc belongs to excess-F sample
+Ba0.25Cu1F2Sr1.75O2-MP-mp-1025280-synth_doped.cif,exclude,A_undoped_insulator_sc,Sr2CuO2F2+x class: nominal comp charge-balances undoped; Tc belongs to excess-F sample
+Ba0.25Cu1La1.75O4-MP-mp-1077929-synth_doped.cif,exclude,G_optimal_doping_zero,LBCO 0K at doping where interleaved neighbors are 21-28K — irreconcilable twin
+Ba0.275Cu1La1.725O4-MP-mp-1077929-synth_doped.cif,exclude,G_optimal_doping_zero,LBCO 0K at doping where interleaved neighbors are 21-28K — irreconcilable twin
+Ba1.72Cu4La0.28Y1O8-MP-mp-6790-synth_doped.cif,keep,F_near_duplicate_conflict,the kept finite twins / monotone member
+Ba1.75Cu4Sr0.25Y1O8-MP-mp-6790-synth_doped.cif,exclude,F_near_duplicate_conflict+G_optimal_doping_zero,124 Sr twin conflict: 0K between 76.0/77.7K twins at dx=0.01 — keep the finite twins
+Ba1.76Cu4Sr0.24Y1O8-MP-mp-6790-synth_doped.cif,keep,F_near_duplicate_conflict,the kept finite twins / monotone member
+Ba1.78Cu4Sr0.22Y1O8-MP-mp-6790-synth_doped.cif,exclude,F_near_duplicate_conflict+G_optimal_doping_zero,124 Sr twin conflict: 0K between 76.0/77.7K twins at dx=0.01 — keep the finite twins
+Ba1.7Cu4La0.3Y1O8-MP-mp-6790-synth_doped.cif,exclude,F_near_duplicate_conflict,124 La series monotone (74->18.9 by x=0.28); 52.6K at x=0.30 breaks it
+Ba1.8Cu4Sr0.2Y1O8-MP-mp-6790-synth_doped.cif,keep,F_near_duplicate_conflict,the kept finite twins / monotone member
+Ba1.9Cu3La0.1Y1O8-MP-mp-1214613-synth_doped.cif,exclude,B_implausible_cu_ox,O8 on a Cu3 123 frame (max O7) — oxygen typo; charge balance Cu 2.97
+Ba2.02Cu1.01Tl1.97O6.16-MP-mp-6027-synth_doped.cif,keep,F_near_duplicate_conflict,consistent with branch-1 (dead by d~0.16)
+Ba2Ca0.1Cu3Y0.9O7-MP-mp-20674-synth_doped.cif,keep,C_overdoped_dome_violation,Ca-overdoped (70-85K) / Cd-on-Ba isovalent (90K+) 123 — real; naive balance wrong
+Ba2Ca0.2Cu3Y0.8O7-MP-mp-20674-synth_doped.cif,keep,C_overdoped_dome_violation,Ca-overdoped (70-85K) / Cd-on-Ba isovalent (90K+) 123 — real; naive balance wrong
+Ba2Ca1Cu2Hg1O6.1-MP-mp-6879-synth_doped.cif,keep,F_near_duplicate_conflict,Hg-1212 steep real dome rise 92->127K
+Ba2Ca1Cu2Hg1O6.21-MP-mp-6879-synth_doped.cif,keep,F_near_duplicate_conflict,Hg-1212 steep real dome rise 92->127K
+Ba2Ca1Cu2Hg1O6.22-MP-mp-6879-synth_doped.cif,keep,F_near_duplicate_conflict,Hg-1212 steep real dome rise 92->127K
+Ba2Cd0.1Cu3Y0.9O7-MP-mp-20674-synth_doped.cif,keep,C_overdoped_dome_violation,Ca-overdoped (70-85K) / Cd-on-Ba isovalent (90K+) 123 — real; naive balance wrong
+Ba2Cd0.2Cu3Y0.8O7-MP-mp-20674-synth_doped.cif,keep,C_overdoped_dome_violation,Ca-overdoped (70-85K) / Cd-on-Ba isovalent (90K+) 123 — real; naive balance wrong
+Ba2Cd0.3Cu3Y0.7O7-MP-mp-20674-synth_doped.cif,keep,C_overdoped_dome_violation,Ca-overdoped (70-85K) / Cd-on-Ba isovalent (90K+) 123 — real; naive balance wrong
+Ba2Cu1Hg1O4.01-MP-mp-6562-synth_doped.cif,exclude,A_undoped_insulator_sc+F_near_duplicate_conflict,Hg-1201 64-72K at d=0.01-0.02 — onset is d~0.045 on this series' scale; d-scale conflict
+Ba2Cu1Hg1O4.02-MP-mp-6562-synth_doped.cif,exclude,F_near_duplicate_conflict,Hg-1201 64-72K at d=0.01-0.02 — onset is d~0.045 on this series' scale; d-scale conflict
+Ba2Cu1Hg1O4.025-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.032-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.033-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.04-MP-mp-6562-synth_doped.cif,exclude,F_near_duplicate_conflict,Hg-1201 interior 0K inside finite-Tc plateau
+Ba2Cu1Hg1O4.045-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.047-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.049-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.05-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.052-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.055-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.058-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.06-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.066-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.081-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.085-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.096-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.097-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.101-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.103-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.105-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.108-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.117-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.14-MP-mp-6562-synth_doped.cif,exclude,F_near_duplicate_conflict+G_optimal_doping_zero,Hg-1201 interior 0K inside finite-Tc plateau
+Ba2Cu1Hg1O4.15-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.16-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.162-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.17-MP-mp-6562-synth_doped.cif,keep,F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.18-MP-mp-6562-synth_doped.cif,keep,C_overdoped_dome_violation+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.2-MP-mp-6562-synth_doped.cif,keep,C_overdoped_dome_violation+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.21-MP-mp-6562-synth_doped.cif,keep,C_overdoped_dome_violation+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.22-MP-mp-6562-synth_doped.cif,keep,C_overdoped_dome_violation+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.28-MP-mp-6562-synth_doped.cif,keep,C_overdoped_dome_violation+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.3-MP-mp-6562-synth_doped.cif,keep,C_overdoped_dome_violation+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.31-MP-mp-6562-synth_doped.cif,keep,B_implausible_cu_ox+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.32-MP-mp-6562-synth_doped.cif,exclude,F_near_duplicate_conflict,Hg-1201 interior 0K inside finite-Tc plateau
+Ba2Cu1Hg1O4.34-MP-mp-6562-synth_doped.cif,keep,B_implausible_cu_ox+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.37-MP-mp-6562-synth_doped.cif,keep,B_implausible_cu_ox+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Hg1O4.39-MP-mp-6562-synth_doped.cif,keep,B_implausible_cu_ox+F_near_duplicate_conflict,"Hg-1201 plateau/overdoped tail — consistent rise-fall, naive-balance flags wrong"
+Ba2Cu1Tl2O6.01-MP-mp-6027-synth_doped.cif,keep,F_near_duplicate_conflict,Tl-2201 branch-1 overdoping collapse 81->0K — the canonical series
+Ba2Cu1Tl2O6.03-MP-mp-6027-synth_doped.cif,keep,F_near_duplicate_conflict,Tl-2201 branch-1 overdoping collapse 81->0K — the canonical series
+Ba2Cu1Tl2O6.05-MP-mp-6027-synth_doped.cif,keep,F_near_duplicate_conflict,Tl-2201 branch-1 overdoping collapse 81->0K — the canonical series
+Ba2Cu1Tl2O6.056-MP-mp-6027-synth_doped.cif,keep,F_near_duplicate_conflict,Tl-2201 branch-1 overdoping collapse 81->0K — the canonical series
+Ba2Cu1Tl2O6.08-MP-mp-6027-synth_doped.cif,keep,F_near_duplicate_conflict,Tl-2201 branch-1 overdoping collapse 81->0K — the canonical series
+Ba2Cu1Tl2O6.12-MP-mp-6027-synth_doped.cif,exclude,F_near_duplicate_conflict,Tl-2201 duplicate overdoping branch offset +0.11 in d — second lab's d scale; keep branch 1
+Ba2Cu1Tl2O6.16-MP-mp-6027-synth_doped.cif,exclude,F_near_duplicate_conflict,Tl-2201 duplicate overdoping branch offset +0.11 in d — second lab's d scale; keep branch 1
+Ba2Cu1Tl2O6.164-MP-mp-6027-synth_doped.cif,keep,F_near_duplicate_conflict,Tl-2201 branch-1 overdoping collapse 81->0K — the canonical series
+Ba2Cu1Tl2O6.19-MP-mp-6027-synth_doped.cif,exclude,F_near_duplicate_conflict,Tl-2201 duplicate overdoping branch offset +0.11 in d — second lab's d scale; keep branch 1
+Ba2Cu1Tl2O6.23-MP-mp-6027-synth_doped.cif,keep,F_near_duplicate_conflict,Tl-2201 branch-1 overdoping collapse 81->0K — the canonical series
+Ba2Cu3Eu0.2Y0.8O7-MP-mp-20674-synth_doped.cif,exclude,G_optimal_doping_zero,RE-123 O7 at 0K with no pair-breaker — O-deficient sample at nominal stoichiometry
+Ba2Cu3Eu1O6.5-MP-mp-1228334.cif,exclude,A_undoped_insulator_sc,"Eu-123 at O6.5 (ortho-II, ceiling ~60K) claiming 92K — full-O7 label on O6.5 entry"
+Ba2Cu3Pr0.15Y0.85O6.5-MP-mp-20897-synth_doped.cif,keep,A_undoped_insulator_sc,ortho-II O6.5 plateau x Pr suppression — chain doping invisible to balance
+Ba2Cu3Y0.7Zn0.3O7-MP-mp-20674-synth_doped.cif,keep,C_overdoped_dome_violation,Zn pair-breaking series — real suppression
+Ba2Cu3Y0.8Zn0.2O7-MP-mp-20674-synth_doped.cif,keep,C_overdoped_dome_violation,Zn pair-breaking series — real suppression
+Ba2Cu3Y0.9Zn0.1O7-MP-mp-20674-synth_doped.cif,keep,C_overdoped_dome_violation,Zn pair-breaking series — real suppression
+Ba2Cu4Lu0.24Y0.76O8-MP-mp-6790-synth_doped.cif,exclude,G_optimal_doping_zero,76% Y-124 frame at 0K — Y-124 superconducts ~80K; Lu label artifact
+Bi2Ca1Cu2I0.95Sr2O8.28-MP-mp-1209124-synth_doped.cif,exclude,F_near_duplicate_conflict,0K contradicts every family member (49-79K); I/O both differ from twin — bad row
+Bi2Ca1Cu2I0.98Sr2O8.21-MP-mp-1209124-synth_doped.cif,keep,F_near_duplicate_conflict,flag pairs it with a suspect neighbor / boundary check — no evidence against this row itself
+Bi2Ca1Cu2Sr2O8.01-MP-mp-1218930-synth_doped.cif,exclude,F_near_duplicate_conflict,Bi-2212 0K at d where as-grown 2212 is 85-90K; interleaved with finite twins
+Bi2Ca1Cu2Sr2O8.051-MP-mp-1218930-synth_doped.cif,exclude,F_near_duplicate_conflict,Bi-2212 0K at d where as-grown 2212 is 85-90K; interleaved with finite twins
+Bi2Ca1Cu2Sr2O8.077-MP-mp-1218930-synth_doped.cif,exclude,F_near_duplicate_conflict,Bi-2212 0K at d where as-grown 2212 is 85-90K; interleaved with finite twins
+Bi2Ca1Cu2Sr2O8.1-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.11-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.118-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.12-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.14-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.16-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.17-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.19-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.194-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.195-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.196-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.197-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.198-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.199-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.21-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.212-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.2135-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.214-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.216-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.217-MP-mp-1218930-synth_doped.cif,exclude,F_near_duplicate_conflict,Bi-2212 0K at d where as-grown 2212 is 85-90K; interleaved with finite twins
+Bi2Ca1Cu2Sr2O8.218-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.224-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.231-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.234-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.245-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.248-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.255-MP-mp-1218930-synth_doped.cif,exclude,F_near_duplicate_conflict,Bi-2212 0K at d where as-grown 2212 is 85-90K; interleaved with finite twins
+Bi2Ca1Cu2Sr2O8.256-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.27-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.272-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.288-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.291-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.293-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.3-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.329-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.373-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi2Ca1Cu2Sr2O8.428-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"Bi-2212 O8+d plateau/tail — +-10K sample scatter, consistent branch"
+Bi4Ca2Cu4Sr4O16.25-MP-mp-1218930-synth_doped.cif,keep,F_near_duplicate_conflict,"= O8.125 per f.u., 82.4K consistent"
+Br2Ca1.875Cu1Na0.125O2-MP-mp-545481-synth_doped.cif,keep,G_optimal_doping_zero,oxybromide Na onset edge — 0K below x~0.15 plausible
+Ca0.01Cu1Y0.99O2.58-MP-mvc-11697-synth_doped.cif,keep,G_optimal_doping_zero,"Y-Cu-O — no known SC phase, zeros real"
+Ca0.01Cu1Y0.99O2.65-MP-mvc-11697-synth_doped.cif,keep,G_optimal_doping_zero,"Y-Cu-O — no known SC phase, zeros real"
+Ca0.17Cu1Dy1.83O4-MP-mp-752673-synth_doped.cif,keep,G_optimal_doping_zero,hole-doping a T' frame — non-SC real
+Ca1.8Cl2Cu1O2-MP-mp-23143-synth_doped.cif,keep,C_overdoped_dome_violation,Ca-vacancy oxychloride — internally monotone 15->30->41K series
+Ce0.06Cu1La1.94O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,flag pairs it with a suspect neighbor / boundary check — no evidence against this row itself
+Ce0.091Cu1La1.909O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,flag pairs it with a suspect neighbor / boundary check — no evidence against this row itself
+Cl1Cu2Sr3O5-MP-mp-1147678-synth_doped.cif,keep,C_overdoped_dome_violation,apical-Cl bilayer oxychloride ~70K real; O/Cl balance unreliable
+Cu0.8La2Li0.2O4-MP-mp-1077929-synth_doped.cif,keep,G_optimal_doping_zero,"Li/Zn substitute ON Cu — in-plane pair-breaking, zeros real"
+Cu0.9La2Li0.1O4-MP-mp-1077929-synth_doped.cif,keep,G_optimal_doping_zero,"Li/Zn substitute ON Cu — in-plane pair-breaking, zeros real"
+Cu1F2Sr2O2-MP-mp-1025280.cif,exclude,A_undoped_insulator_sc,Sr2CuO2F2+x class: nominal comp charge-balances undoped; Tc belongs to excess-F sample
+Cu1K0.2La1.8O4-MP-mp-1077929-synth_doped.cif,exclude,C_overdoped_dome_violation,41K at nominal Cu ox 2.4 (K+1 x2 holes) — beyond dome edge; O-compensated sample label
+Cu1La1.795Sr0.205O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict+G_optimal_doping_zero,LSCO overdoped edge pair 0K/30.5K at x~0.20 — 0K row is the suspect twin but x=0.205 edge; kept pending
+Cu1La1.798Sr0.202O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,LSCO overdoped edge pair 0K/30.5K at x~0.20 — 0K row is the suspect twin but x=0.205 edge; kept pending
+Cu1La1.7Sm0.3O4-MP-mp-1077929-synth_doped.cif,exclude,A_undoped_insulator_sc,Sm3+ isovalent = undoped La214 claiming 25K — label from O-doped sample
+Cu1La1.812Sr0.188O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,optimal-region LSCO — normal members flagged only as neighbors
+Cu1La1.822Sr0.178O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,optimal-region LSCO — normal members flagged only as neighbors
+Cu1La1.828Sr0.172O4-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,optimal-region LSCO — normal members flagged only as neighbors
+Cu1La1.84Rb0.16O4-MP-mp-1077929-synth_doped.cif,keep,G_optimal_doping_zero,"only-two-point Rb series — unresolvable, no contradiction"
+Cu1La1.85Na0.15O4-MP-mp-1077929-synth_doped.cif,exclude,G_optimal_doping_zero,Na-LSCO 0K at doping bracketed by finite-Tc Na neighbors (0.11->16K trend)
+Cu1La1.95Na0.05O4-MP-mp-1077929-synth_doped.cif,keep,G_optimal_doping_zero,Na onset edge — 0K below x~0.07 onset is plausible
+Cu1La1.9Na0.1O4-MP-mp-1077929-synth_doped.cif,exclude,G_optimal_doping_zero,Na-LSCO 0K at doping bracketed by finite-Tc Na neighbors (0.11->16K trend)
+Cu1La1.9Sm0.1O4-MP-mp-1077929-synth_doped.cif,exclude,A_undoped_insulator_sc,Sm3+ isovalent = undoped La214 claiming 25K — label from O-doped sample
+Cu1La1O2.64-MP-mp-3474-synth_doped.cif,keep,G_optimal_doping_zero,LaCuO2.5+d ladder — ambient 0K real (SC only under pressure)
+Cu1La2O4.003-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict,La2CuO4+d onset block: interleaved 0K/32-42K at d<=0.022 — two irreconcilable d scales
+Cu1La2O4.005-MP-mp-1077929-synth_doped.cif,exclude,A_undoped_insulator_sc+F_near_duplicate_conflict,La2CuO4+d onset block: interleaved 0K/32-42K at d<=0.022 — two irreconcilable d scales
+Cu1La2O4.011-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict,La2CuO4+d onset block: interleaved 0K/32-42K at d<=0.022 — two irreconcilable d scales
+Cu1La2O4.012-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict,La2CuO4+d onset block: interleaved 0K/32-42K at d<=0.022 — two irreconcilable d scales
+Cu1La2O4.015-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict,La2CuO4+d onset block: interleaved 0K/32-42K at d<=0.022 — two irreconcilable d scales
+Cu1La2O4.017-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict,La2CuO4+d onset block: interleaved 0K/32-42K at d<=0.022 — two irreconcilable d scales
+Cu1La2O4.02-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict,La2CuO4+d onset block: interleaved 0K/32-42K at d<=0.022 — two irreconcilable d scales
+Cu1La2O4.022-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict,La2CuO4+d onset block: interleaved 0K/32-42K at d<=0.022 — two irreconcilable d scales
+Cu1La2O4.034-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.035-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.044-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.05-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,flag pairs it with a suspect neighbor / boundary check — no evidence against this row itself
+Cu1La2O4.052-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict+G_optimal_doping_zero,La2CuO4+d interior 0K inside the 30-45K plateau (d 0.032-0.13)
+Cu1La2O4.056-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict+G_optimal_doping_zero,La2CuO4+d interior 0K inside the 30-45K plateau (d 0.032-0.13)
+Cu1La2O4.066-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.068-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.07-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.075-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.086-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.093-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.095-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.1-MP-mp-1077929-synth_doped.cif,exclude,F_near_duplicate_conflict+G_optimal_doping_zero,La2CuO4+d interior 0K inside the 30-45K plateau (d 0.032-0.13)
+Cu1La2O4.11-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.12-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,flag pairs it with a suspect neighbor / boundary check — no evidence against this row itself
+Cu1La2O4.13-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,La2CuO4+d plateau — consistent 29-45K branch
+Cu1La2O4.18-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,overdoped/decomposed tail zeros — consistent
+Cu1La2O4.2-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,overdoped/decomposed tail zeros — consistent
+Cu1La2O4.32-MP-mp-1077929-synth_doped.cif,exclude,B_implausible_cu_ox+F_near_duplicate_conflict,37.5K at nominal Cu ox 2.64 (d=0.32) — impossible; neighbors at d>=0.18 are 0K
+Cu1La2O4.33-MP-mp-1077929-synth_doped.cif,keep,F_near_duplicate_conflict,overdoped/decomposed tail zeros — consistent
+Cu1Nd1.7O4-MP-mp-4158-synth_doped.cif,exclude,B_implausible_cu_ox,"NCCO frame, Nd-deficient nominal comp with Tc>30K (T' ceiling ~24K) — mangled Ce entry"
+Cu1Nd1.85Y0.15O4-MP-mp-4158-synth_doped.cif,keep,A_undoped_insulator_sc,T' at nominal stoichiometry — reduction-annealed undoped-T' SC is documented; keep
+Cu1Nd1.8O4-MP-mp-4158-synth_doped.cif,exclude,C_overdoped_dome_violation,"NCCO frame, Nd-deficient nominal comp with Tc>30K (T' ceiling ~24K) — mangled Ce entry"
+Cu1Sr0.85O2-MP-mp-5787-synth_doped.cif,keep,G_optimal_doping_zero,"hole-doped infinite layer — bulk hole-side non-SC, zero real"
+Cu2Fe1Sr2Y1O7.36-MP-mvc-771-synth_doped.cif,keep,F_near_duplicate_conflict,Fe-1212 onset/plateau members — consistent
+Cu2Fe1Sr2Y1O7.51-MP-mvc-771-synth_doped.cif,keep,F_near_duplicate_conflict,Fe-1212 onset/plateau members — consistent
+Cu2Fe1Sr2Y1O7.6-MP-mvc-771-synth_doped.cif,exclude,F_near_duplicate_conflict,Fe-1212 interior 0K between 53.5(d=7.51) and 43.5(d=7.66)
+Cu2Fe1Sr2Y1O7.66-MP-mvc-771-synth_doped.cif,keep,F_near_duplicate_conflict,Fe-1212 onset/plateau members — consistent
+Cu2Fe1Sr2Y1O7.68-MP-mvc-771-synth_doped.cif,keep,F_near_duplicate_conflict,Fe-1212 onset/plateau members — consistent
+Cu2Gd1Ru0.95Sr2Ti0.05O8-MP-mp-1194240-synth_doped.cif,keep,F_near_duplicate_conflict,"ruthenocuprate Ti kill at x=0.1 — fragile magnetic SC, plausible percolation edge"
+Cu2Gd1Ru0.97Sr2Ti0.03O8-MP-mp-1194240-synth_doped.cif,keep,F_near_duplicate_conflict,"ruthenocuprate Ti kill at x=0.1 — fragile magnetic SC, plausible percolation edge"
+Cu2Gd1Ru0.9Sr2Ti0.1O8-MP-mp-1194240-synth_doped.cif,keep,F_near_duplicate_conflict,"ruthenocuprate Ti kill at x=0.1 — fragile magnetic SC, plausible percolation edge"
+Cu2La2Sr1O6.2-MP-mp-1218240-synth_doped.cif,keep,G_optimal_doping_zero,La2SrCu2O6+d ambient-pressure zeros real (SC needs HP-O anneal)
+Cu2La2Sr1O6.315-MP-mp-1218240-synth_doped.cif,keep,G_optimal_doping_zero,La2SrCu2O6+d ambient-pressure zeros real (SC needs HP-O anneal)
