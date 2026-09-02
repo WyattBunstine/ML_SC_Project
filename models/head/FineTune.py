@@ -465,13 +465,21 @@ def run(cfg, out_dir, device):
     k_var = max(float(tc_tr.var()), 1.0)
     k_wmean = max(float((1.0 + tc_tr).mean()), 1.0)
 
+    # Learned-pool choice (head tuning): "deepsets" (historical default) or
+    # "attention". "meanmax" is invalid HERE — its PCA is fit on offline-pooled
+    # vectors, which the fine-tune path never builds — reject it by name.
+    ft_pooling = cfg.get("pooling", "deepsets")
+    if ft_pooling not in ("deepsets", "attention"):
+        raise ValueError(f"finetune pooling must be 'deepsets' or 'attention', "
+                         f"got {ft_pooling!r}")
+
     def make_head(seed):
         torch.manual_seed(seed)
         # head_in_dim 0 (G-only arm: no latents, no per-atom pf) -> pooling "none":
         # the trunk sees the descriptor block (incl. appended G features) alone.
         head = TcHead(head_in_dim, phys_t.shape[1], cfg["pca_k"], cfg["hidden"],
                       cfg["dropout"],
-                      pooling=("none" if head_in_dim == 0 else "deepsets"),
+                      pooling=("none" if head_in_dim == 0 else ft_pooling),
                       pool_dim=pool_dim,
                       n_classes=(int(cfg.get("n_gs_classes", 4)) if use_gs else 2),
                       head_arch=cfg.get("head_arch", "concat"),
