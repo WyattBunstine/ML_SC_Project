@@ -34,6 +34,12 @@ for NAME in $NAMES; do
       python scripts/plot_lsco_dome.py "$RUN/predictions.csv" \
         "docs/figures/tc_vs_cu_oxidation_la_series_dome_${NAME#la_series_}.png" \
         "La\$_2\$CuO\$_4\$ doping series — ${NAME}" >/dev/null 2>&1 ;;
+    fam_*)
+      # family-holdout arms: generic dome scorer (holdout csv read from the
+      # run's own config.json) + Tc-vs-Cu-ox figure
+      python scripts/family_dome.py "$RUN" --plot \
+        "docs/figures/tc_vs_cu_oxidation_${NAME}.png" \
+        "held-out family dome — ${NAME}" >> "$STATUS" 2>/dev/null ;;
     *) python scripts/family_stats.py "$RUN" 2>/dev/null | tail -1 >> "$STATUS" ;;
   esac
 done
