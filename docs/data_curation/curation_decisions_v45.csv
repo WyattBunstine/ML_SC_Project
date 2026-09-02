@@ -196,3 +196,26 @@ Cu2Gd1Ru0.97Sr2Ti0.03O8-MP-mp-1194240-synth_doped.cif,keep,F_near_duplicate_conf
 Cu2Gd1Ru0.9Sr2Ti0.1O8-MP-mp-1194240-synth_doped.cif,keep,F_near_duplicate_conflict,"ruthenocuprate Ti kill at x=0.1 — fragile magnetic SC, plausible percolation edge"
 Cu2La2Sr1O6.2-MP-mp-1218240-synth_doped.cif,keep,G_optimal_doping_zero,La2SrCu2O6+d ambient-pressure zeros real (SC needs HP-O anneal)
 Cu2La2Sr1O6.315-MP-mp-1218240-synth_doped.cif,keep,G_optimal_doping_zero,La2SrCu2O6+d ambient-pressure zeros real (SC needs HP-O anneal)
+As1Ce1F0.06Fe1O0.94-MP-mp-605060-synth_doped.cif,exclude,FF_near_duplicate_conflict,Ce-1111 0K at F=0.06 INVERTED vs 11.8K at lower F=0.05 — bad row
+As1Ce1F0.08Fe1O0.92-MP-mp-605060-synth_doped.cif,keep,FF_near_duplicate_conflict,no evidence against this row
+As1F0.06Fe1Nd1O0.94-MP-mp-622621-synth_doped.cif,keep,FF_near_duplicate_conflict,no evidence against this row
+As1F0.075Fe1Sm1O0.925-MP-mp-20349-synth_doped.cif,keep,FF_near_duplicate_conflict,33K at F~0.07 plausible vs 36.4@0.06 / 42@0.09
+As1F0.07Fe1Sm1O0.93-MP-mp-20349-synth_doped.cif,keep,FF_near_duplicate_conflict,33K at F~0.07 plausible
+As1F0.082Fe1Pr1O0.918-MP-mp-22491-synth_doped.cif,keep,FF_near_duplicate_conflict,Pr-1111 steep real onset (0->14.6->43.5 over F 0.044-0.10)
+As1F0.085Fe1Sm1O0.915-MP-mp-20349-synth_doped.cif,exclude,FF_near_duplicate_conflict,Sm-1111 14K at F=0.085 amid 33K@0.07-0.075 and 42K@0.09 — nominal-F scale conflict
+As1F0.08Fe1Nd1O0.92-MP-mp-622621-synth_doped.cif,keep,FF_near_duplicate_conflict,"35K dip amid 47-50K — within notorious nominal-F noise, single-sided, keep"
+As1F0.09Fe1Sm1O0.91-MP-mp-20349-synth_doped.cif,keep,FF_near_duplicate_conflict,42K at F=0.09 consistent with plateau
+As1F0.14Fe1Sm1O0.86-MP-mp-20349-synth_doped.cif,exclude,FF_near_duplicate_conflict,Sm-1111 low pocket (26.9K) at optimal F — same nominal-F conflict as its 0.13 partner
+As1F0.15Fe1Sm1O0.85-MP-mp-20349-synth_doped.cif,keep,FF_near_duplicate_conflict,44.5K at F=0.15 = the optimal plateau
+As1F0.1Fe1Pr1O0.9-MP-mp-22491-synth_doped.cif,keep,FF_near_duplicate_conflict,steep real onset — upper member
+As1Fe1La1O1-MP-mp-20287.cif,exclude,FA_parent_claiming_sc,stoichiometric LaFeAsO (SDW parent) claiming 10.2K — label from F-doped/O-deficient sample
+As2Ba0.64Fe2K0.36-MP-mp-1223517-synth_doped.cif,exclude,FF_near_duplicate_conflict,Ba122 K-dome ridge outlier: 25.6K at x=0.36 amid 37-38K at 0.32-0.35 — should be ~38K
+As2Ba0.65Fe2K0.35-MP-mp-1223517-synth_doped.cif,keep,FF_near_duplicate_conflict,consistent with the K-dome ridge (37-38K at 0.32-0.337)
+As2Ba0.663Fe2K0.337-MP-mp-1223517-synth_doped.cif,keep,FF_near_duplicate_conflict,consistent with the K-dome ridge
+As2Ba1Fe1.24Ru0.76-MP-mp-1227957-synth_doped.cif,exclude,FF_near_duplicate_conflict,"Ru-122 twin-scale conflict at same x (7.1 vs 21.0) — two labs' Ru scales, unresolvable pair"
+As2Ba1Fe1.25Ru0.75-MP-mp-1227957-synth_doped.cif,exclude,FF_near_duplicate_conflict,Ru-122 twin-scale conflict at same x (21.0 vs 7.1) — unresolvable pair
+As2Co0.15Fe1.85Sr1-MP-mp-4488-synth_doped.cif,exclude,FG_optimal_window_zero,"Sr122-Co 0K at x=0.15 contradicted both sides (7.2K@0.14, 9.5K@0.174)"
+As2Co0.1Fe1.9Sr1-MP-mp-4488-synth_doped.cif,keep,FG_optimal_window_zero,Sr122-Co onset edge — 0K within scatter of 2K neighbors
+As2Co0.22Eu1Fe1.78-MP-mp-20890-synth_doped.cif,keep,FF_near_duplicate_conflict,"Eu-122 reentrant SC — onset-vs-zero-resistance criterion scatter, both reports defensible"
+As2Co0.24Eu1Fe1.76-MP-mp-20890-synth_doped.cif,keep,FF_near_duplicate_conflict,Eu-122 reentrant criterion scatter — keep twin
+As1F0.13Fe1Sm1O0.87-MP-mp-20349-synth_doped.cif,exclude,series-adjudication,Sm-1111 low pocket (24.7K) at optimal F — contradicts 44-45K plateau; actual F lower than nominal
