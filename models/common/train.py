@@ -447,11 +447,29 @@ def _masked_mean(err, mask):
     return (err * m).sum() / m.sum().clamp_min(1.0)
 
 
-def _mt_loss(out, targets, masks, stats, weights, seg):
+def _mt_loss(out, targets, masks, stats, weights, seg, spectrum_loss="l1"):
     """Masked multitask loss (std-normalized, weighted) + per-task PHYSICAL MAE.
     Per-atom tasks (forces/magmom) broadcast their per-structure mask over atoms via
-    seg. A task is only scored when both the prediction and its target are present."""
+    seg. A task is only scored when both the prediction and its target are present.
+
+    spectrum_loss ("l1"|"mse", config key of the same name) picks the PHONON
+    spectrum objective (eph_a2f / ph_dos; the electronic dos is untouched).
+    L1's per-bin optimum is the conditional MEDIAN — under uncertainty that
+    hedges every sharp peak toward a low flat curve (measured: rung-38 a2f
+    effective rank 16, lambda compressed 0.63 vs 1.7 on A15s). MSE (the
+    BETE-NET convention, Hennig group) targets the conditional mean and
+    punishes a missed peak quadratically, so peaks survive training. MSE terms
+    normalize by s^2 to stay dimensionless alongside the L1/s tasks; the
+    REPORTED per-task number stays the physical MAE either way."""
     losses, maes = {}, {}
+
+    def spectrum(key, diff):                       # (B, n_bins) residual
+        s, m = stats.get(key, 1.0), masks[key]
+        if spectrum_loss == "mse":
+            losses[key] = _masked_mean((diff ** 2).mean(1) / (s * s), m)
+        else:
+            losses[key] = _masked_mean(diff.abs().mean(1) / s, m)
+        maes[key] = _masked_mean(diff.detach().abs().mean(1), m)
 
     def scalar(key, err):                          # per-structure (B,) error
         s, m = stats.get(key, 1.0), masks[key]
@@ -480,9 +498,9 @@ def _mt_loss(out, targets, masks, stats, weights, seg):
     if "dos" in out and "dos" in targets:
         scalar("dos", (out["dos"] - targets["dos"]).abs().mean(1))
     if "eph_a2f" in out and "eph_a2f" in targets:
-        scalar("eph_a2f", (out["eph_a2f"] - targets["eph_a2f"]).abs().mean(1))
+        spectrum("eph_a2f", out["eph_a2f"] - targets["eph_a2f"])
     if "ph_dos" in out and "ph_dos" in targets:
-        scalar("ph_dos", (out["ph_dos"] - targets["ph_dos"]).abs().mean(1))
+        spectrum("ph_dos", out["ph_dos"] - targets["ph_dos"])
 
     if not losses:
         raise ValueError("multitask loss has no terms: the model's tasks and the batch's "
@@ -512,7 +530,8 @@ def _train_mt(loader, model, optimizer, epoch, stats, weights, args,
         cart, strain = _build_cart_strain(input_var)
         out = model(*input_var, cart=cart, strain=strain)
         targets, masks = _move_target_dicts(targets, masks, args["cuda"])
-        loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6])
+        loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6],
+                                    spectrum_loss=args.get("spectrum_loss", "l1"))
         # Per-step guard: double-backward through 1/|d| reciprocals is more
         # explosion-prone than single-backward, and an NaN here would step + be
         # checkpointed before the per-epoch guard fires. Under data parallelism the
@@ -554,7 +573,8 @@ def _validate_mt(loader, model, stats, weights, args):
         with torch.enable_grad():                  # forces need a graph even in eval
             out = model(*input_var, cart=cart, strain=strain)
         targets, masks = _move_target_dicts(targets, masks, args["cuda"])
-        loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6])
+        loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6],
+                                    spectrum_loss=args.get("spectrum_loss", "l1"))
         loss_meter.update(float(loss.detach()), 1)
         for k, v in batch_maes.items():
             maes.setdefault(k, AverageMeter()).update(float(v.detach()), 1)
