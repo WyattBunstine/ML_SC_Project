@@ -39,10 +39,11 @@ def parse_dyn_dir(mat_dir):
         at = 0.5 * np.array([[1, 1, 1], [-1, 1, 1], [-1, -1, 1]], float)
     else:
         at = None         # non-cubic: caller must use recover_basis (q-set derived)
-    masses = {}
+    masses, syms = {}, {}
     for k in range(ntyp):
         t = lines[idx + k].split("'")
         masses[int(t[0])] = float(t[2])
+        syms[int(t[0])] = t[1].strip()
     idx += ntyp
     tau, types = [], []
     for k in range(nat):
@@ -51,6 +52,7 @@ def parse_dyn_dir(mat_dir):
         tau.append([float(x) for x in t[2:5]])
     tau = np.array(tau)
     m = np.array([masses[t] for t in types])
+    symbols = [syms[t] for t in types]
 
     qd = {}
     freq_ref = {}
@@ -78,7 +80,7 @@ def parse_dyn_dir(mat_dir):
             q = tuple(round(float(x), 9) for x in qm.groups())
             freq_ref[q] = [float(x) for x in
                            re.findall(r"freq \(\s*\d+\) =\s*(-?[\d.]+) \[THz\]", fq.group(0))]
-    return at, tau, m, qd, freq_ref, nat
+    return at, tau, m, qd, freq_ref, nat, symbols
 
 
 def force_constants(at, tau, qd, nat, grid):
@@ -192,12 +194,22 @@ def assign_grid(G, qs, grid_dims):
     raise ValueError(f"no grid-dim assignment of {grid_dims} covers the q set")
 
 
-def dense_phdos(mat_dir, centers, sigma=0.15, mesh_cap=16, per_atom=False):
+def dense_phdos(mat_dir, centers, sigma=0.15, mesh_cap=16, per_atom=False,
+                site_proj=False, site_centers=None):
     """Phonon DOS on the fixed grid from a DENSE interpolated q-mesh (vectorized
     D(q) assembly + batched eigh). Returns (dos, nat, kept_frac, grid_err) or
     raises. grid_err = max |interpolated - QE-listed| at the calculated q's
-    (pre-ASR would be exact; ASR redistribution keeps this ~0.3 THz)."""
-    at, tau, m, qd, freq_ref, nat = parse_dyn_dir(mat_dir)
+    (pre-ASR would be exact; ASR redistribution keeps this ~0.3 THz).
+
+    site_proj: additionally return the SITE-projected DOS reduced per ELEMENT
+    ({symbol: (len(site_centers),) fp32}) — mode weights are the squared
+    eigenvector components of each atom (orthonormal in mass-weighted
+    coordinates, so every mode partitions exactly). Per-ATOM normalization
+    (each atom integrates to ~3*kept states) so no cell atom count enters —
+    sidesteps the primitive-vs-conventional QE/graph cell trap. Per-element
+    reduction is cell-convention- and orientation-proof; intra-element site
+    distinction is deliberately out of scope (v2 = exact site matching)."""
+    at, tau, m, qd, freq_ref, nat, symbols = parse_dyn_dir(mat_dir)
     qs = np.array(list(qd.keys()))
     grid_dims = [int(x) for x in
                  open(os.path.join(mat_dir, "qe.dyn0")).readline().split()[:3]]
@@ -232,7 +244,15 @@ def dense_phdos(mat_dir, centers, sigma=0.15, mesh_cap=16, per_atom=False):
     for i in range(nat):
         D[:, 3 * i:3 * i + 3, 3 * i:3 * i + 3] -= asr[i]
     Msq = np.sqrt(np.outer(np.repeat(m, 3), np.repeat(m, 3)))
-    ev = np.linalg.eigvalsh((D + np.conj(np.transpose(D, (0, 2, 1)))) / 2 / Msq)
+    Dh = (D + np.conj(np.transpose(D, (0, 2, 1)))) / 2 / Msq
+    if site_proj:
+        ev, Vec = np.linalg.eigh(Dh)
+        # per-atom mode weights: rows of V grouped by atom, summed over the 3
+        # cartesian components -> (nq, nat, modes); columns are orthonormal so
+        # weights partition each mode exactly (sum over atoms == 1)
+        w_at = (np.abs(Vec) ** 2).reshape(nq, nat, 3, 3 * nat).sum(axis=2)
+    else:
+        ev = np.linalg.eigvalsh(Dh)
     freqs = (np.sign(ev) * np.sqrt(np.abs(ev)) * RY_TO_THZ).ravel()
     pos = freqs > 0
     kept = pos.mean()
@@ -252,7 +272,26 @@ def dense_phdos(mat_dir, centers, sigma=0.15, mesh_cap=16, per_atom=False):
     target = 3.0 * kept * (1.0 if per_atom else nat)
     if dos.sum() * dw > 0:
         dos *= target / (dos.sum() * dw)
-    return dos.astype(np.float32), nat, kept, grid_err
+    if not site_proj:
+        return dos.astype(np.float32), nat, kept, grid_err
+    sc = np.asarray(site_centers if site_centers is not None else centers, float)
+    fpos = freqs[pos]
+    wpos = w_at.transpose(1, 0, 2).reshape(nat, -1)[:, pos]      # (nat, n_pos_modes)
+    spec = np.zeros((nat, len(sc)))
+    for c0 in range(0, fpos.size, 20000):
+        f = fpos[c0:c0 + 20000]
+        g = np.exp(-0.5 * ((sc[:, None] - f[None, :]) / sigma) ** 2)
+        spec += wpos[:, c0:c0 + 20000] @ g.T
+    spec /= sigma * np.sqrt(2 * np.pi)
+    dws = sc[1] - sc[0]
+    tot = spec.sum() * dws
+    if tot > 0:
+        spec *= (3.0 * kept * nat) / tot        # per-atom convention: each ~3*kept
+    site = {}
+    for el in sorted(set(symbols)):
+        rows = [k for k, s in enumerate(symbols) if s == el]
+        site[el] = spec[rows].mean(axis=0).astype(np.float32)
+    return dos.astype(np.float32), nat, kept, grid_err, site
 
 
 PATHS = {
@@ -281,7 +320,7 @@ def band_path(points, entries, asr, masses, nat, npts=60):
 
 
 def run(mat_dir, path_key):
-    at, tau, m, qd, freq_ref, nat = parse_dyn_dir(mat_dir)
+    at, tau, m, qd, freq_ref, nat, symbols = parse_dyn_dir(mat_dir)
     grid = [int(x) for x in open(os.path.join(mat_dir, "qe.dyn0")).readline().split()[:3]]
     print(f"{os.path.basename(mat_dir)}: nat {nat}, grid {grid}, {len(qd)} q-points")
     if at is None:

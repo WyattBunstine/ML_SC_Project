@@ -32,7 +32,8 @@ import numpy as np
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "models", "common"))
-from data import PHONON_N_BINS, PHONON_W_MAX_THZ, bin_spectrum  # noqa: E402
+from data import (PHONON_N_BINS, PHONON_SITE_BINS, PHONON_W_MAX_THZ,  # noqa: E402
+                  bin_spectrum)
 
 EPH = os.path.join(_ROOT, "database", "datafiles", "EPH_Cerqueira")
 RY_TO_K = 13.605693122994 / 8.617333262e-5
@@ -218,14 +219,75 @@ def cmd_phdos(dry_run=False):
               f"| <95% stable: {(kept_fr < 0.95).sum()} materials")
 
 
+def _phdos_site_one(d):
+    """Worker: site-projected per-element phonon DOS for one material ->
+    (agm, site_dict, kept, err) or (agm, None, msg, None)."""
+    sys.path.insert(0, os.path.join(_ROOT, "scripts"))
+    from plot_phonon_dispersion import dense_phdos
+    centers = (np.arange(PHONON_N_BINS) + 0.5) * (PHONON_W_MAX_THZ / PHONON_N_BINS)
+    sc = (np.arange(PHONON_SITE_BINS) + 0.5) * (PHONON_W_MAX_THZ / PHONON_SITE_BINS)
+    agm = d.rsplit("_", 1)[-1]
+    try:
+        _dos, _nat, kept, err, site = dense_phdos(
+            d, centers, sigma=PHDOS_SIGMA_THZ, per_atom=True,
+            site_proj=True, site_centers=sc)
+        if not np.isfinite(err) or err > 0.02:
+            return agm, None, f"grid validation err {err}", None
+        return agm, {el: [round(float(x), 8) for x in v] for el, v in site.items()}, kept, err
+    except Exception as e:  # noqa: BLE001 — per-material isolation
+        return agm, None, str(e)[:120], None
+
+
+def cmd_phdos_site(dry_run=False):
+    """Site-projected per-ELEMENT phonon DOS (PHONON_SITE_BINS on the same
+    0-PHONON_W_MAX_THZ grid) baked as graph key "phdos_site" {symbol: [bins]}
+    + "phonon_site_grid". Per-atom normalized (each atom ~3*kept states), so
+    the loader expands per node by element with NO cell-count rescale — the
+    primitive-vs-conventional QE/graph cell mismatch never enters."""
+    from multiprocessing import Pool
+    dirs = sorted(d for d in glob.glob(os.path.join(EPH, "a2f_raw", "batch-*", "*_agm*"))
+                  if glob.glob(os.path.join(d, "qe.dyn[1-9]*")))
+    graph_dir = os.path.join(EPH, "graphs_v45_eph")
+    if ONLY_MISSING:
+        def _done(d):
+            gp = os.path.join(graph_dir, d.rsplit("_", 1)[-1] + ".json")
+            if not os.path.exists(gp):
+                return True
+            ps = json.load(open(gp)).get("phdos_site")
+            return ps is not None and all(len(v) == PHONON_SITE_BINS for v in ps.values())
+        dirs = [d for d in dirs if not _done(d)]
+        print(f"only-missing: {len(dirs)} materials to (re)bake")
+    n_ok = n_fail = 0
+    with Pool(min(12, os.cpu_count() or 1)) as pool:
+        for agm, site, kept, err in pool.imap_unordered(_phdos_site_one, dirs, chunksize=8):
+            gpath = os.path.join(graph_dir, agm + ".json")
+            if site is None or not os.path.exists(gpath):
+                n_fail += 1
+                if n_fail <= 15:
+                    print(f"  skip {agm}: {kept}", flush=True)
+                continue
+            if not dry_run:
+                g = json.load(open(gpath))
+                g["phdos_site"] = site
+                g["phonon_site_grid"] = [PHONON_SITE_BINS, PHONON_W_MAX_THZ]
+                tmp = gpath + ".tmp"
+                json.dump(g, open(tmp, "w"))
+                os.replace(tmp, gpath)
+            n_ok += 1
+            if n_ok % 500 == 0:
+                print(f"  baked {n_ok}", flush=True)
+    print(f"phdos-site bake: {n_ok} baked, {n_fail} skipped")
+
+
 ONLY_MISSING = False
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["a2f", "phdos"])
+    ap.add_argument("cmd", choices=["a2f", "phdos", "phdos-site"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only-missing", action="store_true",
                     help="phdos: skip graphs already carrying a PHONON_N_BINS ph_dos")
     a = ap.parse_args()
     ONLY_MISSING = a.only_missing
-    (cmd_a2f if a.cmd == "a2f" else cmd_phdos)(dry_run=a.dry_run)
+    {"a2f": cmd_a2f, "phdos": cmd_phdos,
+     "phdos-site": cmd_phdos_site}[a.cmd](dry_run=a.dry_run)
