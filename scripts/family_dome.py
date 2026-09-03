@@ -28,7 +28,14 @@ from pymatgen.core import Composition
 # (nominal states: Bi3+/Tl3+ rock-salt layers, Hg2+ dumbbells, Pb2+ substituent)
 OX = {"La": 3, "Sr": 2, "Ba": 2, "Ce": 4, "Nd": 3, "Eu": 3, "Gd": 3, "Sm": 3,
       "Pr": 3, "Ca": 2, "K": 1, "Na": 1, "Li": 1, "Zn": 2, "Ni": 2, "O": -2,
-      "Y": 3, "Bi": 3, "Tl": 3, "Hg": 2, "Pb": 2, "Al": 3, "Ti": 4, "B": 3}
+      "Y": 3, "Bi": 3, "Tl": 3, "Hg": 2, "Pb": 2, "Al": 3, "Ti": 4, "B": 3,
+      # 2026-09-03: elements MISSING from the table silently contribute 0 to the
+      # balance (OX.get default) and shove those rows' Cu-ox far right — the
+      # annotated fam_yba plot exposed Cd/Tb/Lu/Co/I rows at fake 2.5-3.8.
+      "Cd": 2, "Tb": 3, "Lu": 3, "Sc": 3, "Ga": 3, "Cs": 1, "Rb": 1,
+      "Ho": 3, "Er": 3, "Tm": 3, "Yb": 3, "Dy": 3, "F": -1, "I": -1,
+      # Co/Fe substitute on the Cu chain site in 123-type frames: nominal 3+
+      "Co": 3, "Fe": 3}
 
 
 def cu_oxidation(formula):
