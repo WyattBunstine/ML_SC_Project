@@ -284,10 +284,11 @@ def run(cfg, out_dir, device):
     # forward pass cached to disk — so phase-B fine-tuning never drifts them.
     pf = cfg.get("pred_features") or {}
     if pf:
-        _bad_pf = sorted(set(pf) - {"per_atom", "global", "latents", "cache"})
+        _bad_pf = sorted(set(pf) - {"per_atom", "global", "latents", "cache",
+                                    "feature_checkpoint"})
         if _bad_pf:
             raise ValueError(f"unknown pred_features key(s) {_bad_pf} — misspelled? "
-                             "known: per_atom, global, latents, cache")
+                             "known: per_atom, global, latents, cache, feature_checkpoint")
         if cfg.get("checkpoint") is None:
             raise ValueError("pred_features requires a pretrained 'checkpoint' "
                              "(the predictions ARE the features)")
@@ -302,9 +303,22 @@ def run(cfg, out_dir, device):
     if use_pf_atom or use_pf_glob:
         from models.head.pred_features import (load_or_build_pred_cache,
                                                derive_global_features)
-        _pc = load_or_build_pred_cache(model, ds, collate, device,
-                                       cfg["checkpoint"], cfg["index_path"],
-                                       cache_path=pf.get("cache"))
+        _fc = pf.get("feature_checkpoint")
+        if _fc:
+            # Cross-checkpoint features: predictions from a DIFFERENT encoder
+            # feed the head built on THIS checkpoint's latents (e.g. rung-42's
+            # accurate spectra + rung-38's dome-preserving latents — the
+            # 2026-09-03 synthesis after the full-42 retrain damaged the dome).
+            _fmodel, _fds, _fcollate = _encoder(_fc, cfg["index_path"], device)
+            _pc = load_or_build_pred_cache(_fmodel, _fds, _fcollate, device,
+                                           _fc, cfg["index_path"],
+                                           cache_path=pf.get("cache"))
+            del _fmodel, _fds
+            print(f"[ft] pred_features: cross-checkpoint features from {_fc}")
+        else:
+            _pc = load_or_build_pred_cache(model, ds, collate, device,
+                                           cfg["checkpoint"], cfg["index_path"],
+                                           cache_path=pf.get("cache"))
     if use_pf_atom:
         pf_names = list(_pc["per_atom_names"])
         pf_feats = dict(_pc["feats"])          # cid -> (n_atoms, n_pf) cpu fp32
@@ -788,7 +802,8 @@ def run(cfg, out_dir, device):
         metrics["pred_features"] = {"per_atom": use_pf_atom, "global": use_pf_glob,
                                     "latents": use_latents, "n_channels": n_pf,
                                     "channels": (pf_names if use_pf_atom else []),
-                                    "global_features": (g_names if use_pf_glob else [])}
+                                    "global_features": (g_names if use_pf_glob else []),
+                                    "feature_checkpoint": pf.get("feature_checkpoint")}
     if use_gs:
         # ground-state classifier report over the LABELED test rows (gs>=0):
         # per-class precision/recall from the ensemble-averaged probabilities.
