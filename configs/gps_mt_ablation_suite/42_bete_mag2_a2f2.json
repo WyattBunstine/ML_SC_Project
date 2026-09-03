@@ -54,7 +54,7 @@
     "gpus": 4,
     "cpus": 48,
     "mem": "128G",
-    "time": "72:00:00",
+    "time": "8:00:00",
     "partition": "ica100,a100"
   },
   "run_tag": "gps_mt_42_bete",
