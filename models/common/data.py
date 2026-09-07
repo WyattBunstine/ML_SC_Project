@@ -379,6 +379,13 @@ PHONON_W_MAX_THZ = 60.0
 # spectrum on purpose: per-atom shape needs less resolution and the bins
 # become head-feature dims downstream (rung 41 / pf-v2)
 PHONON_SITE_BINS = 64
+# Z -> element symbol (index = Z) for expanding per-element baked blocks to atoms
+_Z_SYMBOL = (
+    "X H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co "
+    "Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te "
+    "I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir "
+    "Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No "
+    "Lr").split()
 
 
 def bin_spectrum(w_thz, y, n_bins=PHONON_N_BINS, w_max=PHONON_W_MAX_THZ):
@@ -917,6 +924,24 @@ def _extract_ragged(graph):
     pv = graph.get("ph_dos")
     ph_dos = (np.asarray(pv, dtype=np.float32).reshape(PHONON_N_BINS)
               if pv is not None else np.full(PHONON_N_BINS, np.nan, dtype=np.float32))
+    # Site-projected phonon DOS: baked per-ELEMENT ({symbol: [PHONON_SITE_BINS]},
+    # build_phonon_targets.py phdos-site), expanded here to per-ATOM rows via the
+    # node Z column — genuinely per-atom supervision (unlike the electronic DOS,
+    # which is only constrained through its segment mean). Absent -> NaN -> masked.
+    sv = graph.get("phdos_site")
+    if sv is not None:
+        sg = graph.get("phonon_site_grid")
+        if sg is not None and (int(sg[0]) != PHONON_SITE_BINS
+                               or abs(float(sg[1]) - PHONON_W_MAX_THZ) > 1e-6):
+            raise ValueError(f"graph baked on phonon site grid {sg}, code uses "
+                             f"[{PHONON_SITE_BINS}, {PHONON_W_MAX_THZ}] — re-bake.")
+        by_el = {el: np.asarray(v, dtype=np.float32).reshape(PHONON_SITE_BINS)
+                 for el, v in sv.items()}
+        _nanrow = np.full(PHONON_SITE_BINS, np.nan, dtype=np.float32)
+        phdos_site = np.stack([by_el.get(_Z_SYMBOL[int(z)], _nanrow)
+                               for z in atom_fea[:, 0]])
+    else:
+        phdos_site = np.full((n_atoms, PHONON_SITE_BINS), np.nan, dtype=np.float32)
 
     return {
         "n_atoms": n_atoms,
@@ -932,6 +957,7 @@ def _extract_ragged(graph):
         "dos": dos,
         "a2f": a2f,
         "ph_dos": ph_dos,
+        "phdos_site": phdos_site,
         "stress": stress,
         "bond_cnt": bond_cnt,
         "bond_nbr": _arr(bond_nbr, np.int32),
@@ -1152,6 +1178,9 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom
     a2f, m_a2f = _t(r["a2f"])              # (PHONON_N_BINS,)
     ph_dos, m_ph = _t(r["ph_dos"])         # (PHONON_N_BINS,)
     ph_dos = ph_dos / max(int(r["n_atoms"]), 1)
+    # site-projected phonon DOS: per-atom (N, PHONON_SITE_BINS), already per-atom
+    # normalized (each atom ~3*kept states) at bake — no cell-count division
+    phdos_site, m_ps = _t(r["phdos_site"])
     energy_t, m_e = _scalar(energy)        # (1,)
     bandgap_t, m_bg = _scalar(bandgap)     # (1,)
     # Electron-phonon scalars (Cerqueira DFPT set): coupling constant lambda and
@@ -1161,11 +1190,11 @@ def _assemble_targets(r, energy=float("nan"), bandgap=float("nan"), dos_per_atom
     targets = {"forces": forces, "magmom": magmom, "stress": stress, "dos": dos,
                "energy": energy_t, "bandgap": bandgap_t,
                "eph_lambda": eph_la_t, "eph_wlog": eph_wl_t,
-               "eph_a2f": a2f, "ph_dos": ph_dos}
+               "eph_a2f": a2f, "ph_dos": ph_dos, "phdos_site": phdos_site}
     masks = {"forces": m_f, "magmom": m_m, "stress": m_s, "dos": m_dos,
              "energy": m_e, "bandgap": m_bg,
              "eph_lambda": m_la, "eph_wlog": m_wl,
-             "eph_a2f": m_a2f, "ph_dos": m_ph}
+             "eph_a2f": m_a2f, "ph_dos": m_ph, "phdos_site": m_ps}
     return targets, masks
 
 
@@ -1702,6 +1731,7 @@ def collate_pool_multitask(dataset_list):
     targets = {
         "forces": torch.cat([t["forces"] for t in tds], dim=0),    # (N, 3)
         "magmom": torch.cat([t["magmom"] for t in tds], dim=0),    # (N, 1)
+        "phdos_site": torch.cat([t["phdos_site"] for t in tds], dim=0),  # (N, SITE_BINS)
         "stress": torch.stack([t["stress"] for t in tds], dim=0),  # (B, 3, 3)
         "dos": torch.stack([t["dos"] for t in tds], dim=0),        # (B, DOS_N_ENERGY)
         "energy": torch.cat([t["energy"] for t in tds], dim=0),    # (B,)
