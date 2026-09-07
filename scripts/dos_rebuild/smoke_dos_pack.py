@@ -59,7 +59,7 @@ print(f"forces head present & finite: {torch.isfinite(out['forces']).all().item(
 
 # Loss must be finite and backprop must reach params (the real training step).
 stats = compute_target_stats(ds, list(range(min(3000, len(ds)))))
-loss, maes = _mt_loss(out, targets, masks, stats, cfg["loss_weights"], input_var[6])
+loss, maes, _counts = _mt_loss(out, targets, masks, stats, cfg["loss_weights"], input_var[6])
 loss.backward()
 gnorm = sum(p.grad.abs().sum().item() for p in model.parameters() if p.grad is not None)
 print(f"loss={loss.item():.4f}  finite={torch.isfinite(loss).item()}  per-task MAE={ {k: round(float(v),3) for k,v in maes.items()} }")

@@ -461,7 +461,7 @@ def _mt_loss(out, targets, masks, stats, weights, seg, spectrum_loss="l1"):
     punishes a missed peak quadratically, so peaks survive training. MSE terms
     normalize by s^2 to stay dimensionless alongside the L1/s tasks; the
     REPORTED per-task number stays the physical MAE either way."""
-    losses, maes = {}, {}
+    losses, maes, counts = {}, {}, {}
 
     def spectrum(key, diff):                       # (B, n_bins) residual
         s, m = stats.get(key, 1.0), masks[key]
@@ -470,16 +470,19 @@ def _mt_loss(out, targets, masks, stats, weights, seg, spectrum_loss="l1"):
         else:
             losses[key] = _masked_mean(diff.abs().mean(1) / s, m)
         maes[key] = _masked_mean(diff.detach().abs().mean(1), m)
+        counts[key] = int(m.sum())
 
     def scalar(key, err):                          # per-structure (B,) error
         s, m = stats.get(key, 1.0), masks[key]
         losses[key] = _masked_mean(err / s, m)
         maes[key] = _masked_mean(err.detach(), m)
+        counts[key] = int(m.sum())
 
     def per_atom(key, err):                        # per-atom (N,) error, per-structure mask
         s, m = stats.get(key, 1.0), masks[key][seg]
         losses[key] = _masked_mean(err / s, m)
         maes[key] = _masked_mean(err.detach(), m)
+        counts[key] = int(m.sum())
 
     if "energy" in out and "energy" in targets:
         scalar("energy", (out["energy"] - targets["energy"]).abs())
@@ -512,13 +515,14 @@ def _mt_loss(out, targets, masks, stats, weights, seg, spectrum_loss="l1"):
         else:
             losses["phdos_site"] = _masked_mean(diff.abs().mean(-1) / s, m)
         maes["phdos_site"] = _masked_mean(diff.detach().abs().mean(-1), m)
+        counts["phdos_site"] = int(m.sum())
 
     if not losses:
         raise ValueError("multitask loss has no terms: the model's tasks and the batch's "
                          "target keys don't overlap (e.g. a 'dos' task with no dos target "
                          "in the collate). Align the config's tasks with the available targets.")
     total = sum(weights.get(k, 1.0) * v for k, v in losses.items())
-    return total, maes
+    return total, maes, counts
 
 
 def _train_mt(loader, model, optimizer, epoch, stats, weights, args,
@@ -541,8 +545,9 @@ def _train_mt(loader, model, optimizer, epoch, stats, weights, args,
         cart, strain = _build_cart_strain(input_var)
         out = model(*input_var, cart=cart, strain=strain)
         targets, masks = _move_target_dicts(targets, masks, args["cuda"])
-        loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6],
-                                    spectrum_loss=args.get("spectrum_loss", "l1"))
+        loss, batch_maes, batch_counts = _mt_loss(out, targets, masks, stats, weights,
+                                                  input_var[6],
+                                                  spectrum_loss=args.get("spectrum_loss", "l1"))
         # Per-step guard: double-backward through 1/|d| reciprocals is more
         # explosion-prone than single-backward, and an NaN here would step + be
         # checkpointed before the per-epoch guard fires. Under data parallelism the
@@ -567,7 +572,13 @@ def _train_mt(loader, model, optimizer, epoch, stats, weights, args,
         _warmup_and_step(optimizer, model, args, base_lr, warmup_steps, epoch * steps + i)
         loss_meter.update(float(loss.detach()), 1)
         for k, v in batch_maes.items():
-            maes.setdefault(k, AverageMeter()).update(float(v.detach()), 1)
+            # count-weighted: the reported MAE is the true per-row mean. The old
+            # equal-batch weighting averaged in 0.0 for batches with NO labeled
+            # rows, deflating sparse-task MAEs (a2f most; energy ~25% low —
+            # found via the fe-parity row-weighted numbers, 2026-09-07).
+            if batch_counts.get(k, 0):
+                maes.setdefault(k, AverageMeter()).update(float(v.detach()),
+                                                          batch_counts[k])
         end = time.time()
         if is_main and i % args.get("print_split", 10) == 0:
             tstr = "  ".join(f"{k} {m.avg:.4f}" for k, m in maes.items())
@@ -584,11 +595,18 @@ def _validate_mt(loader, model, stats, weights, args):
         with torch.enable_grad():                  # forces need a graph even in eval
             out = model(*input_var, cart=cart, strain=strain)
         targets, masks = _move_target_dicts(targets, masks, args["cuda"])
-        loss, batch_maes = _mt_loss(out, targets, masks, stats, weights, input_var[6],
-                                    spectrum_loss=args.get("spectrum_loss", "l1"))
+        loss, batch_maes, batch_counts = _mt_loss(out, targets, masks, stats, weights,
+                                                  input_var[6],
+                                                  spectrum_loss=args.get("spectrum_loss", "l1"))
         loss_meter.update(float(loss.detach()), 1)
         for k, v in batch_maes.items():
-            maes.setdefault(k, AverageMeter()).update(float(v.detach()), 1)
+            # count-weighted: the reported MAE is the true per-row mean. The old
+            # equal-batch weighting averaged in 0.0 for batches with NO labeled
+            # rows, deflating sparse-task MAEs (a2f most; energy ~25% low —
+            # found via the fe-parity row-weighted numbers, 2026-09-07).
+            if batch_counts.get(k, 0):
+                maes.setdefault(k, AverageMeter()).update(float(v.detach()),
+                                                          batch_counts[k])
     return loss_meter.avg, {k: m.avg for k, m in maes.items()}
 
 
