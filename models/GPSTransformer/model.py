@@ -299,6 +299,7 @@ class GPSCrystalNet(nn.Module):
                  use_dist_bias=False, dist_cutoff=8.0, n_dist_rbf=16,
                  classification=False, tasks=None, n_energy=256, dos_per_atom=True,
                  n_phonon=256,
+                 n_phonon_site=64,
                  differentiable_geometry=False):
         super().__init__()
         if atom_pooling not in self._POOLINGS:
@@ -359,6 +360,7 @@ class GPSCrystalNet(nn.Module):
         self.h_fea_len = h_fea_len
         self.n_energy = n_energy
         self.n_phonon = n_phonon
+        self.n_phonon_site = n_phonon_site
         # DOS readout: True -> segment-MEAN (intensive per-atom DOS, pairs with the
         # /n_atoms target); False -> segment-SUM (legacy extensive total DOS, pairs
         # with the raw target — the old-window ablation cell).
@@ -369,7 +371,7 @@ class GPSCrystalNet(nn.Module):
         self.tasks = set(tasks) if tasks is not None else None
         if self.tasks is not None:
             _known = {"energy", "forces", "stress", "magmom", "bandgap", "dos",
-                      "eph_lambda", "eph_wlog", "eph_a2f", "ph_dos"}
+                      "eph_lambda", "eph_wlog", "eph_a2f", "ph_dos", "phdos_site"}
             bad = self.tasks - _known
             if bad:
                 raise ValueError(f"unknown task(s) {sorted(bad)}; valid: {sorted(_known)}")
@@ -414,6 +416,11 @@ class GPSCrystalNet(nn.Module):
                 self.heads["eph_a2f"] = self._build_head(n_phonon, softplus_out=True)
             if "ph_dos" in self.tasks:
                 self.heads["ph_dos"] = self._build_head(n_phonon, softplus_out=True)
+            # Site-projected phonon DOS: per-ATOM spectrum head, supervised
+            # per-atom (no segment pooling) — the decomposition is constrained
+            # directly, unlike the electronic DOS's mean-only supervision.
+            if "phdos_site" in self.tasks:
+                self.heads["phdos_site"] = self._build_head(n_phonon_site, softplus_out=True)
 
     def set_feature_stats(self, node, nbr, poly=None):
         self.node_mean.copy_(torch.as_tensor(node[0], dtype=self.node_mean.dtype))
@@ -513,6 +520,8 @@ class GPSCrystalNet(nn.Module):
             out["eph_a2f"] = self._segment_mean(self.heads["eph_a2f"](h), seg, B)  # (B, n_phonon)
         if "ph_dos" in self.tasks:
             out["ph_dos"] = self._segment_mean(self.heads["ph_dos"](h), seg, B)    # (B, n_phonon)
+        if "phdos_site" in self.tasks:
+            out["phdos_site"] = self.heads["phdos_site"](h)                 # (N, n_phonon_site) per-atom
         return out
 
     def _recompute_angle(self, d, static_angle):
@@ -602,6 +611,7 @@ class GPSCrystalNet(nn.Module):
             differentiable_geometry=multitask,
             n_energy=args.get("n_energy", 256),
             n_phonon=args.get("n_phonon", 256),
+            n_phonon_site=args.get("n_phonon_site", 64),
             dos_per_atom=args.get("dos_per_atom", True),
         )
 

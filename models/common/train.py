@@ -501,6 +501,17 @@ def _mt_loss(out, targets, masks, stats, weights, seg, spectrum_loss="l1"):
         spectrum("eph_a2f", out["eph_a2f"] - targets["eph_a2f"])
     if "ph_dos" in out and "ph_dos" in targets:
         spectrum("ph_dos", out["ph_dos"] - targets["ph_dos"])
+    if "phdos_site" in out and "phdos_site" in targets:
+        # per-ATOM spectrum: (N, bins) residual -> per-atom scalar error, masked
+        # by the structure flag broadcast over atoms (per_atom pattern); same
+        # spectrum_loss gate as the global spectra (MSE keeps peaks).
+        diff = out["phdos_site"] - targets["phdos_site"]
+        s, m = stats.get("phdos_site", 1.0), masks["phdos_site"][seg]
+        if spectrum_loss == "mse":
+            losses["phdos_site"] = _masked_mean((diff ** 2).mean(-1) / (s * s), m)
+        else:
+            losses["phdos_site"] = _masked_mean(diff.abs().mean(-1) / s, m)
+        maes["phdos_site"] = _masked_mean(diff.detach().abs().mean(-1), m)
 
     if not losses:
         raise ValueError("multitask loss has no terms: the model's tasks and the batch's "

@@ -36,6 +36,7 @@ from data import (CIFDataV4, _extract_ragged, _assemble_sample, _assemble_target
                       valence_node_features, VALENCE_NODE_FEA_LEN, CF_FEA_LEN, BVS_FEA_LEN,
                       NODE_FEA_LEN, NBR_FEA_LEN, POLY_FEA_LEN, ANGLE_FEA_LEN, GEO_FEATURE_COLS,
                       poly_node_summary, POLY_SUMMARY_FEA_LEN, PHONON_N_BINS,
+                      PHONON_SITE_BINS,
                       DIHEDRAL_FEA_LEN, DOS_N_ENERGY)
 
 PACK_VERSION = 1
@@ -53,6 +54,7 @@ _FIELDS = {
     "bvs":       (np.float32, BVS_FEA_LEN),           # baked bond-valence block (v4.4)
     "forces":    (np.float32, 3),    # atom-aligned multitask TARGET (NaN where absent)
     "magmom":    (np.float32, 1),    # atom-aligned multitask TARGET (NaN where absent)
+    "phdos_site": (np.float32, PHONON_SITE_BINS),  # atom-aligned site-projected phonon DOS (NaN where absent)
     "bond_cnt":  (np.int32, None),
     "bond_nbr":  (np.int32, None),
     "bond_fea":  (np.float32, NBR_FEA_LEN),
@@ -112,7 +114,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
     kept_pos, failures, lattices, dih_any, stresses, doses = [], [], [], [], [], []
     a2fs, ph_doses = [], []
     phys_any = {"forces": False, "magmom": False, "stress": False, "dos": False,
-                "a2f": False, "ph_dos": False}  # any finite -> has_X
+                "a2f": False, "ph_dos": False, "phdos_site": False}  # any finite -> has_X
     baked_any = {"valence": False, "cf": False, "bvs": False}  # baked blocks -> has_*
     baked_seen = {"valence": [0, 0], "cf": [0, 0], "bvs": [0, 0]}  # mixed refusal
     jimage_any = [False]   # any nonzero bond_jimage -> graphs carry exact PBC images
@@ -245,6 +247,7 @@ def pack_dataset(index_path, out_dir, n_workers=None, limit=None, chunksize=16,
         "has_cf": bool(baked_any["cf"]),
         "has_bvs": bool(baked_any["bvs"]),
         "has_forces": phys_any["forces"],
+        "has_phdos_site": phys_any["phdos_site"],
         "has_magmom": phys_any["magmom"],
         "has_stress": phys_any["stress"],
         "has_dos": phys_any["dos"],
@@ -482,6 +485,8 @@ class PackedCIFDataV4(Dataset):
                   else np.full((n, 3), np.nan, dtype=np.float32))
         magmom = (mm["magmom"][a0:a0 + n] if "magmom" in mm
                   else np.full((n, 1), np.nan, dtype=np.float32))
+        phdos_site = (mm["phdos_site"][a0:a0 + n] if "phdos_site" in mm
+                      else np.full((n, PHONON_SITE_BINS), np.nan, dtype=np.float32))
         stress = (self._stress[pos] if self._stress is not None
                   else np.full((3, 3), np.nan, dtype=np.float32))
         dos = (self._dos[pos] if self._dos is not None
@@ -502,6 +507,7 @@ class PackedCIFDataV4(Dataset):
             "bvs": bvs,
             "lattice": lattice,
             "forces": forces,
+            "phdos_site": phdos_site,
             "magmom": magmom,
             "stress": stress,
             "dos": dos,
