@@ -39,10 +39,16 @@ import os
 
 import torch
 
-_VERSION = 1
+_VERSION = 2
 
 PER_ATOM_NAMES = ["magmom_abs", "mom_align", "f_norm", "f_c", "f_ab",
                   "f_radial", "site_energy", "dos_q1", "dos_q2", "dos_q3", "dos_q4"]
+# pf-v2 (rung 49+): appended when the checkpoint carries the phdos_site head —
+# per-atom phonon-spectrum summaries (0-60 THz site grid): spectral centroid,
+# low-omega fraction (<6 THz, site softness) and high-omega fraction (>15 THz,
+# the light-element/oxygen optical band). Channel count is checkpoint-dependent;
+# consumers read per_atom_names from the cache (FineTune already does).
+PHONON_SITE_CHANNELS = ["ps_centroid", "ps_lowfrac", "ps_highfrac"]
 
 # Tasks the group-P derivation consumes. forces implies energy (conservative).
 _REQUIRED_TASKS = {"energy", "forces", "magmom", "dos"}
@@ -51,6 +57,19 @@ _REQUIRED_TASKS = {"energy", "forces", "magmom", "dos"}
 def default_cache_path(checkpoint_path, index_path):
     key = hashlib.sha1(f"{checkpoint_path}|{index_path}".encode()).hexdigest()[:12]
     return os.path.join("database", "datafiles", "MP", "pred_cache", f"pf_v{_VERSION}_{key}.pt")
+
+
+@torch.no_grad()
+def _phonon_site_channels(pa_ps):
+    """(N, PHONON_SITE_CHANNELS) from the per-atom phdos_site head output."""
+    from data import PHONON_SITE_BINS, PHONON_W_MAX_THZ
+    n = pa_ps.shape[1]
+    w = (torch.arange(n, device=pa_ps.device, dtype=pa_ps.dtype) + 0.5) * (PHONON_W_MAX_THZ / n)
+    tot = pa_ps.sum(1).clamp_min(1e-8)
+    centroid = (pa_ps * w).sum(1) / tot
+    lowf = pa_ps[:, w < 6.0].sum(1) / tot
+    highf = pa_ps[:, w > 15.0].sum(1) / tot
+    return torch.stack([centroid, lowf, highf], dim=1)
 
 
 @torch.no_grad()
@@ -89,9 +108,10 @@ def build_pred_cache(model, ds, collate, device, batch_size=32, num_workers=4):
     feats, mag_raw, glob = {}, {}, {}
     fsum_max = fsum_acc = n_struct = 0.0
     grabbed = {}
+    hook_keys = ["energy", "dos"] + (["phdos_site"] if "phdos_site" in (model.tasks or ()) else [])
     hooks = [model.heads[k].register_forward_hook(
                  (lambda key: lambda _m, _i, o: grabbed.__setitem__(key, o))(k))
-             for k in ("energy", "dos")]
+             for k in hook_keys]
     try:
         # the training loop's leaf construction (models/common/train.py) — the
         # collate slots [6..9] (seg, n_crystals, frac, lattice) are the same in
@@ -116,7 +136,10 @@ def build_pred_cache(model, ds, collate, device, batch_size=32, num_workers=4):
             pa_dos = grabbed["dos"].detach()
             d = model._bond_vectors(cart.detach(), lattice, inp[2], jimage, seg)
             pa = _derive_per_atom(forces, mag, site_e, pa_dos, d,
-                                  lattice, seg, inp[2]).cpu()
+                                  lattice, seg, inp[2])
+            if "phdos_site" in grabbed:
+                pa = torch.cat([pa, _phonon_site_channels(grabbed["phdos_site"].detach())], dim=1)
+            pa = pa.cpu()
             # translation-invariance check: conservative forces sum to ~0 per cell
             fs = torch.zeros(B, 3, device=forces.device).index_add_(0, seg, forces)
             fs = fs.norm(dim=-1)
@@ -142,7 +165,9 @@ def build_pred_cache(model, ds, collate, device, batch_size=32, num_workers=4):
     print(f"[pf] pred cache built: {len(feats)} structures; "
           f"|sum F| mean {fsum_acc / max(n_struct, 1):.2e} max {fsum_max:.2e} eV/A")
     _sanity_print(feats, glob, model.n_phonon if "eph_a2f" in model.tasks else None)
-    return {"version": _VERSION, "per_atom_names": list(PER_ATOM_NAMES),
+    names = list(PER_ATOM_NAMES) + (list(PHONON_SITE_CHANNELS)
+                                     if "phdos_site" in (model.tasks or ()) else [])
+    return {"version": _VERSION, "per_atom_names": names,
             "feats": feats, "magmom_raw": mag_raw, "global": glob}
 
 
@@ -150,7 +175,8 @@ def _sanity_print(feats, glob, n_phonon):
     """Domain-shift gate: per-channel spread + a2f-derived lambda quartiles.
     A collapsed distribution here means the head gets a constant, not a feature."""
     mat = torch.cat(list(feats.values()))
-    for j, name in enumerate(PER_ATOM_NAMES):
+    names_all = list(PER_ATOM_NAMES) + list(PHONON_SITE_CHANNELS)
+    for j, name in enumerate(names_all[: mat.shape[1]]):
         col = mat[:, j]
         print(f"[pf]   {name:12s} mean {col.mean():+.3f}  std {col.std():.3f}  "
               f"p5 {col.quantile(0.05):+.3f}  p95 {col.quantile(0.95):+.3f}")
