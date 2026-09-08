@@ -70,34 +70,81 @@ class DeepSetsPool(nn.Module):
       the SAME pooled width. None -> the full single Linear (default, unchanged).
     - ``agg``: which aggregations to concat — "meanmax" (default, out=2*pool_dim),
       "mean" or "max" (out=pool_dim). Tests where the (cuprate) signal lives: the
-      max branch captures the single most extreme site (the active sublattice)."""
+      max branch captures the single most extreme site (the active sublattice).
+    - ``phi`` (2026-09-08, the phi-budget test — at 256-d the full Linear g is
+      16.4k of the head's 27.9k params): what the per-atom map is.
+        "linear": softplus(W h + b)              (default; W in->pool_dim, rank optional)
+        "diag"  : softplus(a * h + b), a,b in R^in — an ELEMENTWISE nonlinearity
+                  before pooling, no mixing (2*in params). The pooled vector is
+                  then n_agg*in wide, so a FROZEN PCAWhiten (fit once on the
+                  training pool, 0 params) brings it to the same n_agg*pool_dim
+                  width the trunk would see under "linear".
+        "pca"   : a FROZEN PCAWhiten in->pca_in on the per-atom rows (0 params),
+                  then softplus(W' x + b) with W' pca_in->pool_dim (~2k at 32->64).
+      Both frozen variants need ``fit(x, seg, n)`` on the training per-atom rows
+      before use (``needs_fit``); TcHead.fit_pool forwards it."""
 
-    def __init__(self, in_dim: int, pool_dim: int = 32, rank: int = None, agg: str = "meanmax"):
+    def __init__(self, in_dim: int, pool_dim: int = 32, rank: int = None, agg: str = "meanmax",
+                 phi: str = "linear", pca_in: int = 32):
         super().__init__()
         if agg not in ("mean", "max", "meanmax"):
             # Validate HERE: an unknown agg would compute out_dim=pool_dim below but
             # fall through to the meanmax concat (2*pool_dim) in forward — an opaque
             # LayerNorm shape crash deep in training instead of a named config error.
             raise ValueError(f"unknown agg {agg!r} (use 'mean', 'max' or 'meanmax')")
-        if rank:
-            self.g = nn.Sequential(nn.Linear(in_dim, int(rank)), nn.Softplus(),
+        if phi not in ("linear", "diag", "pca"):
+            raise ValueError(f"unknown phi {phi!r} (use 'linear', 'diag' or 'pca')")
+        if phi == "diag" and rank:
+            raise ValueError("pool_rank applies to phi 'linear'/'pca' only")
+        n_agg = 2 if agg == "meanmax" else 1
+        self.phi = phi
+        g_in = in_dim
+        if phi == "pca":
+            self.pre = PCAWhiten(in_dim, int(pca_in))   # frozen; fit() on train atoms
+            g_in = int(pca_in)
+        if phi == "diag":
+            self.scale = nn.Parameter(torch.ones(in_dim))
+            self.shift = nn.Parameter(torch.zeros(in_dim))
+            self.post = PCAWhiten(in_dim * n_agg, pool_dim * n_agg)  # frozen; fit() on train pool
+        elif rank:
+            self.g = nn.Sequential(nn.Linear(g_in, int(rank)), nn.Softplus(),
                                    nn.Linear(int(rank), pool_dim))
         else:
             # Bare Linear (NOT a one-element Sequential): keeps the historical
             # state_dict keys (pool.g.weight, not pool.g.0.weight) so pre-existing
             # head checkpoints stay loadable key-for-key.
-            self.g = nn.Linear(in_dim, pool_dim)
+            self.g = nn.Linear(g_in, pool_dim)
         self.act = nn.Softplus()
         self.agg = agg
-        self.out_dim = pool_dim * (2 if agg == "meanmax" else 1)
+        self.out_dim = pool_dim * n_agg
 
-    def forward(self, x, seg, n):
-        g = self.act(self.g(x))
+    @property
+    def needs_fit(self) -> bool:
+        return self.phi in ("diag", "pca")
+
+    def _agg(self, g, seg, n):
         if self.agg == "mean":
             return _segment_mean(g, seg, n)
         if self.agg == "max":
             return _segment_max(g, seg, n)
         return torch.cat([_segment_mean(g, seg, n), _segment_max(g, seg, n)], dim=1)
+
+    @torch.no_grad()
+    def fit(self, x, seg, n):
+        """Fit the frozen projection(s) on the TRAINING per-atom rows x (A,D)
+        with segment ids seg into n structures. No-op for phi 'linear'."""
+        if self.phi == "pca":
+            self.pre.fit(x)
+        elif self.phi == "diag":
+            self.post.fit(self._agg(self.act(x * self.scale + self.shift), seg, n))
+        return self
+
+    def forward(self, x, seg, n):
+        if self.phi == "diag":
+            return self.post(self._agg(self.act(x * self.scale + self.shift), seg, n))
+        if self.phi == "pca":
+            x = self.pre(x)
+        return self._agg(self.act(self.g(x)), seg, n)
 
 
 class AttentionPool(nn.Module):
@@ -183,7 +230,8 @@ class TcHead(nn.Module):
 
     Pipeline: pool per-atom h (pooling: "meanmax" -> PCAWhiten(pca_k);
     "deepsets"/"attention" -> learned pool sized by pool_dim, with DeepSets
-    knobs pool_rank (low-rank g) and pool_agg (mean/max/meanmax)) -> combine
+    knobs pool_rank (low-rank g), pool_agg (mean/max/meanmax) and pool_phi
+    (linear/diag/pca per-atom map; diag/pca need fit_pool)) -> combine
     with the standardized composition descriptors per head_arch:
       concat      — [pooled || phys] -> LayerNorm -> 1-hidden trunk (default)
       struct_only — pooled embedding alone (no descriptors; the encoder-only arm)
@@ -198,7 +246,8 @@ class TcHead(nn.Module):
                  hidden: int = 64, dropout: float = 0.2,
                  pooling: str = "meanmax", pool_dim: int = 32,
                  n_classes: int = 2, head_arch: str = "concat",
-                 pool_rank: int = None, pool_agg: str = "meanmax"):
+                 pool_rank: int = None, pool_agg: str = "meanmax",
+                 pool_phi: str = "linear", pool_pca_in: int = 32):
         super().__init__()
         # `enc_dim` is the pooled width (2*D) for meanmax, the per-atom width (D)
         # for the learned pools — HeadMain passes the right one.
@@ -207,7 +256,8 @@ class TcHead(nn.Module):
             self.pca = PCAWhiten(enc_dim, pca_k)
             pooled_dim = pca_k
         elif pooling == "deepsets":
-            self.pool = DeepSetsPool(enc_dim, pool_dim, rank=pool_rank, agg=pool_agg)
+            self.pool = DeepSetsPool(enc_dim, pool_dim, rank=pool_rank, agg=pool_agg,
+                                     phi=pool_phi, pca_in=pool_pca_in)
             pooled_dim = self.pool.out_dim
         elif pooling == "attention":
             self.pool = AttentionPool(enc_dim, pool_dim)
@@ -248,6 +298,15 @@ class TcHead(nn.Module):
         # log1p-Kelvin z-normalization of the regression target (train split).
         self.register_buffer("tc_mean", torch.zeros(1))
         self.register_buffer("tc_std", torch.ones(1))
+
+    @torch.no_grad()
+    def fit_pool(self, x, seg, n):
+        """Fit a learned pool's FROZEN projections (deepsets phi 'diag'/'pca') on
+        the training per-atom rows; no-op for every other pooling."""
+        pool = getattr(self, "pool", None)
+        if pool is not None and getattr(pool, "needs_fit", False):
+            pool.fit(x, seg, n)
+        return self
 
     @torch.no_grad()
     def fit_target(self, tc_kelvin: torch.Tensor):

@@ -316,7 +316,9 @@ def run(config_path):
                        pooling=pooling, pool_dim=cfg["pool_dim"],
                        head_arch=cfg.get("head_arch", "concat"),
                        pool_rank=cfg.get("pool_rank"),
-                       pool_agg=cfg.get("pool_agg", "meanmax")).to(device)
+                       pool_agg=cfg.get("pool_agg", "meanmax"),
+                       pool_phi=cfg.get("pool_phi", "linear"),
+                       pool_pca_in=cfg.get("pool_pca_in", 32)).to(device)
         metrics["fresh_params"] = model.n_fresh_params()
         model.fit_target(tc[sc_mask["train"]].cpu())
         # PCA + standardizers fit on the widest training pool this seed sees.
@@ -324,6 +326,8 @@ def run(config_path):
         fit_mask = all_mask["train"] if do_class else sc_mask["train"]
         if not learned_pool:
             model.pca.fit(enc[fit_mask].cpu())
+        else:
+            model.fit_pool(*sc_atoms["train"])   # deepsets phi diag/pca only; else no-op
         model.phys_std.fit(phys[fit_mask].cpu())
         model.to(device)
 
