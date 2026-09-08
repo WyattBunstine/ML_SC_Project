@@ -30,6 +30,12 @@
 %  stride-3 subset 580,112 frames (all carry energy; forces/stress
 %  ~100%; magmom ~14% -> ~81k; bandgap ~19% -> ~110k), DOS pack 62,464,
 %  T_c set SC_MP_V6 7,852 labeled (6,043 T_c>0 + 1,809 T_c=0).
+%  2026-09-08: electron-phonon targets added (Cerqueira DFPT corpus,
+%  8,253 metals; rungs 35+/49): alpha^2F(omega) 256-bin spectrum head
+%  (softplus, segment-mean, 66k at 128-dim) and SITE-PROJECTED phonon
+%  DOS (64-bin per-ATOM head, 41k -- supervised per atom, not pooled;
+%  rung 49).  Head params quoted at the figure's 128-dim era for
+%  consistency with the other heads.
 % =====================================================================
 
 % ---- palette (shared with gps_encoder_fig.tex) ----------------------
@@ -143,15 +149,21 @@
 \node[pttarget] (m)   at (-2.1,4.10)  {magnetic\\[-2pt]moment\\[-2pt]$n\!\approx\!81$k};
 \node[pttarget] (Eg)  at (1.0,1.50)   {band gap\\[-2pt]$n\!\approx\!110$k};
 \node[pttarget] (dos) at (4.35,4.10)  {DOS\\[-2pt]$n\!=\!62.5$k};
+\node[pttarget] (a2f) at (8.55,6.75)
+  {$\alpha^2\!F(\omega)$\\[-2pt]$n\!=\!8.3$k};
+\node[pttarget] (psite) at (10.30,1.70)
+  {site phonon\\[-2pt]DOS (per atom)\\[-2pt]$n\!=\!8.3$k};
 \node[pttc]     (tc)  at (4.2,-1.90)  {$T_c$\\[-2pt]\mdseries $n\!=\!7.9$k};
 
 \draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.58] {33k} (E);
 \draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.58] {33k} (m);
 \draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.60] {33k} (Eg);
 \draw[pthead] (h) -- node[ptpar, right=2pt, pos=0.62] {50k} (dos);
+\draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.55] {66k} (a2f);
+\draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.60] {41k} (psite);
 \draw[ptderiv] (E) -- node[ptlbl, anchor=east, pos=0.55] {$-\partial E/\partial r$} (F);
 \draw[ptderiv] (E) -- node[ptlbl, anchor=west, pos=0.55] {$\partial E/\partial\varepsilon$} (sig);
-\draw[pttchead] (h) -- node[ptlbl, accent, anchor=west, pos=0.78]
+\draw[pttchead] (h) -- node[ptlbl, accent, anchor=east, pos=0.95]
   {pool + MLP\ \ 11k} (tc);
 
 % head labels, stacked to the right of the heads they describe
@@ -164,7 +176,7 @@
 % stage banners at the bottom, centered on the full figure width
 \node[ptstage, text=ink!70, anchor=north] (s1)
   at ([yshift=-10mm]current bounding box.south)
-  {Stage 1 \, multi-task physics pretraining (Materials Project)};
+  {Stage 1 \, multi-task physics pretraining (Materials Project + Cerqueira e--ph)};
 \node[ptstage, accent, anchor=north] (s2) at ([yshift=-3mm]s1.south)
   {Stage 2 \, $T_c$ transfer (3DSC + NEMAD)};
 
