@@ -15,7 +15,13 @@ for i in $(seq 1 720); do
   sleep 60
 done
 N_TOGO=$(ls database/datafiles/TogoPhononDB/dos_raw | wc -l)
-note "prereqs done: togo dos_raw $N_TOGO"
+# Completion guard (2026-09-08 lesson): the togo processor was OOM-killed mid-run
+# and the pgrep wait-loop happily proceeded to build a pack with 6,511 togo
+# instead of ~9.7k. Only its own final summary line proves it finished.
+if ! tail -3 model_data/cf_calib/togo_resume.out 2>/dev/null | grep -q "togo dos done"; then
+  note "HALT: togo processor exited without its 'togo dos done' summary (dos_raw $N_TOGO) — killed? rerun it, then this script"; exit 1
+fi
+note "prereqs done: togo dos_raw $N_TOGO ($(tail -1 model_data/cf_calib/togo_resume.out))"
 
 python scripts/build_phdos_corpus.py build
 if [ $? -ne 0 ] || [ ! -f database/datafiles/MP_PhononDOS/PHDOS_index.pickle ]; then
@@ -27,6 +33,9 @@ python scripts/build_phdos_corpus.py bake
 if [ $? -ne 0 ]; then note "HALT: bake failed"; exit 1; fi
 note "bake done"
 
+# pack-dataset writes into an existing dir in place — move any earlier pack aside
+[ -d database/datafiles/MP_PhononDOS/phdos_pack_v45 ] && \
+  mv database/datafiles/MP_PhononDOS/phdos_pack_v45 "database/datafiles/MP_PhononDOS/phdos_pack_v45_old_$(date +%m%d-%H%M)"
 python main.py pack-dataset --index database/datafiles/MP_PhononDOS/PHDOS_index.pickle \
     --out database/datafiles/MP_PhononDOS/phdos_pack_v45
 if [ $? -ne 0 ]; then note "HALT: pack failed"; exit 1; fi
