@@ -498,9 +498,22 @@ def run(cfg, out_dir, device):
                       n_classes=(int(cfg.get("n_gs_classes", 4)) if use_gs else 2),
                       head_arch=cfg.get("head_arch", "concat"),
                       pool_rank=cfg.get("pool_rank"),
-                      pool_agg=cfg.get("pool_agg", "meanmax")).to(device)
+                      pool_agg=cfg.get("pool_agg", "meanmax"),
+                      pool_phi=cfg.get("pool_phi", "linear"),
+                      pool_pca_in=cfg.get("pool_pca_in", 32)).to(device)
         head.fit_target(tc_tr)
         head.phys_std.fit(phys_t[tr_rows].cpu()); head.to(device)
+        if getattr(getattr(head, "pool", None), "needs_fit", False):
+            # deepsets phi 'diag'/'pca': the FROZEN projection is fit once per seed on
+            # the frozen encoder's cached train per-atom rows (exactly what phase A
+            # trains on); phase B's encoder drift is the same small drift the head's
+            # own weights see. 0 fresh params either way.
+            h_fit, seg_fit = cat_cached(h_cache["train"], train_ids_sc, device)
+            h_fit = with_pf(h_fit, train_ids_sc, seg_fit.numel())
+            head.fit_pool(h_fit, seg_fit, len(train_ids_sc))
+            print(f"[ft] pool phi={cfg.get('pool_phi')}: frozen projection fit on "
+                  f"{len(train_ids_sc)} train structures / {seg_fit.numel()} atoms; "
+                  f"head fresh params {head.n_fresh_params()}", flush=True)
         return head
 
     # ---- phase-A embedding cache: the FROZEN encoder's per-atom h for train+val ----
