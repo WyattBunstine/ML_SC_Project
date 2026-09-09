@@ -64,6 +64,36 @@ class _IdentityEncoder(torch.nn.Module):
         self.node_std.copy_(torch.as_tensor(node[1], dtype=self.node_std.dtype))
 
 
+def _save_seed_model(out_dir, seed, mode, model, base_state, head, cfg, ens_space, use_gs, full):
+    """Persist one seed's fine-tuned model so NEW materials can be scored later
+    without retraining (scripts/predict_tc.py; user request 2026-09-09 — the
+    July V4 nickelate run saved nothing and had to be retrained to be reused).
+    Encoder: with a pretrained checkpoint only the tensors that CHANGED vs the
+    base state are stored (the unfrozen params + any drifted buffer; the base
+    is named in config.json), a few MB per seed; no-pretrain arms (identity /
+    scratch) store the full state. Head: full state_dict — PCA, descriptor
+    standardizer, target normalizer and pool-projection buffers included."""
+    sd = model.state_dict()
+    if full or cfg.get("checkpoint") is None:
+        enc = {k: v.detach().cpu().clone() for k, v in sd.items()}
+    else:
+        enc = {k: v.detach().cpu().clone() for k, v in sd.items()
+               if k not in base_state or not torch.equal(v, base_state[k])}
+    try:
+        import pandas as _pd
+        desc_names = list(_pd.read_pickle(cfg["descriptors"])["names"])
+    except Exception:  # noqa: BLE001
+        desc_names = None
+    torch.save({"seed": seed, "unfreeze": mode,
+                "encoder_full": bool(full or cfg.get("checkpoint") is None),
+                "encoder_state": enc,
+                "head_state": {k: v.detach().cpu().clone() for k, v in head.state_dict().items()},
+                "head_kwargs": getattr(head, "_kwargs", None),
+                "ensemble_space": ens_space, "use_gs": use_gs, "desc_names": desc_names,
+                "checkpoint": cfg.get("checkpoint"), "encoder_args": cfg.get("encoder_args")},
+               os.path.join(out_dir, f"model_seed{seed}.pt"))
+
+
 def _encoder(checkpoint_path, index_path, device, encoder_args=None):
     """Rebuild + load the pretrained encoder and the matching graph dataset. The
     feature-flag enumeration lives in ONE place (data.load_cif_dataset_from_args,
@@ -491,16 +521,18 @@ def run(cfg, out_dir, device):
         torch.manual_seed(seed)
         # head_in_dim 0 (G-only arm: no latents, no per-atom pf) -> pooling "none":
         # the trunk sees the descriptor block (incl. appended G features) alone.
-        head = TcHead(head_in_dim, phys_t.shape[1], cfg["pca_k"], cfg["hidden"],
-                      cfg["dropout"],
-                      pooling=("none" if head_in_dim == 0 else ft_pooling),
-                      pool_dim=pool_dim,
-                      n_classes=(int(cfg.get("n_gs_classes", 4)) if use_gs else 2),
-                      head_arch=cfg.get("head_arch", "concat"),
-                      pool_rank=cfg.get("pool_rank"),
-                      pool_agg=cfg.get("pool_agg", "meanmax"),
-                      pool_phi=cfg.get("pool_phi", "linear"),
-                      pool_pca_in=cfg.get("pool_pca_in", 32)).to(device)
+        head_kwargs = dict(enc_dim=head_in_dim, phys_dim=int(phys_t.shape[1]),
+                           pca_k=cfg["pca_k"], hidden=cfg["hidden"], dropout=cfg["dropout"],
+                           pooling=("none" if head_in_dim == 0 else ft_pooling),
+                           pool_dim=pool_dim,
+                           n_classes=(int(cfg.get("n_gs_classes", 4)) if use_gs else 2),
+                           head_arch=cfg.get("head_arch", "concat"),
+                           pool_rank=cfg.get("pool_rank"),
+                           pool_agg=cfg.get("pool_agg", "meanmax"),
+                           pool_phi=cfg.get("pool_phi", "linear"),
+                           pool_pca_in=cfg.get("pool_pca_in", 32))
+        head = TcHead(**head_kwargs).to(device)
+        head._kwargs = head_kwargs          # persisted with the model (predict_tc.py)
         head.fit_target(tc_tr)
         head.phys_std.fit(phys_t[tr_rows].cpu()); head.to(device)
         if getattr(getattr(head, "pool", None), "needs_fit", False):
@@ -756,6 +788,9 @@ def run(cfg, out_dir, device):
             k_pred = k_reg
         seed_preds.append((bids, k_pred))
         seed_probs.append((bids, probs))
+        if cfg.get("save_models", True):
+            _save_seed_model(out_dir, seed, mode, model, base_state, head, cfg, ens_space,
+                             use_gs, full=identity_enc)
         # per-seed single-model test MAE (the ensemble is the headline; this shows
         # spread). Named explicitly: _all_K pools every test row INCLUDING tc=0
         # (flattered by easy zeros on negative-rich pools), _pos_K is SC-only —
