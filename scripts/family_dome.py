@@ -10,7 +10,10 @@ chains put the undoped parent nearer 2.3, so interpret per family), guide peak
 and its position.
 
 Usage:
-    python scripts/family_dome.py <run_dir> [--plot out.png [title]]
+    python scripts/family_dome.py <run_dir> [--plot out.png [title]] [--annotate]
+--annotate labels every row's ACTUAL point with its stoichiometry (unit
+subscripts dropped, e.g. Y1Ba2Cu3O6.9 -> YBa2Cu3O6.9) on a wider canvas;
+labels alternate above/below in Cu-ox order to limit overlap.
 """
 import json
 import os
@@ -75,11 +78,23 @@ def family_dome(run_dir):
         "peak": float(guide.max()), "peak_cu": float(gx[guide.argmax()])}
 
 
-def plot(f, gx, guide, out, title):
+def pretty(formula):
+    """Y1Ba2Cu3O6.9 -> YBa2Cu3O6.9 (drop unit counts, keep fractions)."""
+    return re.sub(r"([A-Z][a-z]?)1(?=[A-Z]|$)", r"\1", formula)
+
+
+def plot(f, gx, guide, out, title, annotate=False):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(7.5, 5))
+    if annotate:
+        # numbered points + a key panel: direct labels are unreadable where 40
+        # compositions share one Cu-ox bin (the YBa cluster at 2.25-2.35)
+        fig = plt.figure(figsize=(21, 9.5))
+        ax = fig.add_axes([0.035, 0.08, 0.47, 0.86])
+        key = fig.add_axes([0.525, 0.02, 0.47, 0.96]); key.axis("off")
+    else:
+        fig, ax = plt.subplots(figsize=(7.5, 5))
     for _, r in f.iterrows():
         ax.plot([r.cu, r.cu], [r.tc_true_K, r.tc_head_K], color="0.8", lw=0.7, zorder=1)
     ax.scatter(f.cu, f.tc_true_K, s=28, c="tab:blue", label="actual", zorder=3)
@@ -91,7 +106,26 @@ def plot(f, gx, guide, out, title):
     ax.set_ylabel("$T_c$ (K)")
     ax.set_title(title)
     ax.legend(frameon=False, fontsize=9)
-    fig.tight_layout()
+    if annotate:
+        order = f.sort_values(["cu", "tc_true_K"]).reset_index(drop=True)
+        slots = [(4, 4, "left", "bottom"), (-4, -4, "right", "top"),
+                 (4, -4, "left", "top"), (-4, 4, "right", "bottom")]
+        for k, r in order.iterrows():
+            dx, dy, ha, va = slots[k % 4]
+            ax.annotate(str(k + 1), (r.cu, r.tc_true_K), xytext=(dx, dy),
+                        textcoords="offset points", fontsize=6, ha=ha, va=va,
+                        color="0.2", zorder=4)
+        ncol = 2 if len(order) <= 60 else 3
+        per = -(-len(order) // ncol)
+        for c in range(ncol):
+            lines = [f"{k + 1:>2d}  {pretty(r.formula):<24s} {r.tc_true_K:5.1f} \u2192 {r.tc_head_K:5.1f}"
+                     for k, r in order.iloc[c * per:(c + 1) * per].iterrows()]
+            key.text(c / ncol, 0.985, "\n".join(lines), family="monospace", fontsize=6.6,
+                     va="top", ha="left", transform=key.transAxes)
+        key.text(0, 1.0, "#   stoichiometry (Cu-ox order)        true \u2192 predicted T$_c$ (K)",
+                 fontsize=7.5, va="bottom", ha="left", transform=key.transAxes)
+    else:
+        fig.tight_layout()
     fig.savefig(out, dpi=150)
 
 
@@ -104,5 +138,6 @@ if __name__ == "__main__":
     if "--plot" in sys.argv:
         i = sys.argv.index("--plot")
         out = sys.argv[i + 1]
-        title = sys.argv[i + 2] if len(sys.argv) > i + 2 else "family holdout dome"
-        plot(f, gx, guide, out, title)
+        title = sys.argv[i + 2] if len(sys.argv) > i + 2 and not sys.argv[i + 2].startswith("--") \
+            else "family holdout dome"
+        plot(f, gx, guide, out, title, annotate="--annotate" in sys.argv)
