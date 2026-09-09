@@ -1,0 +1,92 @@
+[report] 70851 unseen materials; e-ph columns from encoders ['51', '47']
+  51: lambda quartiles p25/50/75/95 [0.267, 0.396, 0.582, 1.02] | Tc_AD(0.10) >= 10 K among metallic near-hull unseen: 1141
+  47: lambda quartiles p25/50/75/95 [0.246, 0.364, 0.534, 0.969] | Tc_AD(0.10) >= 10 K among metallic near-hull unseen: 648
+
+=== (1) clean ML shortlist (35) with the Eliashberg readout ===
+        id            formula  tc_38  tc_49  tc_51  tc_mean  lambda_51  wlog_K_51  tcAD_mu010_51  lambda_47  wlog_K_47  tcAD_mu010_47 supercon
+mp-1228341     Ba4GdY(Cu3O7)2  165.7   55.5   83.2    101.5       0.34      355.8            0.5       0.42      236.0            1.3     none
+mp-1227782        BaSrEuCu3O7   95.3   53.6   64.3     71.1       0.28      271.6            0.1       0.37      302.7            0.9   family
+mp-1228347    Ba6Nd2Y(CuO2)12   91.1   49.9   47.8     62.9       0.28      311.7            0.1       0.29      274.3            0.1   family
+mp-1227765        BaSrErCu3O7   69.7   53.4   55.9     59.7       0.33      378.0            0.4       0.35      234.7            0.4   family
+ mp-622105         Ba2DyCu3O7   61.4   52.8   57.9     57.4       0.40      341.6            1.5       0.39      248.5            0.9   family
+mp-1218536 Sr4CaLaTl2(Cu2O7)2   45.5   37.2   55.2     46.0       0.12      321.3            0.0       0.22      236.8            0.0   family
+ mp-561182     Ba4Tl2Cu2HgO10   37.0   46.7   35.6     39.8       0.20      259.4            0.0       0.15      284.5            0.0   family
+mp-1147544         Ba2TlCu3O7   37.1   48.7   32.3     39.4       0.24      281.6            0.0       0.33      215.4            0.2   family
+ mp-556733   Ba2Ca3Tl2(CuO3)4   31.1   33.9   37.2     34.1       0.24      266.3            0.0       0.19      286.0            0.0   family
+mp-1227433       BaSrY(CuO2)4   33.0   37.3   31.0     33.8       0.28      326.7            0.1       0.29      275.3            0.1   family
+mp-1227474        BaSrSmCu3O7   49.6   17.5   27.6     31.6       0.20      320.0            0.0       0.28      275.4            0.1   family
+mp-1229200      Ba10Cu5Hg5O21   39.1   31.5   20.4     30.3       0.28      321.6            0.1       0.24      249.4            0.0   family
+mp-1227498        BaSrNdCu3O7   47.2   13.3   29.0     29.9       0.19      316.6            0.0       0.29      270.1            0.1   family
+mp-1214767    Ba2GdCu2(HgO4)2   35.5   22.4   28.9     28.9       0.25      262.9            0.0       0.29      267.8            0.1     none
+mp-1228333       Ba6Cu3Hg3O13   38.2   25.6   15.3     26.4       0.37      205.3            0.6       0.27      310.9            0.0   family
+mp-1042162           BaYCu2O5   25.9   23.7   28.5     26.0       0.21      410.7            0.0       0.31      434.1            0.3   family
+   mp-9117        Sr2YTlCu2O7   19.5   28.9   28.6     25.7       0.16      323.3            0.0       0.20      232.9            0.0    exact
+ mp-550722         Ba2Tl2CuO6   29.0   19.6   21.9     23.5       0.19      254.9            0.0       0.14      285.3            0.0   family
+mp-1228463    Ba3Sr5Tl5Cu3O19   20.8   23.4   19.2     21.1       0.12      307.5            0.0       0.15      232.4            0.0     none
+mp-1214587       Ba2NdCu2HgO7   35.3   16.4   10.3     20.7       0.23      335.4            0.0       0.25      310.5            0.0   family
+  mp-22618           Y(CuO2)2   16.0   17.0   22.1     18.4       0.51      318.9            4.3       0.21      243.5            0.0   family
+  mp-29917         Ca5(CuO2)6   16.0   23.5   12.8     17.5       0.59      361.8            8.1       0.35      329.3            0.6   family
+mp-1214673      Ba2La2TlCu2O9   20.0   13.7   15.8     16.5       0.31      290.7            0.2       0.28      206.1            0.1   family
+ mp-559633            Cu6PbO8   19.0   18.2   12.0     16.4       0.23      245.1            0.0       0.17      166.3            0.0     none
+ mp-975106           Rb2Bi2O5   25.2   10.6   13.4     16.4       0.13      187.7            0.0       0.25      199.0            0.0   family
+mp-1184760            K2Bi2O5   13.3   15.8   19.3     16.1       0.14      150.1            0.0       0.32      202.3            0.2   family
+mp-1220742          Nb12Al3Ga   22.3   13.4   11.9     15.9       0.67      193.7            6.3       0.71      208.1            7.7   family
+   mp-9416          La(CuO2)2   12.7   17.7   15.4     15.3       0.21      287.4            0.0       0.17      271.5            0.0   family
+mp-1223333        KSr2(BiO3)3   15.7   16.4   12.7     14.9       0.15      213.3            0.0       0.15      259.6            0.0   family
+mp-1227606       BaSrYTlCu2O7   13.3   15.0   15.8     14.7       0.16      332.6            0.0       0.18      252.8            0.0     none
+ mp-754631            NaCu2O3   14.9   12.7   15.7     14.4       0.30      350.8            0.2       0.26      246.6            0.0     none
+mp-1218868       Sr2GdCu2RuO8   16.2   15.9   10.6     14.2       0.27      279.4            0.0       0.31      295.3            0.2    exact
+mp-1220753        NaHf6(NCl)6   11.7   15.6   13.3     13.5       0.61      197.4            5.0       0.27      253.5            0.0   family
+mp-1223231         KTl(CoSe)4   13.3   13.5   11.6     12.8       0.33      115.0            0.1       0.35      158.8            0.3     none
+  mp-20707          Gd(CuO2)2   10.5   10.9   11.8     11.1       0.39      308.9            1.1       0.40      216.4            1.0   family
+
+=== (2) Eliashberg screen: unseen, metallic, near-hull, ranked by Tc_AD(0.10) of encoder 51 ===
+        id     formula    chem  lambda_51  wlog_K_51  tcAD_mu010_51  lambda_47  wlog_K_47  tcAD_mu010_47  tc_mean  e_above_hull theoretical supercon  supercon_tc_family
+mp-1002181         TcN   other       1.36      330.6           38.5       0.59      394.0            8.7      2.0         0.095        True     none                 NaN
+  mp-22072        YbF3   other       1.41      314.4           38.4       0.53      159.7            2.5      0.3         0.000       False     none                 NaN
+  mp-12633      Mn5B2P   other       1.37      322.3           37.6       0.57      285.7            5.6      0.0         0.000       False     none                 NaN
+ mp-770881     Mn2BeO4   other       1.28      320.1           34.5       0.40      253.0            1.1      0.4         0.039        True     none                 NaN
+ mp-764021     NaMn2O4   other       1.78      213.6           34.1       0.92      153.9           10.0      0.7         0.060        True     none                 NaN
+   mp-7424        BPd2   other       1.25      320.1           33.4       0.78      166.5            7.7      1.7         0.000       False     none                 NaN
+  mp-20517        BPd3   other       1.08      376.0           32.0       0.74      190.5            7.9      2.7         0.000       False     none                 NaN
+ mp-770511     LiMn3O5   other       1.21      308.3           30.8       0.72      218.3            8.4      0.5         0.052        True     none                 NaN
+   mp-1849        Mn2P   other       1.19      305.8           29.6       0.87      259.2           14.9      0.0         0.000       False   family               0.000
+mp-1224413       H3Pd4 hydride       1.10      339.0           29.5       0.70      217.3            7.9      3.5         0.013        True   family               9.275
+mp-1442990     CaMn4O8   other       1.18      295.8           28.6       0.58      260.4            5.4      1.0         0.056        True     none                 NaN
+mp-1190609         VO2   other       1.32      249.3           28.0       0.34      336.6            0.5      0.6         0.080       False   family               2.400
+mp-1104668      Eu3As4   other       4.11       78.5           28.0       1.24      171.7           17.5      0.6         0.000       False     none                 NaN
+  mp-21434       CoCO3   other       1.33      244.1           27.9       0.29      358.9            0.1      1.2         0.000       False     none                 NaN
+ mp-755007        CeOF   other       1.54      199.6           26.6       0.31      271.6            0.2      1.5         0.002        True     none                 NaN
+  mp-21717       Fe7C3   other       0.94      384.3           26.2       0.23      384.5            0.0      2.5         0.065       False   family               0.650
+  mp-19361   Cr2(SO4)3   other       1.52      193.3           25.8       0.34      410.0            0.6      5.9         0.000       False     none                 NaN
+mp-1185970       Mn3Co   other       1.15      280.0           25.6       0.64      281.9            8.0      1.1         0.000        True     none                 NaN
+mp-1190096       TbWC2   other       1.51      192.8           25.6       0.61      296.5            7.5      5.7         0.000       False     none                 NaN
+mp-1101303 Ti2Cr(PO4)3   other       1.12      283.6           25.5       0.41      195.4            1.0      0.4         0.038        True     none                 NaN
+ mp-705354   Mn4(PO4)3   other       1.37      216.2           25.4       0.64      244.1            6.9      1.3         0.064        True     none                 NaN
+ mp-559442   Ba2Ru7O18   other       0.97      356.7           25.4       0.38      415.1            1.3      3.7         0.000       False     none                 NaN
+  mp-19094         VO2   other       1.12      284.5           25.3       0.62      332.3            8.6      0.4         0.042       False   family               2.400
+ mp-554517      NaMnF4   other       0.99      343.1           25.1       0.37      250.5            0.6      0.5         0.000       False     none                 NaN
+mp-1181428       DyWC2   other       1.48      193.2           25.1       0.57      312.5            6.3      6.1         0.000       False     none                 NaN
+mp-1105404    Mn7CdO12   other       1.55      182.0           24.8       0.39      253.1            1.0      0.7         0.052       False     none                 NaN
+mp-1019080        ReN2   other       1.31      222.8           24.8       2.34       92.1           19.2      3.1         0.074        True   family               4.500
+ mp-547074         VO2   other       1.10      286.0           24.8       0.60      338.9            7.9      0.5         0.044       False   family               2.400
+mp-1212572       GdWC2   other       1.50      188.0           24.7       0.60      292.3            7.0      6.7         0.000        True     none                 NaN
+mp-1189574        YWC2   other       1.54      180.5           24.6       0.45      401.4            3.0      5.9         0.000       False   family              14.800
+
+=== (3) agreement: ML consensus (all >= 10 K) AND Tc_AD(51) >= 10 K: 0 ===
+  none
+
+=== sanity: known non-cuprate SC parents by Tc_AD(51) (training exposure; true Tc in supercon_tc_family) ===
+        id formula  chem  lambda_51  wlog_K_51  tcAD_mu010_51  lambda_47  wlog_K_47  tcAD_mu010_47  tc_mean  supercon_tc_family
+mp-1095618    PtN2 other       1.63      202.5           29.3       0.16      427.9            0.0      2.4            4.210000
+    mp-958   Cr3Rh other       1.52      200.0           25.8       1.29      199.5           21.2      0.3            1.100000
+   mp-2800    USi3 other       2.43      122.4           25.0       1.08      106.4            9.0      0.7            0.000000
+   mp-1272   Cr3Ru other       1.52      190.2           24.8       1.50      194.2           24.8      0.2            3.468000
+ mp-973668   LuSi3 other       2.39      116.0           23.5       0.59      132.7            3.0      2.8            7.000000
+  mp-23189     BI3 other       1.79      147.4           23.4       0.85      155.8            8.8      2.0            1.860000
+ mp-570751   Nb3Te other       2.28      120.3           23.2       0.87      163.3            9.6      0.4            1.746667
+mp-1216690   TiWC2 other       1.44      185.2           23.2       1.28      230.1           24.8      4.3            6.700000
+  mp-11272  Be2Nb3 other       1.28      217.2           23.1       0.72      235.0            9.0      2.2            2.300000
+   mp-1894      WC other       0.98      299.8           21.9       0.38      315.9            1.0      6.4           10.000000
+mp-1220344 Nb6AlGe other       2.23      112.9           21.8       0.62      247.3            6.5      7.8           21.000000
+mp-1220362 Nb6AlSn other       2.25      108.3           21.2       0.64      243.5            7.0      8.7           18.200000
