@@ -31,7 +31,9 @@ INDEX, DESC, META = (os.path.join(MP, f) for f in ("screen_mp_index.pickle", "de
 
 
 def chem_class(formula):
-    els = set(re.findall(r"[A-Z][a-z]?", formula or ""))
+    if not isinstance(formula, str):      # no MP summary doc (deprecated / merged mp-id)
+        return "unknown"
+    els = set(re.findall(r"[A-Z][a-z]?", formula))
     if "Cu" in els and "O" in els:
         return "cuprate-like"
     if "Ni" in els and "O" in els:
@@ -77,16 +79,48 @@ def main():
     known = set(m for i in sc.id for m in re.findall(r"mp-\d+", i))
     df["known_parent"] = df.id.isin(known)
     df["chem"] = df.formula.map(chem_class)
+    # ---- SuperCon (Stanev 2018 export, 16,414 compositions): is the composition
+    # already a reported superconductor? exact = same reduced formula; family =
+    # same element set (a known family, this stoichiometry not listed) ----
+    from pymatgen.core import Composition
+    sc_raw = pd.read_csv(os.path.join(MP, "SuperCon_Stanev2018.csv"))
+    exact, elsets = {}, {}
+    for name, tc in zip(sc_raw["name"], sc_raw["Tc"]):
+        try:
+            c = Composition(name)
+        except Exception:  # noqa: BLE001
+            continue
+        rf = c.reduced_formula
+        exact[rf] = max(exact.get(rf, -1), float(tc))
+        es = frozenset(c.get_el_amt_dict())
+        elsets[es] = max(elsets.get(es, -1), float(tc))
+    def _rf(f):
+        try:
+            return Composition(f).reduced_formula
+        except Exception:  # noqa: BLE001
+            return None
+    def _es(f):
+        try:
+            return frozenset(Composition(f).get_el_amt_dict())
+        except Exception:  # noqa: BLE001
+            return None
+    df["supercon_tc_exact"] = df.formula.map(lambda f: exact.get(_rf(f)) if isinstance(f, str) else None)
+    df["supercon_tc_family"] = df.formula.map(lambda f: elsets.get(_es(f)) if isinstance(f, str) else None)
+    df["supercon"] = np.where(df.supercon_tc_exact.notna(), "exact", np.where(df.supercon_tc_family.notna(), "family", "none"))
     out = os.path.join(_ROOT, "docs", "data_curation", f"mp_screen_{a.out_tag}.csv")
     df.sort_values("tc_mean", ascending=False).to_csv(out, index=False)
     print(f"[screen] {len(df)} materials scored by {tags}; {int(df.known_parent.sum())} are SC-training parents -> {out}")
     cand = df[~df.known_parent & (df.tc_mean >= a.min_tc)].copy()
     print(f"[screen] {len(cand)} unseen materials with consensus mean >= {a.min_tc} K "
           f"(all encoders >= {a.min_tc}: {int((df[~df.known_parent].tc_min >= a.min_tc).sum())})")
-    cols = ["id", "formula", "chem"] + tc_cols + ["tc_mean", "e_above_hull", "band_gap", "theoretical", "spacegroup"]
-    fmt = lambda d: d[cols].assign(**{c: d[c].round(1) for c in tc_cols + ["tc_mean"]}, e_above_hull=d.e_above_hull.round(3), band_gap=d.band_gap.round(2)).to_string(index=False)
+    cols = ["id", "formula", "chem"] + tc_cols + ["tc_mean", "e_above_hull", "band_gap", "theoretical", "spacegroup", "supercon", "supercon_tc_exact", "supercon_tc_family"]
+    fmt = lambda d: d[cols].assign(**{c: d[c].round(1) for c in tc_cols + ["tc_mean"]}, e_above_hull=d.e_above_hull.round(3), band_gap=d.band_gap.round(2)).rename(columns={"supercon_tc_exact": "sc_Tc_exact", "supercon_tc_family": "sc_Tc_family"}).to_string(index=False)
+    print(f"[screen] SuperCon cross-check on the {len(cand)} candidates: exact composition {int((cand.supercon=='exact').sum())}, "
+          f"same element set {int((cand.supercon=='family').sum())}, no relative {int((cand.supercon=='none').sum())}")
+    print("\n=== candidates with NO SuperCon relative (element set unreported), consensus mean >= threshold ===\n" + fmt(cand[cand.supercon == "none"].sort_values("tc_mean", ascending=False).head(a.top)))
     print(f"\n=== top {a.top} unseen by consensus mean ===\n" + fmt(cand.sort_values("tc_mean", ascending=False).head(a.top)))
-    stable = cand[(cand.e_above_hull <= 0.05) & (cand.band_gap <= 0.1) & (~cand.theoretical.fillna(True))]
+    exp = cand.theoretical.fillna(True).astype(bool) == False   # object dtype: never use ~ on it
+    stable = cand[(cand.e_above_hull <= 0.05) & (cand.band_gap <= 0.1) & exp]
     print(f"\n=== of those, experimentally known (not theoretical), on/near hull (<=50 meV) and metallic: {len(stable)} ===\n" + fmt(stable.sort_values("tc_mean", ascending=False).head(a.top)))
     for cls in ("cuprate-like", "nickelate", "Fe-pnictide/chalcogenide", "hydride", "other"):
         sub = cand[cand.chem == cls].sort_values("tc_mean", ascending=False).head(12)
