@@ -16,3 +16,4 @@ Ba1.76Cu4Sr0.24Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same n
 Ba1.78Cu4Sr0.22Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"
 Ba1.7Cu4La0.3Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"
 Ba1.8Cu4Sr0.2Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"
+Ba2.2Cu4Y1O8-MP-mp-22215-synth_doped.cif,structure_mismatch,"SuperCon Y1Ba2.2Cu4O8 (Y-124, 80 K) matched by 3DSC to mp-22215 = YBa2Cu3O6 (123-O6 insulator; formula_similarity 3, correct_formula_frac False) - model saw the wrong compound type"
