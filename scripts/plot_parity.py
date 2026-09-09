@@ -26,7 +26,12 @@ OTHER, SURFACE, INK, INK2, GRID = "#b8b7b2", "#fcfcfb", "#0b0b0b", "#52514e", "#
 
 
 def latest(name):
-    return sorted(glob.glob(f"model_data/*/gps_tc_{name}_2*"))[-1]
+    """Newest run dir of that name that has finished (predictions.csv present —
+    a re-run in flight on the cluster shows up locally as a partial dir)."""
+    done = [d for d in sorted(glob.glob(f"model_data/*/gps_tc_{name}_2*")) if os.path.exists(os.path.join(d, "predictions.csv"))]
+    if not done:
+        raise SystemExit(f"no finished run for gps_tc_{name}")
+    return done[-1]
 
 
 def stats(t, p):
