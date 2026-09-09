@@ -1,0 +1,18 @@
+id,check,why
+Ba1.9Cu3La0.1Y1O8-MP-mp-1214613-synth_doped.cif,hard_O_error,O8 in a 123 (Cu-ox 2.97): O7 typo
+Ba2Cs0.15Cu3Y0.85O6.5-MP-mp-20897-synth_doped.cif,hard_O_error,O6.5 (delta 0.5) with 90.4 K: oxygen content inconsistent with Tc
+Ba2Cu3S1Y1O6-MP-mp-1214650.cif,hard_O_error,"S-for-O substitution; O count nominal, Tc 89.5 at 'O6'"
+Ba2Ca0.1Cu3Y0.9O7-MP-mp-20674-synth_doped.cif,C_overdoped_dome_violation,nominal O7 + divalent substituent -> Cu-ox 2.37-2.43; real delta unrecorded
+Ba2Ca0.2Cu3Y0.8O7-MP-mp-20674-synth_doped.cif,C_overdoped_dome_violation,nominal O7 + divalent substituent -> Cu-ox 2.37-2.43; real delta unrecorded
+Ba2Cd0.1Cu3Y0.9O7-MP-mp-20674-synth_doped.cif,C_overdoped_dome_violation,nominal O7 + divalent substituent -> Cu-ox 2.37-2.43; real delta unrecorded
+Ba2Cd0.2Cu3Y0.8O7-MP-mp-20674-synth_doped.cif,C_overdoped_dome_violation,nominal O7 + divalent substituent -> Cu-ox 2.37-2.43; real delta unrecorded
+Ba2Cd0.3Cu3Y0.7O7-MP-mp-20674-synth_doped.cif,C_overdoped_dome_violation,nominal O7 + divalent substituent -> Cu-ox 2.37-2.43; real delta unrecorded
+Ba2Cu3Y0.7Zn0.3O7-MP-mp-20674-synth_doped.cif,C_overdoped_dome_violation,nominal O7 + divalent substituent -> Cu-ox 2.37-2.43; real delta unrecorded
+Ba2Cu3Y0.8Zn0.2O7-MP-mp-20674-synth_doped.cif,C_overdoped_dome_violation,nominal O7 + divalent substituent -> Cu-ox 2.37-2.43; real delta unrecorded
+Ba2Cu3Y0.9Zn0.1O7-MP-mp-20674-synth_doped.cif,C_overdoped_dome_violation,nominal O7 + divalent substituent -> Cu-ox 2.37-2.43; real delta unrecorded
+Ba1.72Cu4La0.28Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"
+Ba1.75Cu4Sr0.25Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"
+Ba1.76Cu4Sr0.24Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"
+Ba1.78Cu4Sr0.22Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"
+Ba1.7Cu4La0.3Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"
+Ba1.8Cu4Sr0.2Y1O8-MP-mp-6790-synth_doped.cif,F_near_duplicate_conflict,"same nominal composition, Tc 0 vs 50-78 K"

@@ -38,7 +38,10 @@ OX = {"La": 3, "Sr": 2, "Ba": 2, "Ce": 4, "Nd": 3, "Eu": 3, "Gd": 3, "Sm": 3,
       "Cd": 2, "Tb": 3, "Lu": 3, "Sc": 3, "Ga": 3, "Cs": 1, "Rb": 1,
       "Ho": 3, "Er": 3, "Tm": 3, "Yb": 3, "Dy": 3, "F": -1, "I": -1,
       # Co/Fe substitute on the Cu chain site in 123-type frames: nominal 3+
-      "Co": 3, "Fe": 3}
+      "Co": 3, "Fe": 3,
+      # 2026-09-09: chalcogen/halogen anion substituents (Ba2Cu3SYO6 sat at a
+      # fake Cu-ox 1.67 with S contributing 0; with S2- it is 2.33)
+      "S": -2, "Se": -2, "Te": -2, "Cl": -1, "Br": -1}
 
 
 def cu_oxidation(formula):
