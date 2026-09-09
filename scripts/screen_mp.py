@@ -62,6 +62,10 @@ def main():
             subprocess.run([sys.executable, os.path.join(_ROOT, "scripts", "predict_tc.py"), run, "--index", INDEX,
                             "--descriptors", DESC, "--out", cache], check=True)
         p = pd.read_csv(cache)[["id", "tc_pred_K", "tc_pred_std_K"]].rename(columns={"tc_pred_K": f"tc_{tag}", "tc_pred_std_K": f"std_{tag}"})
+        # dos_rebuild graphs are named mp-XXXX.cif: normalize and keep ONE row per
+        # mp-id (the phonon-corpus graph comes first in the index -> preferred)
+        p["id"] = p["id"].str.replace(r"\.cif$", "", regex=True)
+        p = p.drop_duplicates("id", keep="first")
         preds = p if preds is None else preds.merge(p, on="id", how="outer")
     tc_cols = [f"tc_{t}" for t in tags]
     preds["tc_mean"] = preds[tc_cols].mean(axis=1)
