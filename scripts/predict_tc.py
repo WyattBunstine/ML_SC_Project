@@ -47,6 +47,7 @@ def main():
     ap.add_argument("--out", default=None, help="output csv (default <run_dir>/predictions_new.csv)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--workers", type=int, default=6, help="DataLoader workers (graph JSON parsing is the bottleneck)")
     a = ap.parse_args()
     run = a.run_dir.rstrip("/")
     cfg = json.load(open(os.path.join(run, "config.json")))
@@ -77,34 +78,41 @@ def main():
     if nodesc:
         sys.exit(f"{len(nodesc)} ids have no descriptor row (e.g. {nodesc[:3]})")
     phys = {ids[i]: torch.as_tensor(np.asarray(table[ids[i]], dtype=np.float32)) for i in sel}
-    loader = DataLoader(Subset(ds, sel), batch_size=a.batch_size, shuffle=False, collate_fn=collate, num_workers=0)
-    # ---- per-seed forward, ensembled like FineTune ----
-    seed_k, seed_p, order = [], [], None
+    loader = DataLoader(Subset(ds, sel), batch_size=a.batch_size, shuffle=False, collate_fn=collate,
+                        num_workers=a.workers, persistent_workers=(a.workers > 0))
+    # ---- every seed instantiated up front, graphs loaded ONCE (the loading is the cost) ----
+    seeds = []
     for f in files:
         blob = torch.load(f, map_location="cpu", weights_only=False)
         model.load_state_dict(base_state)
         sd = model.state_dict()
         sd.update({k: v.to(sd[k].device) if k in sd else v for k, v in blob["encoder_state"].items()})
         model.load_state_dict(sd)
+        m_ = copy.deepcopy(model).eval()
         head = TcHead(**blob["head_kwargs"]).to(device)
-        head.load_state_dict(blob["head_state"])
-        model.eval(); head.eval()
-        ks, ps, bids = [], [], []
-        with torch.no_grad():
-            for inp, _t, _l, cif_ids in loader:
-                inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in inp)
-                seg = inp[6].to(device).long()
-                h = model.encode(*inp)
-                phys_b = torch.stack([phys[c] for c in cif_ids]).to(device)
+        head.load_state_dict(blob["head_state"]); head.eval()
+        seeds.append((blob, m_, head))
+        print(f"[predict] seed {blob['seed']} ({blob['unfreeze']}, {len(blob['encoder_state'])} encoder tensors) loaded", flush=True)
+    ks = [[] for _ in seeds]; ps = [[] for _ in seeds]; order = []
+    n_done = 0
+    with torch.no_grad():
+        for inp, _t, _l, cif_ids in loader:
+            inp = tuple(x.to(device) if torch.is_tensor(x) else x for x in inp)
+            seg = inp[6].to(device).long()
+            phys_b = torch.stack([phys[c] for c in cif_ids]).to(device)
+            for j, (blob, m_, head) in enumerate(seeds):
+                h = m_.encode(*inp)
                 logits, z = head(h, phys_b, seg=seg, n=len(cif_ids))
                 k = head.z_to_kelvin(z)
                 pr = torch.softmax(logits, dim=1)
                 if blob.get("use_gs"):
                     k = pr[:, 0] * k
-                ks.append(k.cpu()); ps.append(pr.cpu()); bids += list(cif_ids)
-        seed_k.append(torch.cat(ks).numpy()); seed_p.append(torch.cat(ps).numpy())
-        order = bids
-        print(f"[predict] seed {blob['seed']} ({blob['unfreeze']}, {len(blob['encoder_state'])} encoder tensors) done", flush=True)
+                ks[j].append(k.cpu()); ps[j].append(pr.cpu())
+            order += list(cif_ids)
+            n_done += len(cif_ids)
+            if n_done % (a.batch_size * 200) < a.batch_size:
+                print(f"[predict] {n_done}/{len(sel)}", flush=True)
+    seed_k = [torch.cat(k).numpy() for k in ks]; seed_p = [torch.cat(p_).numpy() for p_ in ps]
     K = np.stack(seed_k)                                   # (seeds, n)
     log_ens = ref.get("ensemble_space") == "log"
     ens = np.expm1(np.log1p(np.maximum(K, 0)).mean(0)) if log_ens else K.mean(0)

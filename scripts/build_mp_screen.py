@@ -29,6 +29,8 @@ def cmd_index():
             if not f.endswith(".json"):
                 continue
             mid = f[:-5]
+            if mid.endswith(".cif"):          # dos_rebuild graphs are named mp-XXXX.cif.json
+                mid = mid[:-4]
             if not mid.startswith("mp-") or mid in seen:
                 continue
             seen.add(mid)
@@ -46,8 +48,14 @@ def cmd_index():
 
 def cmd_metadata():
     from mp_api.client import MPRester
-    ids = pd.read_pickle(INDEX)["id"].tolist()
+    ids = sorted({i[:-4] if i.endswith(".cif") else i for i in pd.read_pickle(INDEX)["id"]})
     out = []
+    if os.path.exists(META):                  # resumable: keep what an earlier pass fetched
+        prev = pd.read_pickle(META)
+        out = prev.to_dict("records")
+        have = set(prev["id"])
+        ids = [i for i in ids if i not in have]
+    print(f"metadata: {len(ids)} ids to fetch", flush=True)
     with MPRester(os.environ["MP_API_KEY"]) as m:
         for i in range(0, len(ids), 1000):
             chunk = ids[i:i + 1000]
