@@ -10,7 +10,7 @@ chains put the undoped parent nearer 2.3, so interpret per family), guide peak
 and its position.
 
 Usage:
-    python scripts/family_dome.py <run_dir> [--plot out.png [title]] [--annotate]
+    python scripts/family_dome.py <run_dir> [--plot out.png [title]] [--annotate] [--exclude suspects.csv]
 --annotate labels every row's ACTUAL point with its stoichiometry (unit
 subscripts dropped, e.g. Y1Ba2Cu3O6.9 -> YBa2Cu3O6.9) on a wider canvas;
 labels alternate above/below in Cu-ox order to limit overlap.
@@ -55,9 +55,11 @@ def cu_oxidation(formula):
         return None
 
 
-def family_dome(run_dir):
+def family_dome(run_dir, exclude_csv=None):
     cfg = json.load(open(os.path.join(run_dir, "config.json")))
     hold = set(pd.read_csv(cfg["holdout_ids_csv"])["id"].astype(str))
+    if exclude_csv:  # label suspects (docs/data_curation/*_label_suspects.csv): drop from metrics + guide
+        hold -= set(pd.read_csv(exclude_csv)["id"].astype(str))
     d = pd.read_csv(os.path.join(run_dir, "predictions.csv"))
     f = d[d.id.astype(str).isin(hold)].copy()
     if not len(f):
@@ -134,7 +136,8 @@ def plot(f, gx, guide, out, title, annotate=False):
 
 if __name__ == "__main__":
     run_dir = sys.argv[1]
-    f, gx, guide, s = family_dome(run_dir)
+    excl = sys.argv[sys.argv.index("--exclude") + 1] if "--exclude" in sys.argv else None
+    f, gx, guide, s = family_dome(run_dir, excl)
     tag = os.path.basename(os.path.normpath(run_dir))[:44]
     print(f"{tag:44s} n={s['n_fam']:3d} r_fam {s['r_fam']:6.3f} mae {s['mae_fam']:6.2f} "
           f"at2.0 {s['at2.0']:6.2f}K peak {s['peak']:6.1f}K @{s['peak_cu']:.2f}")
