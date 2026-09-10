@@ -58,7 +58,10 @@ def main():
             v = np.asarray(v, dtype=float)
             mid = cid[:-4] if cid.endswith(".cif") else cid
             r = {"id": mid, f"lambda_{tag}": v[ix[col["lambda"]]], f"wlog_K_{tag}": math.expm1(v[ix[col["logwlog"]]]),
-                 f"w2_K_{tag}": math.expm1(v[ix[col["logw2"]]])}
+                 f"w2_K_{tag}": math.expm1(v[ix[col["logw2"]]]),
+                 # magnetism / metallicity readout of the same encoder (the gate):
+                 f"mabs_{tag}": v[ix["g_mean_absm"]], f"stag_{tag}": v[ix["g_staggered"]],
+                 f"nef_{tag}": v[ix["g_nef"]], f"gap_pred_{tag}": v[ix["g_bandgap"]]}
             for n in tcad:
                 mu = "010" if "10" in n[-3:] or n.endswith("0.10") else "013"
                 r[f"tcAD_mu{mu}_{tag}"] = math.expm1(v[ix[n]])
