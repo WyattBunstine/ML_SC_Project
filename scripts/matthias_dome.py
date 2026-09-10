@@ -63,20 +63,45 @@ def stats(run_dir):
     return f, (tx, ty, px, py), s
 
 
+def guide(x, y, binw=0.05, sigma_ea=0.15):
+    """Binned mean + Gaussian smoothing, the dome_stats/family_dome convention
+    (there on Cu oxidation, here on e/a)."""
+    from scipy.ndimage import gaussian_filter1d
+    edges = np.arange(np.floor(x.min() / binw) * binw, x.max() + binw, binw)
+    g = pd.DataFrame({"b": pd.cut(x, edges, labels=(edges[:-1] + edges[1:]) / 2), "y": y}) \
+        .groupby("b", observed=True).y.mean().dropna()
+    bx, by = g.index.astype(float).values, g.values
+    if len(bx) < 3:
+        return bx, by
+    gx = np.linspace(bx.min(), bx.max(), 400)
+    step = (gx.max() - gx.min()) / (len(gx) - 1)
+    return gx, np.clip(gaussian_filter1d(np.interp(gx, bx, by), sigma_ea / step), 0, None)
+
+
 def plot(f, curves, out, title):
+    """Same anatomy as the cuprate dome figures (plot_lsco_dome / family_dome):
+    actual filled, predicted open, a grey connector per material, and a smoothed
+    guide through each — with e/a on the x-axis instead of Cu oxidation. The
+    max-Tc envelope (Matthias's own construction) is kept as a faint dashed line."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     tx, ty, px, py = curves
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(11.5, 6.2))
     fig.patch.set_facecolor(SURF); ax.set_facecolor(SURF)
-    ax.scatter(f.ea, f.tc_true_K, s=30, c="#2a78d6", edgecolors=SURF, linewidths=0.7, label="actual", zorder=3)
-    ax.scatter(f.ea, f.tc_head_K, s=34, facecolors="none", edgecolors="#eb6834", linewidths=1.0, label="predicted", zorder=3)
-    ax.plot(tx, ty, color="#2a78d6", lw=1.4, alpha=0.55, label="actual max-$T_c$ envelope")
-    ax.plot(px, py, color="#eb6834", lw=1.4, alpha=0.75, label="predicted max-$T_c$ envelope")
+    for _, r in f.iterrows():
+        ax.plot([r.ea, r.ea], [r.tc_true_K, r.tc_head_K], color="0.82", lw=0.7, zorder=1)
+    ax.scatter(f.ea, f.tc_true_K, s=26, c="#2a78d6", edgecolors=SURF, linewidths=0.6, label="actual", zorder=3)
+    ax.scatter(f.ea, f.tc_head_K, s=30, facecolors="none", edgecolors="#eb6834", linewidths=0.9, label="predicted", zorder=3)
+    ax_, ay_ = guide(f.ea.values, f.tc_true_K.values)
+    px_, py_ = guide(f.ea.values, f.tc_head_K.values)
+    ax.plot(ax_, ay_, color="#2a78d6", lw=1.7, alpha=0.75, label="actual dome (guide)", zorder=2)
+    ax.plot(px_, py_, color="#eb6834", lw=1.7, alpha=0.85, label="predicted dome (guide)", zorder=2)
+    ax.plot(tx, ty, color="#2a78d6", lw=1.0, ls="--", alpha=0.35, label="actual max-$T_c$ envelope", zorder=1)
+    ax.plot(px, py, color="#eb6834", lw=1.0, ls="--", alpha=0.4, label="predicted max-$T_c$ envelope", zorder=1)
     for x in (4.7, 6.5):
-        ax.axvline(x, color="#8d8c87", lw=0.8, ls=":")
-    ax.text(4.75, ax.get_ylim()[1] * 0.96, "Matthias peaks 4.7 / 6.5", fontsize=8, color=INK2)
+        ax.axvline(x, color="#8d8c87", lw=0.8, ls=":", zorder=0)
+    ax.text(4.75, ax.get_ylim()[1] * 0.97, "Matthias peaks 4.7 / 6.5", fontsize=8, color=INK2, va="top")
     ax.set_xlabel("valence electrons per atom (e/a)", color=INK2)
     ax.set_ylabel("$T_c$ (K)", color=INK2)
     ax.set_title(title, loc="left", fontsize=11, color=INK)
@@ -84,7 +109,7 @@ def plot(f, curves, out, title):
     for s_ in ("top", "right"):
         ax.spines[s_].set_visible(False)
     ax.tick_params(colors=INK2)
-    ax.legend(frameon=False, fontsize=8.5, labelcolor=INK2, loc="upper right")
+    ax.legend(frameon=False, fontsize=8.5, labelcolor=INK2, loc="upper right", ncol=1)
     fig.tight_layout(); fig.savefig(out, dpi=150, facecolor=SURF)
 
 
