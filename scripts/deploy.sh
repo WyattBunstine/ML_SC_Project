@@ -63,7 +63,7 @@ LOCAL_MP_DOS_PACK="database/datafiles/MP/dos_pack"
 
 # --- SLURM resource request (Rockfish-specific — verify against your allocation) ---
 SLURM_PARTITION="a100"                   # Rockfish GPU partition (a100 nodes)
-SLURM_ACCOUNT="tmcquee2-paradim_gpu"     # billing account; VERIFY exact name (check `sacctmgr show assoc user=wbunsti1`)
+SLURM_ACCOUNT="${SLURM_ACCOUNT:-tmcquee2-paradim_gpu}"     # billing account; override via env (e.g. the tmcquee2_gpu reserve)
 SLURM_TIME="12:00:00"                    # walltime HH:MM:SS
 SLURM_GPUS="1"                           # training auto-uses CUDA if a GPU is present
 SLURM_CPUS="8"                           # >= num_workers+1 in the config (config uses 4)
