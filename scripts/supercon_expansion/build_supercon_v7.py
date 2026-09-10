@@ -52,7 +52,21 @@ CIFS = _os.path.join(MP, "cifs_v7_supercon")
 IDPROP = _os.path.join(SCDB, "id_prop_v7.csv")
 GRAPHS = _os.path.join(MP, "graphs_v4_v7_supercon")
 INDEX_OUT = _os.path.join(MP, "SC_MP_V7_supercon")
-K = 8
+K = 12
+
+
+def _subsets(els, min_size=2, max_drop=3):
+    """Chemical sub-systems a parent may live in. One element deep is not enough:
+    La1.85Sr0.15Cu0.875Ni0.125O4 (5 elements) needs La2CuO4 (3) — two dopants on
+    two sublattices, which multi_sub_dope_one handles but the old S / S-{e}
+    search never offered. Bounded by max_drop so 7-8 element rows stay cheap."""
+    from itertools import combinations
+    els = sorted(els)
+    lo = max(min_size, len(els) - max_drop)
+    out = []
+    for k in range(len(els), lo - 1, -1):
+        out.extend(combinations(els, k))
+    return out
 
 
 def norm_key(f):
@@ -77,6 +91,13 @@ def cmd_candidates(**_):
     g = sc.groupby("k").agg(formula=("name", "first"), tc=("Tc", "median"),
                             n_reports=("Tc", "size"), tc_iqr=("Tc", lambda s: float(s.quantile(.75) - s.quantile(.25))))
     miss = g[~g.index.isin(have)].reset_index()
+    # SuperCon writes unspecified oxygen as "...OY" / "OX" / "OZ"; pymatgen parses
+    # the trailing Y as YTTRIUM, injecting a spurious cation (47 such entries were
+    # built on 2026-09-10 before this filter, e.g. Bi1.8Pb0.2Sr1.2La0.8Cu1OY).
+    ph = miss.formula.str.contains(r"O[YXZ]$", regex=True)
+    if ph.any():
+        print(f"  dropping {int(ph.sum())} rows with SuperCon's unspecified-oxygen placeholder (O_y/O_x/O_z)", flush=True)
+        miss = miss[~ph]
     miss["chemsys"] = miss.formula.map(lambda f: "-".join(sorted(Composition(f).get_el_amt_dict())))
     miss["nel"] = miss.chemsys.str.count("-") + 1
     miss["weight"] = 1.0
@@ -89,12 +110,11 @@ def cmd_candidates(**_):
     # 1 of 25 TM binaries had any parent at all).
     need = set()
     for cs in miss.chemsys:
-        els = cs.split("-")
-        need.add(cs)
-        if len(els) > 1:
-            for e in els:
-                need.add("-".join(sorted(set(els) - {e})))
-                need.add(e)          # elemental parents: the solid-solution lattices
+        els = sorted(cs.split("-"))
+        for sub in _subsets(els):
+            need.add("-".join(sub))
+        for e in els:
+            need.add(e)              # elemental parents: the solid-solution lattices
     with open(SYSTEMS, "w") as f:
         f.write("\n".join(sorted(need)) + "\n")
     print(f"SuperCon unique compositions {len(g)}; index covers {len(have)}; "
@@ -184,6 +204,117 @@ def alloy_dope_one(structure, target_formula, max_sites=64):
     return new, "alloy_solid_solution"
 
 
+ANIONS = {"O", "F", "Cl", "Br", "I", "S", "Se", "Te", "N", "H"}
+
+
+def _role(el):
+    return "anion" if el in ANIONS else "cation"
+
+
+def multi_sub_dope_one(structure, target_formula, tol=0.02, max_sites=200):
+    """Multi-sublattice substitutional doping — the case 3DSC rejects with
+    "different scaling of fixed sites" (74% of the 2026-09-10 parent-found
+    failures, overwhelmingly cuprates): its doper handles ONE doping pair, but
+    La1.85Sr0.15Cu0.875Ni0.125O4 needs Sr on the La sublattice AND Ni on the Cu
+    sublattice at once, plus an oxygen occupancy that is not 1.
+
+    Method: group the parent's sites into per-element sublattices; assign every
+    target element absent from the parent to the most similar parent sublattice
+    (same ion role, nearest electronegativity + relative radius); fix the cell
+    scale by filling the CATION sublattices exactly; put the remaining anion
+    content on the anion sites as a partial occupancy (deficiency allowed,
+    interstitials are not — those need the ICSD parent route). Reject unless the
+    resulting composition reproduces the target to `tol` in fractional terms.
+    """
+    from pymatgen.core import Element, Structure
+    st = structure.copy()
+    st.remove_oxidation_states()
+    if len(st) > max_sites:
+        return None, "multisub: parent cell too large"
+    sub = defaultdict(list)                      # parent element -> site indices
+    for i, site in enumerate(st):
+        els = {getattr(e, "symbol", str(e)) for e in site.species}
+        if len(els) != 1:
+            return None, "multisub: parent already disordered"
+        sub[els.pop()].append(i)
+    tgt = {e: v for e, v in Composition(target_formula).fractional_composition.get_el_amt_dict().items() if v > 1e-6}
+    if not set(sub) & set(tgt):
+        return None, "multisub: no shared element"
+
+    def prop(e):
+        el = Element(e)
+        return (el.X or 1.5), (el.atomic_radius or 1.4)
+
+    cat_sites = sum(len(v) for k, v in sub.items() if _role(k) == "cation")
+    cat_frac = sum(v for e, v in tgt.items() if _role(e) == "cation")
+    if cat_sites == 0 or cat_frac <= 0:
+        return None, "multisub: no cation sublattice"
+    total = cat_sites / cat_frac                  # atoms in the parent cell at the target composition
+    # Distribute each target element over the COMPATIBLE sublattices instead of
+    # committing it to the single nearest one: a dopant often splits (La sits on
+    # both the Y and the Ba site of a 123), which a greedy assignment reports as
+    # "sublattice over-filled" (900+ of the 2026-09-10 failures). Transportation
+    # LP: supply = target atoms, capacity = sites (exact for cations, <= for
+    # anions), cost = chemical dissimilarity.
+    from scipy.optimize import linprog
+    els, subs = list(tgt), list(sub)
+    idx = {(e, p): k for k, (e, p) in enumerate([(e, p) for e in els for p in subs])}
+    cost, big, banned = [], 1e3, set()
+    # A cation may only sit on a chemically PLAUSIBLE sublattice: pricing alone
+    # let La onto a Cu site when the target was infeasible on the real sites.
+    # dissimilarity = |dX| + |dr|/r; 0.9 separates Ca/Sr/La-on-A-site (0.1-0.5)
+    # from La/Y-on-Cu (1.0-1.2).
+    MAXD = 0.9
+    for e in els:
+        xe, re_ = prop(e)
+        for p in subs:
+            d = abs(prop(p)[0] - xe) + abs(prop(p)[1] - re_) / prop(p)[1]
+            if _role(p) != _role(e) or (e != p and d > MAXD):
+                banned.add((e, p)); cost.append(big)
+            else:
+                cost.append(d + (0.0 if e == p else 0.25))
+    A_eq, b_eq, A_ub, b_ub = [], [], [], []
+    for e in els:                                 # every target atom is placed
+        row = [0.0] * len(cost)
+        for p in subs:
+            row[idx[(e, p)]] = 1.0
+        A_eq.append(row); b_eq.append(tgt[e] * total)
+    for p in subs:                                # site capacity
+        row = [0.0] * len(cost)
+        for e in els:
+            row[idx[(e, p)]] = 1.0
+        if _role(p) == "cation":
+            A_eq.append(row); b_eq.append(float(len(sub[p])))
+        else:
+            A_ub.append(row); b_ub.append(float(len(sub[p])))
+    res = linprog(cost, A_ub=A_ub or None, b_ub=b_ub or None, A_eq=A_eq, b_eq=b_eq,
+                  bounds=(0, None), method="highs")
+    if not res.success:
+        return None, "multisub: no feasible site distribution"
+    occ = defaultdict(dict)
+    for e in els:
+        for p in subs:
+            v = res.x[idx[(e, p)]]
+            if v > 1e-6:
+                if (e, p) in banned:
+                    return None, f"multisub: {e} has no plausible sublattice (forced onto {p})"
+                occ[p][e] = occ[p].get(e, 0.0) + v / len(sub[p])
+    for p in subs:
+        if p not in occ:
+            return None, f"multisub: {p} sublattice unoccupied"
+        if sum(occ[p].values()) > 1.0 + 1e-3:
+            return None, f"multisub: {p} sublattice over-filled"
+    species = [None] * len(st)
+    for p, d in occ.items():
+        for i in sub[p]:
+            species[i] = dict(d)
+    new = Structure(st.lattice, species, st.frac_coords)
+    got = new.composition.fractional_composition.get_el_amt_dict()
+    if max(abs(got.get(e, 0.0) - tgt.get(e, 0.0)) for e in set(got) | set(tgt)) > tol:
+        return None, "multisub: composition mismatch"
+    return new, "multi_sublattice"
+
+
 def cmd_match_dope(limit=None, **_):
     from formula_match import chem_dict, formula_similarity
     from synth_dope import synth_dope_one
@@ -208,7 +339,7 @@ def cmd_match_dope(limit=None, **_):
     for c in cand.itertuples():
         cd_sc = chem_dict(c.formula)
         S = frozenset(cd_sc)
-        subsets = [S] if len(S) == 1 else [S] + [S - {e} for e in S]
+        subsets = [S] if len(S) == 1 else [frozenset(x) for x in _subsets(sorted(S))]
         acc = []
         for sub in subsets:
             for mid, cd2, eah, pf in by_sys.get(sub, ()):
@@ -224,6 +355,15 @@ def cmd_match_dope(limit=None, **_):
             for e in S:
                 for mid, cd2, eah, pf in by_sys.get(frozenset({e}), ()):
                     acc.append((4 if e == major else 5, round(eah, 4), 1.0, mid, pf))
+        # Last resort: ANY parent whose element set is a subset of the target's.
+        # 3DSC's formula_similarity is a similarity gate for its own one-pair
+        # doper and rejects e.g. La2CuO4 as a parent of La1.85Sr0.15Cu0.875Ni0.125O4;
+        # multi_sub_dope_one does not need that similarity, only compatible
+        # sublattices, so offer these ranked by elements shared (tier 6 = all,
+        # 7 = one fewer, ...) and let the doper's own checks reject bad ones.
+        for sub in subsets:
+            for mid, cd2, eah, pf in by_sys.get(sub, ()):
+                acc.append((6 + (len(S) - len(sub)), round(eah, 4), 1.0, mid, pf))
         if acc:
             topk[c.k] = heapq.nsmallest(K, acc)
     cand = cand[cand.k.isin(topk)].copy()
@@ -258,15 +398,26 @@ def cmd_match_dope(limit=None, **_):
                 except Exception as e:  # noqa: BLE001
                     st, reason2 = None, f"alloy exception:{type(e).__name__}"
                 if st is None:
-                    reasons[reason] += 1
-                    continue
-                reason = reason2
+                    try:
+                        st, reason3 = multi_sub_dope_one(st0, c.formula)
+                    except Exception as e:  # noqa: BLE001
+                        st, reason3 = None, f"multisub exception:{type(e).__name__}"
+                    if st is None:
+                        reasons[reason if "alloy:" not in reason2 else reason3] += 1
+                        continue
+                    reason = reason3
+                else:
+                    reason = reason2
             ident = f"{c.formula}-MP-{mid}"
             cifp = _os.path.join(CIFS, f"{ident}.cif")
             try:
                 CifWriter(st, symprec=None).write_file(cifp)
-            except Exception:  # noqa: BLE001
-                reasons["cif write"] += 1
+                from pymatgen.core import Structure as _S
+                _S.from_file(cifp)               # must round-trip: ~5% of written
+            except Exception:                     # CIFs were unreadable (occupancy
+                reasons["cif unreadable"] += 1    # collisions) and died later in
+                if _os.path.exists(cifp):         # the graph build instead
+                    _os.remove(cifp)
                 continue
             rows.append(dict(id=ident, cif=_os.path.relpath(cifp, _ROOT), tc=c.tc, k=c.k,
                              n_reports=c.n_reports, tc_iqr=c.tc_iqr, parent_formula=pf,
