@@ -82,10 +82,24 @@ def cmd_candidates(**_):
     miss["weight"] = 1.0
     miss = miss[["formula", "tc", "n_reports", "tc_iqr", "chemsys", "nel", "k", "weight"]]
     miss.to_csv(CAND, index=False)
+    # The matcher accepts a parent whose element set is the target's set OR that set
+    # minus ONE element, so the pool must cover those sub-systems too — otherwise a
+    # solid solution like Co0.004Ir0.996 finds nothing, because its real parent is
+    # elemental Ir (chemsys "Ir"), not "Co-Ir" (the 2026-09-10 empty-parent bug:
+    # 1 of 25 TM binaries had any parent at all).
+    need = set()
+    for cs in miss.chemsys:
+        els = cs.split("-")
+        need.add(cs)
+        if len(els) > 1:
+            for e in els:
+                need.add("-".join(sorted(set(els) - {e})))
+                need.add(e)          # elemental parents: the solid-solution lattices
     with open(SYSTEMS, "w") as f:
-        f.write("\n".join(sorted(miss.chemsys.unique())) + "\n")
+        f.write("\n".join(sorted(need)) + "\n")
     print(f"SuperCon unique compositions {len(g)}; index covers {len(have)}; "
-          f"candidates (not covered): {len(miss)} across {miss.chemsys.nunique()} chemical systems", flush=True)
+          f"candidates (not covered): {len(miss)} across {miss.chemsys.nunique()} chemical systems "
+          f"({len(need)} systems to fetch incl. sub-systems)", flush=True)
     print(f"  Tc>0 {int((miss.tc > 0).sum())}, Tc>10 K {int((miss.tc > 10).sum())}, by n_elements "
           f"{miss.nel.value_counts().sort_index().to_dict()}", flush=True)
     print(f"  -> {CAND}\n  -> {SYSTEMS}", flush=True)
@@ -130,6 +144,46 @@ def cmd_pool(**_):
     print(f"pool done: {int((~df.material_id.str.startswith('__done__')).sum())} MP materials -> {POOL}", flush=True)
 
 
+METALS = set("Li Be Na Mg Al K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn "
+             "Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Th U".split())
+
+
+def alloy_dope_one(structure, target_formula, max_sites=64):
+    """Substitutional solid solution on a CHEMICALLY UNIFORM parent lattice: every
+    site of a pure-element parent takes the target's fractional composition.
+
+    This is the case 3DSC's synthetic_doping rejects with "different scaling of
+    fixed sites" (10.5k of the 11.5k failures on 2026-09-10): an alloy like
+    Nb0.5Ti0.5 has no fixed sublattice to preserve — it IS the doped sublattice.
+    Restricted to a single-element parent so no ordered compound gets its
+    sublattices smeared, and to metals, where substitutional disorder is the
+    physical structure (bcc Nb-Ti, hcp Mo-Re, fcc Ir-Pd ...).
+    """
+    from pymatgen.core import Structure
+    st = structure.copy()
+    st.remove_oxidation_states()
+    parent_els = set()
+    for site in st:
+        parent_els |= {getattr(e, "symbol", str(e)) for e in site.species}
+    if len(parent_els) != 1:
+        return None, "alloy: parent not single-element"
+    tgt = Composition(target_formula).fractional_composition.get_el_amt_dict()
+    tgt = {e: v for e, v in tgt.items() if v > 1e-6}
+    if not parent_els <= set(tgt):
+        return None, "alloy: parent element not in target"
+    if not set(tgt) <= METALS:
+        return None, "alloy: non-metal in target"
+    if len(st) > max_sites:
+        return None, "alloy: parent cell too large"
+    if len(tgt) == 1:
+        return st, "identical"
+    new = Structure(st.lattice, [dict(tgt)] * len(st), st.frac_coords)
+    got = new.composition.fractional_composition.get_el_amt_dict()
+    if max(abs(got.get(e, 0.0) - tgt.get(e, 0.0)) for e in set(got) | set(tgt)) > 1e-4:
+        return None, "alloy: composition mismatch"
+    return new, "alloy_solid_solution"
+
+
 def cmd_match_dope(limit=None, **_):
     from formula_match import chem_dict, formula_similarity
     from synth_dope import synth_dope_one
@@ -162,6 +216,14 @@ def cmd_match_dope(limit=None, **_):
                 if np.isnan(tier):
                     continue
                 acc.append((int(tier), round(eah, 4), round(trd, 5), mid, pf))
+        # all-metal composition -> also offer the ELEMENTAL lattices as
+        # solid-solution parents, majority component first (tier 4 = tried only
+        # after every 3DSC-accepted parent has been tried and failed)
+        if set(S) <= METALS:
+            major = max(cd_sc, key=cd_sc.get)
+            for e in S:
+                for mid, cd2, eah, pf in by_sys.get(frozenset({e}), ()):
+                    acc.append((4 if e == major else 5, round(eah, 4), 1.0, mid, pf))
         if acc:
             topk[c.k] = heapq.nsmallest(K, acc)
     cand = cand[cand.k.isin(topk)].copy()
@@ -189,11 +251,16 @@ def cmd_match_dope(limit=None, **_):
             try:
                 st, reason = synth_dope_one(st0, c.formula)
             except Exception as e:  # noqa: BLE001
-                reasons[f"exception:{type(e).__name__}"] += 1
-                continue
+                st, reason = None, f"exception:{type(e).__name__}"
             if st is None:
-                reasons[reason] += 1
-                continue
+                try:
+                    st, reason2 = alloy_dope_one(st0, c.formula)
+                except Exception as e:  # noqa: BLE001
+                    st, reason2 = None, f"alloy exception:{type(e).__name__}"
+                if st is None:
+                    reasons[reason] += 1
+                    continue
+                reason = reason2
             ident = f"{c.formula}-MP-{mid}"
             cifp = _os.path.join(CIFS, f"{ident}.cif")
             try:
