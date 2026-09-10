@@ -28,6 +28,7 @@ for _p in (_ROOT, _HERE, _os.path.join(_ROOT, "scripts", "nemad_expansion")):
         _sys.path.insert(0, _p)
 
 import argparse  # noqa: E402
+import glob  # noqa: E402
 import heapq  # noqa: E402
 import json  # noqa: E402
 import subprocess  # noqa: E402
@@ -233,10 +234,14 @@ def multi_sub_dope_one(structure, target_formula, tol=0.02, max_sites=200):
         return None, "multisub: parent cell too large"
     sub = defaultdict(list)                      # parent element -> site indices
     for i, site in enumerate(st):
-        els = {getattr(e, "symbol", str(e)) for e in site.species}
-        if len(els) != 1:
-            return None, "multisub: parent already disordered"
-        sub[els.pop()].append(i)
+        occ = {getattr(e, "symbol", str(e)): float(v) for e, v in site.species.items()}
+        if not occ:
+            return None, "multisub: empty site"
+        # A partially occupied parent site is a CAPACITY, not a composition: an
+        # ICSD 123 refinement carries the O(5) chain site at occupancy ~0.01-0.2,
+        # and that site is exactly the extra anion room the excess-O targets need.
+        # Label the sublattice by the site's majority species and let the LP refill it.
+        sub[max(occ, key=occ.get)].append(i)
     tgt = {e: v for e, v in Composition(target_formula).fractional_composition.get_el_amt_dict().items() if v > 1e-6}
     if not set(sub) & set(tgt):
         return None, "multisub: no shared element"
@@ -327,6 +332,31 @@ def cmd_match_dope(limit=None, **_):
     by_sys = defaultdict(list)
     for r in pool.itertuples():
         by_sys[frozenset(r.cd)].append((r.material_id, r.cd, r.eah, r.formula_pretty))
+    # ---- hand-picked ICSD parents (docs/data_curation/icsd_parents_wanted.md) ----
+    # Keyed by the SUBLATTICE elements (majority species per site), not the whole
+    # refinement: a Na-substituted 123 is a YBa2Cu3O7 host whose Na is an impurity
+    # on the Y site, and its partially occupied O(5) site is exactly the extra
+    # anion room the excess-O targets need. Tier 0 -> tried before any MP parent.
+    from pymatgen.core import Structure as _Struct
+    icsd = {}
+    for cif in sorted(glob.glob(_os.path.join(MP, "ICSD_Parent_Cifs", "*.cif"))):
+        code = _os.path.basename(cif).replace("EntryWithCollCode", "").replace(".cif", "")
+        try:
+            st_i = _Struct.from_file(cif)
+            st_i.remove_oxidation_states()
+        except Exception as e:  # noqa: BLE001
+            print(f"  icsd {code}: unreadable ({str(e)[:50]})", flush=True)
+            continue
+        labels = set()
+        for site in st_i:
+            occ = {getattr(e, "symbol", str(e)): float(v) for e, v in site.species.items()}
+            if occ:
+                labels.add(max(occ, key=occ.get))
+        mid = f"icsd-{code}"
+        icsd[mid] = st_i
+        by_sys[frozenset(labels)].append((mid, {e: 1.0 for e in labels}, 0.0,
+                                          st_i.composition.reduced_formula))
+    print(f"  ICSD parents loaded: {len(icsd)}", flush=True)
     cand = pd.read_csv(CAND)
     done = set()
     if _os.path.exists(SOURCE):                    # resumable
@@ -363,15 +393,16 @@ def cmd_match_dope(limit=None, **_):
         # 7 = one fewer, ...) and let the doper's own checks reject bad ones.
         for sub in subsets:
             for mid, cd2, eah, pf in by_sys.get(sub, ()):
-                acc.append((6 + (len(S) - len(sub)), round(eah, 4), 1.0, mid, pf))
+                acc.append((0, 0.0, 1.0, mid, pf) if str(mid).startswith("icsd-")
+                           else (6 + (len(S) - len(sub)), round(eah, 4), 1.0, mid, pf))
         if acc:
             topk[c.k] = heapq.nsmallest(K, acc)
     cand = cand[cand.k.isin(topk)].copy()
     print(f"  candidates with >=1 accepted parent: {len(cand)}", flush=True)
-    mids = sorted({t[3] for lst in topk.values() for t in lst})
+    mids = sorted({t[3] for lst in topk.values() for t in lst if not str(t[3]).startswith("icsd-")})
     key = _os.environ.get("MP_API_KEY") or _sys.exit("error: set MP_API_KEY (env-only)")
     print(f"  fetching {len(mids)} parent structures", flush=True)
-    cache = {}
+    cache = dict(icsd)                            # ICSD parents need no fetch
     with MPRester(key) as mpr:
         for i in range(0, len(mids), 400):
             for d in mpr.materials.summary.search(material_ids=mids[i:i + 400], fields=["material_id", "structure"]):
