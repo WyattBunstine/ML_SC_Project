@@ -53,3 +53,27 @@ A further ~480 oxygen-excess entries sit in families of 1-5 rows.
    Needs the hydrated structure, not the anhydrous MP phase.
 5. **1111 arsenide hydrides** (`As-Ca-Co-Fe-H`, `As-Ce-Co-Fe-H`, 18 entries):
    the hydrogen-substituted 1111 (LaFeAsO1-xHx type).
+
+
+## Search the PROTOTYPE, not the doped composition
+
+The example column is a doped target; ICSD will not have it. Search for the
+undoped end member or the prototype that owns the interstitial site.
+
+| what to search in ICSD | unlocks | why |
+|---|---|---|
+| **YBa2Cu3O7 refinement that includes the partially occupied O(5) chain site** | ~89 entries across 8 families | Every `Ba-...-Cu-O-Y` family here is a 123 derivative needing only +0.02 to +0.19 extra O per cation. MP's 123 has no O(5) site, so any excess-O target is rejected. One refinement with O(5) covers Ba-Ca-Cu-La-O-Y (17), Ba-Cu-O-Sr-Y (15), Ba-Cu-La-O-Y (12), Ba-Ca-Cu-Gd-La-O (12), Ba-Ca-Cu-La-Nd-O (12), Ba-Co-Cu-O-Y (8), Ba-Cu-O-Pr-Y (7), Ba-Cu-Fe-O-Y (6). |
+| **Sr14Cu24O41** (spin-ladder; or a refined Ca-substituted member such as Sr0.4Ca13.6Cu24O41) | 18 of the 25 `Ca-Cu-O-Sr` entries | Those rows are all Sr(14-x)CaxCu24O41 at anion/cation 1.079; MP's best is Sr3Ca(CuO2)4 at 1.000. |
+| **(Sr,Ca)CuO2 infinite-layer, TETRAGONAL P4/mmm** (not the Cmcm chain SrCuO2) | the remaining ~5 `Ca-Cu-O-Sr` entries, incl. two at 110 K | Ca0.27Sr0.63CuO2-type. |
+| **Bi2Sr2CuO6+d (2201) with interstitial O** | ~32 entries (Bi-Cu-La-O-Sr, Bi-Cu-La-O-Pb-Sr, Bi-Ca-Cu-O-Sr) | Same interstitial-oxygen story as the 123s. |
+| **NaxCoO2 . yH2O** (hydrated sodium cobaltate) | 23 entries | MP has only the anhydrous phase; the deficit is 3.6 O per cation, the largest here. |
+| **LaFeAsO1-xHx / CaFeAsH** (hydrogen-substituted 1111) | 18 entries | H sits on the O site; MP's 1111 has no H. |
+
+## Skip: `Ba-Cu-H-O-Y`
+
+All 34 entries are ordinary YBa2Cu3O(6.5-7) carrying dilute **hydrogen**
+(H0.06-H1.4, plus two H4/H5 rows at Tc=0). ICSD does not refine interstitial H
+in YBCO, so there is nothing to download. They also cannot be built by dropping
+the H: 30 of them would collapse onto YBa2Cu3O7 compositions already in the
+index with different Tc, injecting contradictory labels. Recommend leaving this
+family out.
