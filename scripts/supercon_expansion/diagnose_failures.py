@@ -21,7 +21,8 @@ warnings.filterwarnings("ignore")
 from pymatgen.core import Composition  # noqa: E402
 from formula_match import chem_dict, formula_similarity  # noqa: E402
 from synth_dope import synth_dope_one  # noqa: E402
-from build_supercon_v7 import (CAND, POOL, SOURCE, METALS, alloy_dope_one, K, SCDB)  # noqa: E402
+from build_supercon_v7 import (CAND, POOL, SOURCE, METALS, alloy_dope_one, multi_sub_dope_one,
+                               _subsets, K, SCDB)  # noqa: E402
 
 STRUCT_CACHE = _os.path.join(SCDB, "parent_structs.pkl")
 
@@ -60,7 +61,8 @@ def main():
     for c in fail.itertuples():
         cd_sc = chem_dict(c.formula); S = frozenset(cd_sc)
         acc = []
-        for sub in ([S] if len(S) == 1 else [S] + [S - {e} for e in S]):
+        subsets = [S] if len(S) == 1 else [frozenset(x) for x in _subsets(sorted(S))]
+        for sub in subsets:
             for mid, cd2, eah, pf in by_sys.get(sub, ()):
                 tier, trd = formula_similarity(cd_sc, cd2)
                 if not np.isnan(tier):
@@ -70,6 +72,9 @@ def main():
             for e in S:
                 for mid, cd2, eah, pf in by_sys.get(frozenset({e}), ()):
                     acc.append((4 if e == major else 5, round(eah, 4), 1.0, mid, pf))
+        for sub in subsets:                       # the matcher's fallback tier
+            for mid, cd2, eah, pf in by_sys.get(sub, ()):
+                acc.append((6 + (len(S) - len(sub)), round(eah, 4), 1.0, mid, pf))
         if acc:
             topk[c.k] = heapq.nsmallest(K, acc)
     fail["has_parent"] = fail.k.isin(topk)
@@ -106,8 +111,13 @@ def main():
                     st, r2 = alloy_dope_one(st0, c.formula)
                 except Exception:  # noqa: BLE001
                     st, r2 = None, "alloy exception"
+            if st is None:
+                try:
+                    st, r3 = multi_sub_dope_one(st0, c.formula)
+                except Exception:  # noqa: BLE001
+                    st, r3 = None, "multisub exception"
                 if st is None:
-                    best = best or r
+                    best = best or r3
                     continue
             best = "BUILDABLE"; break
         reasons[best] += 1; by_cls[c.cls][best] += 1
