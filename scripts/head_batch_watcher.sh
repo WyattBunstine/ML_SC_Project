@@ -34,6 +34,11 @@ for NAME in $NAMES; do
       python scripts/plot_lsco_dome.py "$RUN/predictions.csv" \
         "docs/figures/tc_vs_cu_oxidation_la_series_dome_${NAME#la_series_}.png" \
         "La\$_2\$CuO\$_4\$ doping series — ${NAME}" >/dev/null 2>&1 ;;
+    matthias_*)
+      # valence-dome holdout: T_c vs e/a envelope over the held-out alloy systems
+      python scripts/matthias_dome.py "$RUN" >> "$STATUS" 2>/dev/null
+      python scripts/matthias_dome.py "$RUN" --plot \
+        "docs/figures/matthias_dome_${NAME#matthias_}.png" "valence dome — ${NAME}" >/dev/null 2>&1 ;;
     nickelate_*)
       # zero-shot nickelate holdout: scale/ordering over the 52 held-out rows
       python scripts/nickelate_holdout.py "$RUN" >> "$STATUS" 2>/dev/null
