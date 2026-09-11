@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the 3-D structure-motif row for graph_construction.tex.
+"""Generate the 3-D structure-motif row for graph_construction_fig.tex.
 
 Oblique projection: P(x,y,z) = (x + KY*y, z + KZ*y); larger y = farther.
 Painter's algorithm: primitives sorted by depth (descending y), atoms get a
@@ -8,7 +8,8 @@ small bias so they draw over bonds that end at them.
 import numpy as np
 
 KY, KZ = 0.42, 0.30
-TEX = "graph_construction.tex"  # run from docs/figures
+TEX = "graph_construction_fig.tex"  # run from docs/figures (the paper fragment)
+MOTIF_Y = 7.65                      # scope y-shift of row (a); see the fragment's geometry note
 
 
 def proj(p):
@@ -179,7 +180,7 @@ def fit_ilmenite(wmax=3.15, hmax=2.48, **kw):
 
 def render_panel(pan, shift, comment, extra=()):
     dx, dy = pan.center_offset()
-    lines = [comment, f"\\begin{{scope}}[shift={{({shift},11.9)}}]",
+    lines = [comment, f"\\begin{{scope}}[shift={{({shift},{MOTIF_Y})}}]",
              "  \\draw[panelbox] (-0.35,-0.15) rectangle (3.55,2.55);"]
     lines += pan.emit(dx, dy)
     lines += list(extra)

@@ -1,6 +1,9 @@
 # No-pretrain ladder — raw features through the Tc head (2026-08-25)
 
 Probe protocol: 3-seed, chemsys split, msle loss, deepsets pooling, 41 descriptors alongside.
+NOTE: reported MAE columns are ABSOLUTE KELVIN, but the training objective is msle = MSE in
+log1p-standardized z-space (relative-error emphasis; log-space seed ensembling) — identical for
+every row, so deltas are apples-to-apples; MSLE is the column closest to the optimized objective.
 Family columns are positives-only MAE (K); cuprate n=107, Fe-based n=66, heavy-fermion n=36, conventional n=450.
 Rungs A-C+poly: identity encoder (raw standardized node features ARE the per-atom latents, ZERO encoder params).
 Rung D: 967k-param GPS (bonds, no angle/poly) trained from scratch on Tc only. References: pretrained fine-tune probes.
