@@ -83,7 +83,15 @@ def main():
     v7["key"] = v7.id.map(lambda i: key(formula(i)))
     dup = v7.key.isin(set(v45.key.dropna()))
     print(f"V45 {len(v45)} + V7 {len(v7)} | V7 rows duplicating a V45 composition: {int(dup.sum())} (dropped)")
-    v8 = pd.concat([v45, v7[~dup]], ignore_index=True)
+    # the 17 rows that exist ONLY in the nickelate index (the d9 holdout targets
+    # 3DSC never matched): folded in so probe / cuprate-dome / nickelate arms all
+    # share ONE index, with the holdout csv still forcing all 52 into test
+    nick = pd.read_pickle(_os.path.join(MP, "SC_MP_nick_v45.pickle"))
+    nick_only = nick[~nick.id.isin(set(v45.id))].copy()
+    nick_only["key"] = nick_only.id.map(lambda i: key(formula(i)))
+    nick_only = nick_only[~nick_only.key.isin(set(v7[~dup].key.dropna()) | set(v45.key.dropna()))]
+    print(f"nickelate-only rows folded in: {len(nick_only)}")
+    v8 = pd.concat([v45, v7[~dup], nick_only], ignore_index=True)
     v8 = v8.drop_duplicates("id").drop(columns=["key"])
     out = _os.path.join(MP, "SC_MP_V8_supercon.pickle")
     v8.to_pickle(out)
@@ -92,8 +100,9 @@ def main():
     # ---- descriptors ----
     d45 = pd.read_pickle(_os.path.join(MP, "descriptors_doped.pickle"))
     d7 = pd.read_pickle(_os.path.join(MP, "descriptors_v7_supercon.pickle"))
-    assert list(d45["names"]) == list(d7["names"]), "descriptor layouts differ"
-    table = dict(d45["table"]); table.update(d7["table"])
+    dn = pd.read_pickle(_os.path.join(MP, "descriptors_v4_plus_nickelates.pickle"))
+    assert list(d45["names"]) == list(d7["names"]) == list(dn["names"]), "descriptor layouts differ"
+    table = dict(d45["table"]); table.update(d7["table"]); table.update(dn["table"])
     miss = [i for i in v8.id if i not in table]
     pd.to_pickle({"names": list(d45["names"]), "table": table, "failed": []},
                  _os.path.join(MP, "descriptors_v8_supercon.pickle"))
