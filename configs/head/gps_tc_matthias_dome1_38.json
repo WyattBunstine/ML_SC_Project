@@ -26,5 +26,6 @@
   "ft_warmup_epochs": 60,
   "ft_epochs": 200,
   "ft_patience": 30,
-  "ft_batch_size": 64
+  "ft_batch_size": 64,
+  "ft_num_workers": 8
 }
