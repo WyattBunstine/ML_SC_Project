@@ -53,7 +53,7 @@ CIFS = _os.path.join(MP, "cifs_v7_supercon")
 IDPROP = _os.path.join(SCDB, "id_prop_v7.csv")
 GRAPHS = _os.path.join(MP, "graphs_v4_v7_supercon")
 INDEX_OUT = _os.path.join(MP, "SC_MP_V7_supercon")
-K = 12
+K = 16
 
 
 def _subsets(els, min_size=2, max_drop=3):
@@ -166,7 +166,9 @@ def cmd_pool(**_):
 
 
 METALS = set("Li Be Na Mg Al K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn "
-             "Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Th U".split())
+             "Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Th U "
+             "Ge Si Sb".split())   # metalloids that form substitutional solid solutions (Al-Ge, Al-Si, Sn-Sb):
+                                  # without them an Al0.96Ge0.04 target never saw elemental Al as a host
 
 
 def alloy_dope_one(structure, target_formula, max_sites=64):
@@ -192,17 +194,25 @@ def alloy_dope_one(structure, target_formula, max_sites=64):
     tgt = {e: v for e, v in tgt.items() if v > 1e-6}
     if not parent_els <= set(tgt):
         return None, "alloy: parent element not in target"
+    tag = "alloy_solid_solution"
     if not set(tgt) <= METALS:
-        return None, "alloy: non-metal in target"
+        # a dilute interstitial (O/N/H/C < 3 %) has no site in a metal lattice;
+        # build the host alloy and record the dropped impurity in the tag
+        non = {e: v for e, v in tgt.items() if e not in METALS}
+        if sum(non.values()) >= 0.03:
+            return None, "alloy: non-metal in target"
+        tgt = {e: v for e, v in tgt.items() if e in METALS}
+        z = sum(tgt.values()); tgt = {e: v / z for e, v in tgt.items()}
+        tag = "alloy_solid_solution(interstitial_dropped)"
     if len(st) > max_sites:
         return None, "alloy: parent cell too large"
     if len(tgt) == 1:
-        return st, "identical"
+        return st, "identical" if tag == "alloy_solid_solution" else tag
     new = Structure(st.lattice, [dict(tgt)] * len(st), st.frac_coords)
     got = new.composition.fractional_composition.get_el_amt_dict()
     if max(abs(got.get(e, 0.0) - tgt.get(e, 0.0)) for e in set(got) | set(tgt)) > 1e-4:
         return None, "alloy: composition mismatch"
-    return new, "alloy_solid_solution"
+    return new, tag
 
 
 ANIONS = {"O", "F", "Cl", "Br", "I", "S", "Se", "Te", "N", "H"}
@@ -254,7 +264,35 @@ def multi_sub_dope_one(structure, target_formula, tol=0.02, max_sites=200):
     cat_frac = sum(v for e, v in tgt.items() if _role(e) == "cation")
     if cat_sites == 0 or cat_frac <= 0:
         return None, "multisub: no cation sublattice"
-    total = cat_sites / cat_frac                  # atoms in the parent cell at the target composition
+    # Cation-deficient formulas (YBa2Cu2.94O6.94) cannot fill every cation site
+    # with their own atoms and the only fillers left are implausible; allow up to
+    # 3 % cation vacancies by trying progressively smaller fillings.
+    for _fill in (1.0, 0.99, 0.98, 0.97):
+        res_ = _distribute(sub, tgt, cat_sites / cat_frac * _fill)
+        if res_ is not None:
+            break
+    else:
+        return None, "multisub: no feasible site distribution"
+    occ, banned = res_
+    species = [None] * len(st)
+    for p, d in occ.items():
+        for i in sub[p]:
+            species[i] = dict(d)
+    new = Structure(st.lattice, species, st.frac_coords)
+    got = new.composition.fractional_composition.get_el_amt_dict()
+    if max(abs(got.get(e, 0.0) - tgt.get(e, 0.0)) for e in set(got) | set(tgt)) > tol:
+        return None, "multisub: composition mismatch"
+    return new, "multi_sublattice"
+
+
+def _distribute(sub, tgt, total):
+    """Transportation LP for one cell filling; None when infeasible."""
+    from pymatgen.core import Element
+    from scipy.optimize import linprog
+
+    def prop(e):
+        el = Element(e)
+        return (el.X or 1.5), (el.atomic_radius or 1.4)
     # Distribute each target element over the COMPATIBLE sublattices instead of
     # committing it to the single nearest one: a dopant often splits (La sits on
     # both the Y and the Ba site of a 123), which a greedy assignment reports as
@@ -289,35 +327,109 @@ def multi_sub_dope_one(structure, target_formula, tol=0.02, max_sites=200):
         for e in els:
             row[idx[(e, p)]] = 1.0
         if _role(p) == "cation":
-            A_eq.append(row); b_eq.append(float(len(sub[p])))
-        else:
             A_ub.append(row); b_ub.append(float(len(sub[p])))
+            A_ub.append([-x for x in row]); b_ub.append(-float(len(sub[p])) * 0.97)
+        else:
+            A_ub.append(row); b_ub.append(float(len(sub[p])) * (1.0 + ANION_TOL))
     res = linprog(cost, A_ub=A_ub or None, b_ub=b_ub or None, A_eq=A_eq, b_eq=b_eq,
                   bounds=(0, None), method="highs")
     if not res.success:
-        return None, "multisub: no feasible site distribution"
+        return None
     occ = defaultdict(dict)
     for e in els:
         for p in subs:
             v = res.x[idx[(e, p)]]
             if v > 1e-6:
                 if (e, p) in banned:
-                    return None, f"multisub: {e} has no plausible sublattice (forced onto {p})"
+                    return None
                 occ[p][e] = occ[p].get(e, 0.0) + v / len(sub[p])
     for p in subs:
         if p not in occ:
-            return None, f"multisub: {p} sublattice unoccupied"
+            return None
         if sum(occ[p].values()) > 1.0 + 1e-3:
-            return None, f"multisub: {p} sublattice over-filled"
-    species = [None] * len(st)
-    for p, d in occ.items():
-        for i in sub[p]:
-            species[i] = dict(d)
-    new = Structure(st.lattice, species, st.frac_coords)
-    got = new.composition.fractional_composition.get_el_amt_dict()
-    if max(abs(got.get(e, 0.0) - tgt.get(e, 0.0)) for e in set(got) | set(tgt)) > tol:
-        return None, "multisub: composition mismatch"
-    return new, "multi_sublattice"
+            if _role(p) == "anion" and sum(occ[p].values()) <= 1.0 + ANION_TOL + 1e-3:
+                z = sum(occ[p].values()); occ[p] = {e: v / z for e, v in occ[p].items()}
+            else:
+                return None
+    return occ, banned
+
+
+def _redox_centre(els):
+    """The element a family's superconductivity lives on. A parent that lacks it
+    cannot host the target's physics however well the site roles fit (audit
+    2026-09-14: Th1Ca3Ba1Cu3O9 was built on BaThO3, V-doped Bi-2223 on
+    Sr3Ca6V7BiO28 - 489 such rows)."""
+    e = set(els)
+    if "Cu" in e and "O" in e:
+        return "Cu"
+    if "Fe" in e and e & {"As", "P", "Se", "Te", "S"}:
+        return "Fe"
+    if "Ni" in e and "O" in e:
+        return "Ni"
+    return None
+
+
+def _anion_ratio(cd):
+    a = sum(v for e, v in cd.items() if e in ANIONS)
+    k = sum(v for e, v in cd.items() if e not in ANIONS)
+    return a / k if k else float("nan")
+
+
+RARE_EARTHS = {"Y", "La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu"}
+
+
+def _canon_re(els):
+    """Element set with every rare earth collapsed to one token: RE-substituted
+    frameworks (Ho-123, Eu-124, Nd-214 ...) share a template and differ only by
+    an isovalent cation. 941 of the 1,593 candidates left unbuilt on 2026-09-14
+    matched a template this way and nothing else."""
+    return frozenset("RE" if e in RARE_EARTHS else e for e in els)
+
+
+def _cation_fit(cd_t, cd_p):
+    """How well the target's cation proportions can be laid onto the parent's
+    cation sublattices, ignoring chemistry (the doper checks that): the best L1
+    distance between the parent's sorted sublattice fractions and the target's
+    element fractions merged into that many groups. 0 = perfect. Ranking by
+    anion ratio + shared elements alone put Sr4Ca10Cu24O41 on Sr19Cu19O41 and
+    Bi-2201 derivatives on La8Cu7O19 (2026-09-14 diagnosis: 44/60 failures were
+    'element has no room', i.e. the framework was wrong, not the chemistry)."""
+    from itertools import combinations
+    t = sorted((v for e, v in cd_t.items() if e not in ANIONS), reverse=True)
+    p = sorted((v for e, v in cd_p.items() if e not in ANIONS), reverse=True)
+    if not t or not p:
+        return 9.9
+    t = [x / sum(t) for x in t]; p = [x / sum(p) for x in p]
+    n, k = len(t), len(p)
+    if n < k:                       # fewer target elements than sublattices: some element must span
+        return 0.1                  # two sites (legitimate, e.g. Y on both the Y and the Ca site) - mild penalty
+    if n == k:
+        return sum(abs(a - b) for a, b in zip(t, p))
+    # more target elements than sublattices: (n-k) elements must sit as foreign
+    # occupants on someone else's site - a single-sublattice parent (Fe3O) would
+    # otherwise "fit" Dy1Fe1As1O0.85 perfectly while the real template LaFeAsO
+    # sat one rare-earth swap away
+    merge_penalty = 0.2 * (n - k)
+    best = 9.9
+    # partition the n target fractions into k contiguous-or-not groups: brute force
+    # over assignments of the (n-k) smallest fractions onto the k groups
+    heads, tails = t[:k], t[k:]
+    from itertools import product
+    for assign in product(range(k), repeat=len(tails)):
+        g = list(heads)
+        for x, j in zip(tails, assign):
+            g[j] += x
+        best = min(best, sum(abs(a - b) for a, b in zip(sorted(g, reverse=True), p)))
+        if best < 1e-9:
+            break
+    return best + merge_penalty
+
+
+RATIO_CAP = 1.0        # parents whose anion/cation ratio differs more than this are a different compound class
+ANION_TOL = 0.02       # anion sublattice may be over-filled by this fraction (nominal O7 on an O7 host with a
+                       # slight cation deficiency lands at 1.005-1.02); occupancies are then renormalized to 1 and
+                       # the result must still pass the composition-fidelity tolerance
+BANNED = _os.path.join(SCDB, "banned_keys.txt")   # composition keys never to build (audited typos)
 
 
 def cmd_match_dope(limit=None, **_):
@@ -347,59 +459,126 @@ def cmd_match_dope(limit=None, **_):
         except Exception as e:  # noqa: BLE001
             print(f"  icsd {code}: unreadable ({str(e)[:50]})", flush=True)
             continue
-        labels = set()
+        labels = defaultdict(float)               # majority label -> number of sites
         for site in st_i:
             occ = {getattr(e, "symbol", str(e)): float(v) for e, v in site.species.items()}
             if occ:
-                labels.add(max(occ, key=occ.get))
+                labels[max(occ, key=occ.get)] += 1.0
         mid = f"icsd-{code}"
         icsd[mid] = st_i
-        by_sys[frozenset(labels)].append((mid, {e: 1.0 for e in labels}, 0.0,
-                                          st_i.composition.reduced_formula))
+        # site COUNTS per sublattice, not 1.0 each: _cation_fit compares these
+        # fractions with the target's, and a refinement's formula (Sr2Ca0.5Y0.5...)
+        # has more elements than its structure has sublattices
+        by_sys[frozenset(labels)].append((mid, dict(labels), 0.0, st_i.composition.reduced_formula))
     print(f"  ICSD parents loaded: {len(icsd)}", flush=True)
+    by_re = defaultdict(list)                     # RE-canonical element set -> parents
+    for sysk, lst in list(by_sys.items()):
+        if sysk & RARE_EARTHS:
+            for t in lst:
+                by_re[_canon_re(sysk)].append(t)
     cand = pd.read_csv(CAND)
     done = set()
     if _os.path.exists(SOURCE):                    # resumable
         done = set(pd.read_csv(SOURCE)["k"])
         cand = cand[~cand.k.isin(done)]
+    if _os.path.exists(BANNED):
+        banned = {l.strip() for l in open(BANNED) if l.strip()}
+        nb = int(cand.k.isin(banned).sum())
+        cand = cand[~cand.k.isin(banned)]
+        print(f"  banned (audited typos) skipped: {nb}", flush=True)
     if limit:
         cand = cand.head(limit)
     print(f"match-dope: {len(cand)} candidates ({len(done)} already built)", flush=True)
     topk = {}
+    swaps = {}                                    # (candidate key, parent id) -> {parent RE: target RE}
     for c in cand.itertuples():
         cd_sc = chem_dict(c.formula)
         S = frozenset(cd_sc)
         subsets = [S] if len(S) == 1 else [frozenset(x) for x in _subsets(sorted(S))]
+        centre = _redox_centre(S)
+        r_t = _anion_ratio(cd_sc)
+        tot = sum(cd_sc.values())
+        metal_part = {e: v for e, v in cd_sc.items() if e in METALS}
+        all_metal = set(S) <= METALS
+        # dilute interstitial in a metal (Nb99.9O0.1, Al0.01Nb0.97O0.02): the host
+        # is the ELEMENT, not an oxide of it (audit: these landed on Nb12O29)
+        dilute_metal = (not all_metal) and sum(metal_part.values()) / tot >= 0.97
+
+        def gate(cd2):
+            """Parent acceptance: must carry the family's redox centre and be of
+            the same compound class (anion/cation ratio within RATIO_CAP)."""
+            if centre and centre not in cd2:
+                return False
+            if not all_metal and not dilute_metal:
+                r_p = _anion_ratio(cd2)
+                if not np.isnan(r_p) and abs(r_p - r_t) > RATIO_CAP:
+                    return False
+            return True
+
         acc = []
         for sub in subsets:
             for mid, cd2, eah, pf in by_sys.get(sub, ()):
+                if not gate(cd2):
+                    continue
                 tier, trd = formula_similarity(cd_sc, cd2)
                 if np.isnan(tier):
                     continue
                 acc.append((int(tier), round(eah, 4), round(trd, 5), mid, pf))
-        # all-metal composition -> also offer the ELEMENTAL lattices as
-        # solid-solution parents, majority component first (tier 4 = tried only
-        # after every 3DSC-accepted parent has been tried and failed)
-        if set(S) <= METALS:
-            major = max(cd_sc, key=cd_sc.get)
-            for e in S:
+        # all-metal composition (or a metal with a dilute interstitial) -> offer
+        # the ELEMENTAL lattices as solid-solution parents, majority first
+        if all_metal or dilute_metal:
+            major = max(metal_part, key=metal_part.get)
+            for e in metal_part:
                 for mid, cd2, eah, pf in by_sys.get(frozenset({e}), ()):
                     acc.append((4 if e == major else 5, round(eah, 4), 1.0, mid, pf))
-        # Last resort: ANY parent whose element set is a subset of the target's.
-        # 3DSC's formula_similarity is a similarity gate for its own one-pair
-        # doper and rejects e.g. La2CuO4 as a parent of La1.85Sr0.15Cu0.875Ni0.125O4;
-        # multi_sub_dope_one does not need that similarity, only compatible
-        # sublattices, so offer these ranked by elements shared (tier 6 = all,
-        # 7 = one fewer, ...) and let the doper's own checks reject bad ones.
+        # Last resort: any GATED parent whose element set is a subset of the
+        # target's, ranked by anion/cation-ratio closeness FIRST and shared
+        # elements second. Ranking by shared elements alone chose a molecular
+        # chloride (Te3MoCl16) over the Chevrel host (Mo6Te8) for Mo6Te6Cl2.
         for sub in subsets:
             for mid, cd2, eah, pf in by_sys.get(sub, ()):
-                acc.append((0, 0.0, 1.0, mid, pf) if str(mid).startswith("icsd-")
-                           else (6 + (len(S) - len(sub)), round(eah, 4), 1.0, mid, pf))
+                if str(mid).startswith("icsd-"):
+                    if gate(cd2):
+                        acc.append((0, 0.0, 1.0, mid, pf))
+                    continue
+                if not gate(cd2):
+                    continue
+                r_p = _anion_ratio(cd2)
+                dr = 0.0 if (all_metal or np.isnan(r_p)) else abs(r_p - r_t)
+                fit = _cation_fit(cd_sc, cd2)
+                acc.append((6 + int(round(dr * 4)), round(fit, 2), 0, len(S) - len(sub), round(eah, 4), mid, pf))
+        # RE-swapped templates: a gated parent whose elements match the target's
+        # once rare earths are interchangeable, and which carries an RE the target
+        # lacks. Ranked just below the exact-element fallback. The swap itself is
+        # applied to the structure at doping time (see swaps[]).
+        if S & RARE_EARTHS:
+            tgt_re = [e for e in sorted(S, key=lambda e: -cd_sc[e]) if e in RARE_EARTHS]
+            for sub in subsets:
+                for mid, cd2, eah, pf in by_re.get(_canon_re(sub), ()):
+                    p_re = set(cd2) & RARE_EARTHS
+                    if not p_re - S or not gate(cd2):
+                        continue
+                    if not (set(cd2) - RARE_EARTHS) <= S:
+                        continue
+                    r_p = _anion_ratio(cd2)
+                    dr = 0.0 if np.isnan(r_p) else abs(r_p - r_t)
+                    swap = {r: tgt_re[0] for r in p_re - S}
+                    swaps[(c.k, mid)] = swap
+                    fit = _cation_fit(cd_sc, cd2)
+                    # same tier band as the exact fallbacks: a swapped template with a
+                    # good cation fit must beat an exact-element parent with a bad one
+                    # (Dy-1111 was built on Fe3O while LaFeAsO sat one swap away)
+                    acc.append((6 + int(round(dr * 4)), round(fit, 2), 1, len(S) - len(sub), round(eah, 4), mid, pf))
         if acc:
-            topk[c.k] = heapq.nsmallest(K, acc)
+            # separate quotas: the exact-element fallbacks (tier 6-9) would otherwise
+            # fill every slot ahead of the RE-swapped templates (tier 10+) and the
+            # swaps would never be tried (first pass built 10 of 941)
+            exact = [t for t in acc if not (len(t) == 7 and t[2] == 1)]
+            swapped = [t for t in acc if len(t) == 7 and t[2] == 1]
+            topk[c.k] = sorted(heapq.nsmallest(K, exact) + heapq.nsmallest(K, swapped))
     cand = cand[cand.k.isin(topk)].copy()
     print(f"  candidates with >=1 accepted parent: {len(cand)}", flush=True)
-    mids = sorted({t[3] for lst in topk.values() for t in lst if not str(t[3]).startswith("icsd-")})
+    mids = sorted({t[-2] for lst in topk.values() for t in lst if not str(t[-2]).startswith("icsd-")})
     key = _os.environ.get("MP_API_KEY") or _sys.exit("error: set MP_API_KEY (env-only)")
     print(f"  fetching {len(mids)} parent structures", flush=True)
     cache = dict(icsd)                            # ICSD parents need no fetch
@@ -415,10 +594,16 @@ def cmd_match_dope(limit=None, **_):
         if c is None:
             continue
         built = False
-        for tier, eah, trd, mid, pf in lst:
+        for t in lst:
+            tier, mid, pf = t[0], t[-2], t[-1]
+            eah, trd = (t[1], t[2]) if len(t) == 5 else (t[-3], t[1])
             st0 = cache.get(mid)
             if st0 is None:
                 continue
+            sw = swaps.get((k, mid))
+            if sw:                                # RE-swapped template
+                st0 = st0.copy(); st0.remove_oxidation_states()
+                st0.replace_species({a: b for a, b in sw.items()})
             try:
                 st, reason = synth_dope_one(st0, c.formula)
             except Exception as e:  # noqa: BLE001
@@ -452,7 +637,9 @@ def cmd_match_dope(limit=None, **_):
                 continue
             rows.append(dict(id=ident, cif=_os.path.relpath(cifp, _ROOT), tc=c.tc, k=c.k,
                              n_reports=c.n_reports, tc_iqr=c.tc_iqr, parent_formula=pf,
-                             tier=tier, totreldiff=trd, doping=reason, eah=eah))
+                             tier=tier, totreldiff=trd,
+                             doping=reason + (f"(RE-swap {','.join(f'{a}>{b}' for a, b in sw.items())})" if sw else ""),
+                             eah=eah))
             built = True
             break
         if not built:
