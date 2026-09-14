@@ -222,7 +222,7 @@ def _role(el):
     return "anion" if el in ANIONS else "cation"
 
 
-def multi_sub_dope_one(structure, target_formula, tol=0.02, max_sites=200):
+def multi_sub_dope_one(structure, target_formula, tol=0.02, max_sites=240):
     """Multi-sublattice substitutional doping — the case 3DSC rejects with
     "different scaling of fixed sites" (74% of the 2026-09-10 parent-found
     failures, overwhelmingly cuprates): its doper handles ONE doping pair, but
@@ -461,6 +461,8 @@ def cmd_match_dope(limit=None, **_):
         try:
             st_i = _Struct.from_file(cif)
             st_i.remove_oxidation_states()
+            if len(st_i) > 120:               # centred refinements (the 224-site ladder
+                st_i = st_i.get_primitive_structure(tolerance=0.01)   # approximant) -> primitive
         except Exception as e:  # noqa: BLE001
             print(f"  icsd {code}: unreadable ({str(e)[:50]})", flush=True)
             continue
