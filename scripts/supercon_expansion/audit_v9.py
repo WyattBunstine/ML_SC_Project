@@ -156,6 +156,71 @@ def main():
         e = max(abs(g.get(x, 0) - t.get(x, 0)) for x in set(g) | set(t))
         if e > 0.02:
             flags[r.id].append(f"H:comp-err-{e:.3f}")
+    # ---- hard / review classification (the rules settled on 2026-09-14) ----
+    MIXED = {"Fe", "Co", "Mn", "Cr", "V", "Ni", "Ru", "Ti", "Ce", "Pr", "Tb", "Eu", "Yb", "Sn", "Sb", "Mo", "W",
+             "Re", "Os", "Ir", "Rh", "Pd", "Pt", "U"}
+    OX2 = dict(OX); OX2.update({"Y": 3, "Bi": 3, "Tl": 3, "Pb": 2, "Hg": 2, "Fe": 3, "Co": 3, "Mn": 3, "Ru": 4, "Ga": 3,
+                                "Ti": 4, "Al": 3, "Zn": 2, "Ni": 2, "Cd": 2, "In": 3, "Sb": 3, "Sc": 3, "Lu": 3, "Tb": 3,
+                                "Dy": 3, "Ho": 3, "Er": 3, "Tm": 3, "Yb": 3, "Th": 4, "Ta": 5, "Nb": 5, "Mo": 6, "W": 6,
+                                "V": 5, "Cr": 3, "Zr": 4, "Hf": 4, "Mg": 2, "Li": 1, "Rb": 1, "Cs": 1, "Ag": 1, "Au": 3,
+                                "Sn": 4, "Ge": 4, "Si": 4, "B": 3, "C": 4, "P": 5, "As": 5, "Re": 7, "Os": 4, "Ir": 4,
+                                "Pt": 2, "Pd": 2, "Rh": 3, "U": 4, "Ce": 3, "Tc": 7, "Be": 2, "D": 1})
+    hard, review = defaultdict(list), defaultdict(list)
+    for r in v9.itertuples():
+        c = comps.get(r.id)
+        if c is None:
+            continue
+        rs = flags.get(r.id, [])
+        # typo: grossly unphysical Cu oxidation on an essentially pure cuprate
+        cations_ = sum(v for e, v in c.items() if e not in ANION)
+        if cls(c) == "cuprate" and c["Cu"] >= 0.2 * cations_ and all(e in OX2 for e in c if e != "Cu"):
+            cu = c["Cu"]; mixed = sum(v for e, v in c.items() if e in MIXED)
+            ox = -sum(OX2[e] * n for e, n in c.items() if e != "Cu") / cu
+            if mixed < 0.3 * cu and (ox < 0.8 or ox > 4.0):
+                hard[r.id].append(f"typo: Cu oxidation {ox:.2f}")
+        for x in rs:
+            if x.startswith("G:parent-lacks"):
+                hard[r.id].append("structure: parent lacks the redox centre")
+            elif x.startswith("G:anion-ratio"):
+                dr = float(x.split("anion-ratio-")[1].split("(")[0])
+                if abs(dr) > 1.0:
+                    hard[r.id].append(f"structure: parent of a different compound class ({dr:+.1f} anions/cation)")
+            elif x.startswith("H:comp-err"):
+                hard[r.id].append("structure: composition mismatch")
+            elif x.startswith("B:alloy") or x.startswith("B:elemental"):
+                hard[r.id].append("typo: impossible Tc for chemistry")
+            elif x.startswith("A:huge"):
+                # real large cells exist (Ba24Si100 clathrate, Al28Ca24O66 mayenite,
+                # percent formulas); only a runaway index is a typo
+                if max(c.values()) > 500:
+                    hard[r.id].append("typo: absurd coefficient")
+            elif x.startswith("D:duplicate") and r.tc == 0:
+                hi = float(x.split("..")[1].split("K")[0])
+                if hi > 20:
+                    review[r.id].append(f"label: Tc=0 report at a composition others put at {hi:.0f} K")
+        if r.id in src.index and r.origin == "new" and r.id not in hard:
+            sr = src.loc[r.id]
+            try:
+                pc = set(Composition(str(sr.parent_formula)).get_el_amt_dict())
+            except Exception:  # noqa: BLE001
+                pc = None
+            if pc is not None and str(sr.doping).startswith("multi_sublattice"):
+                cats = {e: v for e, v in c.items() if e not in ANION}; tot = sum(cats.values())
+                new = sum(v for e, v in cats.items() if e not in pc) / tot if tot else 0
+                if new > 0.5:      # more foreign than native: the parent's framework is not this compound's
+                    hard[r.id].append(f"structure: {100*new:.0f}% of cations foreign to parent {sr.parent_formula}")
+                elif new > 0.35:
+                    review[r.id].append(f"structure: {100*new:.0f}% of cations foreign to parent {sr.parent_formula}")
+    v9i = v9.set_index("id")
+    HARD = _os.path.join(_ROOT, "docs", "data_curation", "v9_audit_exclude_ids.csv")
+    REV = _os.path.join(_ROOT, "docs", "data_curation", "v9_audit_review_ids.csv")
+    pd.DataFrame([dict(id=i, formula=v9i.formula[i], tc=v9i.tc[i], origin=v9i.origin[i], reason="; ".join(w))
+                  for i, w in hard.items()]).to_csv(HARD, index=False)
+    pd.DataFrame([dict(id=i, formula=v9i.formula[i], tc=v9i.tc[i], origin=v9i.origin[i], reason="; ".join(w))
+                  for i, w in review.items()]).to_csv(REV, index=False)
+    print(f"HARD exclusions: {len(hard)} (typo {sum(1 for w in hard.values() if any(x.startswith('typo') for x in w))}, "
+          f"structure {sum(1 for w in hard.values() if any(x.startswith('structure') for x in w))}) -> {HARD}")
+    print(f"REVIEW: {len(review)} -> {REV}")
     rows = []
     for r in v9.itertuples():
         if r.id in flags:
