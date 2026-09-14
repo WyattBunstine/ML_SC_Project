@@ -12,6 +12,12 @@ ex = set(pd.read_csv(os.path.join(DC, "v9_audit_exclude_ids.csv")).id)
 p45 = os.path.join(DC, "v45_audit_exclude_ids.csv")
 if os.path.exists(p45):
     ex |= set(pd.read_csv(p45).id)
+# label conflicts: identical nominal compositions with >= 3 reports where the
+# minority class (zero vs superconducting) is outvoted (user-approved 2026-09-14)
+pmv = os.path.join(DC, "v10_conflict_minority_ids.csv")
+if os.path.exists(pmv):
+    mv = set(pd.read_csv(pmv).id); ex |= mv
+    print(f"  majority-vote label removals: {len(mv)}")
 v10 = v9[~v9.id.isin(ex)].reset_index(drop=True)
 v10.to_pickle(os.path.join(MP, "SC_MP_V10.pickle")); v10.to_csv(os.path.join(MP, "SC_MP_V10.csv"), index=False)
 d9 = pd.read_pickle(os.path.join(MP, "descriptors_v9_cuneg.pickle"))
