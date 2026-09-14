@@ -267,7 +267,7 @@ def multi_sub_dope_one(structure, target_formula, tol=0.02, max_sites=200):
     # Cation-deficient formulas (YBa2Cu2.94O6.94) cannot fill every cation site
     # with their own atoms and the only fillers left are implausible; allow up to
     # 3 % cation vacancies by trying progressively smaller fillings.
-    for _fill in (1.0, 0.99, 0.98, 0.97):
+    for _fill in (1.0, 0.99, 0.98, 0.97, 0.95, 0.93, 0.90):
         res_ = _distribute(sub, tgt, cat_sites / cat_frac * _fill)
         if res_ is not None:
             break
@@ -328,7 +328,11 @@ def _distribute(sub, tgt, total):
             row[idx[(e, p)]] = 1.0
         if _role(p) == "cation":
             A_ub.append(row); b_ub.append(float(len(sub[p])))
-            A_ub.append([-x for x in row]); b_ub.append(-float(len(sub[p])) * 0.97)
+            # vacancy allowance: 10 % on A-site sublattices (alkaline-earth / rare-
+            # earth spacer cations - the infinite-layer (Sr,Ca)0.9CuO2 phases are
+            # genuinely A-deficient), 3 % elsewhere (a 10 % Cu deficiency is a typo)
+            lo = 0.90 if p in A_SITE else 0.97
+            A_ub.append([-x for x in row]); b_ub.append(-float(len(sub[p])) * lo)
         else:
             A_ub.append(row); b_ub.append(float(len(sub[p])) * (1.0 + ANION_TOL))
     res = linprog(cost, A_ub=A_ub or None, b_ub=b_ub or None, A_eq=A_eq, b_eq=b_eq,
@@ -425,6 +429,7 @@ def _cation_fit(cd_t, cd_p):
     return best + merge_penalty
 
 
+A_SITE = {"Sr", "Ca", "Ba", "La", "Y", "Nd", "Pr", "Sm", "Eu", "Gd", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Ce", "Tb", "K", "Na", "Rb", "Cs"}
 RATIO_CAP = 1.0        # parents whose anion/cation ratio differs more than this are a different compound class
 ANION_TOL = 0.02       # anion sublattice may be over-filled by this fraction (nominal O7 on an O7 host with a
                        # slight cation deficiency lands at 1.005-1.02); occupancies are then renormalized to 1 and
