@@ -19,7 +19,6 @@ Sm1Fe1As1H0.19O0.81-MP-mp-20349.cif,Sm1Fe1As1H0.19O0.81,55.3,new,structure: comp
 La1Ni1As1H0.17O0.83-MP-mp-1079362.cif,La1Ni1As1H0.17O0.83,3.68,new,structure: composition mismatch
 Ca0.76Pr0.24Fe1As0.9Sb0.1-MP-mp-2373.cif,Ca0.76Pr0.24Fe1As0.9Sb0.1,43.0,new,structure: 59% of cations foreign to parent PrFe2
 Ca0.84Nd0.16Fe1As0.9Sb0.1-MP-mp-1207.cif,Ca0.84Nd0.16Fe1As0.9Sb0.1,43.0,new,structure: 61% of cations foreign to parent NdFe2
-Ca9.06Gd0.94Pt3Fe10As18-MP-mp-20089.cif,Ca9.06Gd0.94Pt3Fe10As18,25.0,new,structure: 73% of cations foreign to parent GdFe2
 Ca0.76Ce0.24Fe1As1.8Sb0.2-MP-mp-1079507.cif,Ca0.76Ce0.24Fe1As1.8Sb0.2,43.0,new,structure: 64% of cations foreign to parent CeFeSb2
 Ca0.88La0.12Fe1As1.8Sb0.2-MP-mp-1079119.cif,Ca0.88La0.12Fe1As1.8Sb0.2,47.2,new,structure: 67% of cations foreign to parent LaFeSb2
 Ca0.81Nd0.19Fe1As1.98Sb0.02-MP-mp-1079507.cif,Ca0.81Nd0.19Fe1As1.98Sb0.02,24.0,new,structure: 74% of cations foreign to parent CeFeSb2
@@ -39,8 +38,8 @@ La1.736Nd0.116Ba0.15Cu1O4.03-MP-icsd-39476.cif,La1.736Nd0.116Ba0.15Cu1O4.03,29.0
 La1.736Nd0.116Ba0.15Cu1O4-MP-icsd-39476.cif,La1.736Nd0.116Ba0.15Cu1O4,29.0,new,structure: 63% of cations foreign to parent Ce0.26Nd3.74Cu2O8
 Nd1.3Ba1.3Sr0.4O6.828-MP-mp-985608.cif,Nd1.3Ba1.3Sr0.4O6.828,35.0,new,structure: 57% of cations foreign to parent Nd2O5
 Y1Ba2CuFeO8-MP-mp-772213.cif,Y1Ba2CuFeO8,0.0,new,structure: 80% of cations foreign to parent La4CuO8
-Nd1Ba1.5La0.5O6.64-MP-mp-985608.cif,Nd1Ba1.5La0.5O6.64,0.0,new,structure: 67% of cations foreign to parent Nd2O5
-Nd1Ba1.7La0.3O6.77-MP-mp-985608.cif,Nd1Ba1.7La0.3O6.77,57.5,new,structure: 67% of cations foreign to parent Nd2O5
+Nd1Ba1.5La0.5O6.64-MP-mp-1226790.cif,Nd1Ba1.5La0.5O6.64,0.0,new,structure: 100% of cations foreign to parent Ce2PrO6
+Nd1Ba1.7La0.3O6.77-MP-mp-1226790.cif,Nd1Ba1.7La0.3O6.77,57.5,new,structure: 100% of cations foreign to parent Ce2PrO6
 Nd1Bi0.94Pb0.06S2F0.3O0.7-MP-mp-1223105.cif,Nd1Bi0.94Pb0.06S2F0.3O0.7,5.56,new,structure: 53% of cations foreign to parent La4Bi4S8O3F
 Nd1Bi0.9Pb0.1S2F0.3O0.7-MP-mp-1223105.cif,Nd1Bi0.9Pb0.1S2F0.3O0.7,4.83,new,structure: 55% of cations foreign to parent La4Bi4S8O3F
 Nd1Bi0.96Pb0.04S2F0.3O0.7-MP-mp-1223105.cif,Nd1Bi0.96Pb0.04S2F0.3O0.7,5.35,new,structure: 52% of cations foreign to parent La4Bi4S8O3F
@@ -74,6 +73,7 @@ Mo1Sr2Er1.5Ce1Cu2O10-MP-mp-1223395.cif,Mo1Sr2Er1.5Ce1Cu2O10,0.0,new,structure: 7
 Mo1Sr2Ho1.5Ce1Cu2O10-MP-mp-1223395.cif,Mo1Sr2Ho1.5Ce1Cu2O10,0.0,new,structure: 73% of cations foreign to parent La5Dy3(CuO4)4
 Mo1Sr2Tm1.5Ce1Cu2O10-MP-mp-1223395.cif,Mo1Sr2Tm1.5Ce1Cu2O10,0.0,new,structure: 73% of cations foreign to parent La5Dy3(CuO4)4
 Na1.38Zr1N1Cl1-MP-mp-1352.cif,Na1.38Zr1N1Cl1,11.0,new,structure: 58% of cations foreign to parent ZrN
+K0.77Zr1N1Cl1-MP-mp-23193.cif,K0.77Zr1N1Cl1,13.5,new,structure: 56% of cations foreign to parent KCl
 Cm2Cu1O4-MP-mp-1178476.cif,Cm2Cu1O4,0.0,new,structure: 67% of cations foreign to parent Cu3O4
 Ni0.16Co0.64P0.2-MP-mp-769108.cif,Ni0.16Co0.64P0.2,0.0,new,structure: 64% of cations foreign to parent NiP4
 Cu1Ir1Pt1Se4-MP-mp-1115.cif,Cu1Ir1Pt1Se4,0.0,new,structure: 67% of cations foreign to parent PtSe2
@@ -129,21 +129,6 @@ Pb0.58Sn0.58Ti2Se5.16-MP-mp-665.cif,Pb0.58Sn0.58Ti2Se5.16,3.6,new,structure: 82%
 Pb0.696Sn0.464Ti2Se5.16-MP-mp-665.cif,Pb0.696Sn0.464Ti2Se5.16,3.82,new,structure: 85% of cations foreign to parent SnSe2
 Pb0.812Sn0.348Ti2Se5.16-MP-mp-665.cif,Pb0.812Sn0.348Ti2Se5.16,4.02,new,structure: 89% of cations foreign to parent SnSe2
 Pb1.044Sn0.116Ti2Se5.16-MP-mp-665.cif,Pb1.044Sn0.116Ti2Se5.16,4.19,new,structure: 96% of cations foreign to parent SnSe2
-Sr1Ta2S5-MP-mp-1950.cif,Sr1Ta2S5,2.955,new,structure: 67% of cations foreign to parent SrS2
-Bi1.4Pb0.6Sr2Ca1.2Ga0.8Cu3O7-MP-mp-1218738.cif,Bi1.4Pb0.6Sr2Ca1.2Ga0.8Cu3O7,67.7,new,typo: Cu oxidation -0.07
-Bi1.4Pb0.6Sr2Ca1.7Ga0.3Cu3O7-MP-icsd-63210.cif,Bi1.4Pb0.6Sr2Ca1.7Ga0.3Cu3O7,67.4,new,typo: Cu oxidation 0.10
-Bi1.4Pb0.6Sr2Ca1.8Ga0.2Cu3O7-MP-icsd-63210.cif,Bi1.4Pb0.6Sr2Ca1.8Ga0.2Cu3O7,68.2,new,typo: Cu oxidation 0.13
-Bi1.95Sr1.85La0.2Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.85La0.2Cu1O4,27.0,new,typo: Cu oxidation -2.15
-Bi1.95Sr1.75La0.3Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.75La0.3Cu1O4,33.0,new,typo: Cu oxidation -2.25
-Bi1.95Sr1.65La0.4Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.65La0.4Cu1O4,36.0,new,typo: Cu oxidation -2.35
-Bi1.95Sr1.45La0.6Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.45La0.6Cu1O4,24.0,new,typo: Cu oxidation -2.55
-Bi1.95Sr1.25La0.8Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.25La0.8Cu1O4,19.0,new,typo: Cu oxidation -2.75
-Bi1.95Sr1.85Nd0.2Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.85Nd0.2Cu1O4,26.0,new,typo: Cu oxidation -2.15
-Bi1.95Sr1.75Nd0.3Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.75Nd0.3Cu1O4,30.0,new,typo: Cu oxidation -2.25
-Bi1.95Sr1.65Nd0.4Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.65Nd0.4Cu1O4,35.0,new,typo: Cu oxidation -2.35
-Bi1.95Sr1.45Nd0.6Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.45Nd0.6Cu1O4,18.0,new,typo: Cu oxidation -2.55
-Bi1.95Sr1.85Pr0.2Cu1O4-MP-icsd-63210.cif,Bi1.95Sr1.85Pr0.2Cu1O4,28.0,new,typo: Cu oxidation -2.15
-K0.77Zr1N1Cl1-MP-mp-23193.cif,K0.77Zr1N1Cl1,13.5,new,structure: 56% of cations foreign to parent KCl
 Zn0.2Cu0.8FeCrO4-MP-mp-1047156.cif,Zn0.2Cu0.8FeCrO4,0.0,new,structure: 67% of cations foreign to parent Zn(CuO2)2
 Zn0.4Cu0.6FeCrO4-MP-mp-1047156.cif,Zn0.4Cu0.6FeCrO4,0.0,new,structure: 67% of cations foreign to parent Zn(CuO2)2
 Zn0.6Cu0.4FeCrO4-MP-mp-1047156.cif,Zn0.6Cu0.4FeCrO4,0.0,new,structure: 67% of cations foreign to parent Zn(CuO2)2
