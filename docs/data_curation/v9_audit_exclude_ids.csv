@@ -1,0 +1,609 @@
+id,formula,tc,origin,reason
+Al28Ca24O66-MP-mp-532016.cif,Al28Ca24O66,0.195,V45,typo: absurd coefficient
+Ba1Cu1Tl0.76O4.5-MP-mvc-11834-synth_doped.cif,Ba1Cu1Tl0.76O4.5,86.0,V45,typo: Cu oxidation 4.72
+Ba24Si100-MP-mp-16094.cif,Ba24Si100,1.475,V45,typo: absurd coefficient
+Cu0.03Ru0.97Sr2Y1O6-MP-mp-14430-synth_doped.cif,Cu0.03Ru0.97Sr2Y1O6,0.0,V45,typo: Cu oxidation 37.33
+Cu0.04Ru0.96Sr2Y1O6-MP-mp-14430-synth_doped.cif,Cu0.04Ru0.96Sr2Y1O6,5.1,V45,typo: Cu oxidation 29.00
+Cu0.05Ru0.95Sr2Y1O6-MP-mp-14430-synth_doped.cif,Cu0.05Ru0.95Sr2Y1O6,11.9,V45,typo: Cu oxidation 24.00
+Cu0.08Ru0.92Sr2Y1O6-MP-mp-14430-synth_doped.cif,Cu0.08Ru0.92Sr2Y1O6,17.6,V45,typo: Cu oxidation 16.50
+Cu0.09Li1Ti1.91O4-MP-mp-5670-synth_doped.cif,Cu0.09Li1Ti1.91O4,14.4,V45,typo: Cu oxidation -7.11
+Cu0.1Ho1Ru0.9Sr2O6-MP-mp-6676-synth_doped.cif,Cu0.1Ho1Ru0.9Sr2O6,30.0,V45,typo: Cu oxidation 14.00
+Cu0.2Ru0.8Sr2Y1O6-MP-mp-14430-synth_doped.cif,Cu0.2Ru0.8Sr2Y1O6,23.0,V45,typo: Cu oxidation 9.00
+Sn0.92Ag0.05Te1-MP-mp-28246.cif,Sn0.92Ag0.05Te1,1.66,new,structure: parent of a different compound class (-2.0 anions/cation)
+Sn0.9Ag0.07Te1-MP-mp-28246.cif,Sn0.9Ag0.07Te1,1.73,new,structure: parent of a different compound class (-2.0 anions/cation)
+Sn0.87Ag0.1Te1-MP-mp-28246.cif,Sn0.87Ag0.1Te1,1.83,new,structure: parent of a different compound class (-2.0 anions/cation)
+Ag7B4F4O8-MP-mp-997101.cif,Ag7B4F4O8,0.15,new,structure: parent of a different compound class (-1.9 anions/cation)
+Ag2Pb3S1-MP-mp-1025039.cif,Ag2Pb3S1,1.13,new,structure: parent of a different compound class (-1.8 anions/cation)
+Ag2Pd3S1-MP-mp-13682.cif,Ag2Pd3S1,1.13,new,structure: parent of a different compound class (-1.8 anions/cation)
+Ag7F4O8B1-MP-mp-997101.cif,Ag7F4O8B1,0.15,new,structure: parent of a different compound class (-1.5 anions/cation)
+Ag7F2H1O8-MP-mp-996958.cif,Ag7F2H1O8,1.47,new,structure: parent of a different compound class (-1.4 anions/cation)
+Ag7F1O8-MP-mp-997101.cif,Ag7F1O8,0.3,new,structure: parent of a different compound class (-1.7 anions/cation)
+Eu2.17Ce0.5Sr1.33Cu2.75Al0.25O8.88-MP-mp-983228.cif,Eu2.17Ce0.5Sr1.33Cu2.75Al0.25O8.88,0.0,new,structure: parent lacks the redox centre
+Al0.01Nb0.97O0.02-MP-mp-27927.cif,Al0.01Nb0.97O0.02,8.3,new,structure: parent of a different compound class (-2.0 anions/cation)
+Eu2.17Ce0.5Sr1.33Cu2.5Al0.5O9.02-MP-mp-983228.cif,Eu2.17Ce0.5Sr1.33Cu2.5Al0.5O9.02,16.4,new,structure: parent lacks the redox centre
+Eu2.17Ce0.5Sr1.33Cu2.25Al0.75O9.04-MP-mp-1218323.cif,Eu2.17Ce0.5Sr1.33Cu2.25Al0.75O9.04,0.0,new,structure: parent lacks the redox centre
+Al0.04Nb0.895O0.06-MP-mp-27927.cif,Al0.04Nb0.895O0.06,7.1,new,structure: parent of a different compound class (-1.9 anions/cation)
+Eu2.17Ce0.5Sr1.33Cu2Al1O9.11-MP-mp-1218323.cif,Eu2.17Ce0.5Sr1.33Cu2Al1O9.11,0.0,new,structure: parent lacks the redox centre
+Al1Sr2Ho0.65Ca0.35Cu2O7.01-MP-mp-1208627.cif,Al1Sr2Ho0.65Ca0.35Cu2O7.01,0.0,new,structure: parent lacks the redox centre
+Al1Sr2Ho0.5Ca0.5Cu2O7.05-MP-mp-1208627.cif,Al1Sr2Ho0.5Ca0.5Cu2O7.05,18.0,new,structure: parent lacks the redox centre
+Al1Sr2Ho0.4Ca0.6Cu2O7-MP-mp-1208627.cif,Al1Sr2Ho0.4Ca0.6Cu2O7,24.0,new,structure: parent lacks the redox centre
+Al0.25Fe0.75Se0.85-MP-mp-11674.cif,Al0.25Fe0.75Se0.85,8.5,new,structure: parent lacks the redox centre
+Ca3Al2Fe2As2O5-MP-mp-1325009.cif,Ca3Al2Fe2As2O5,30.2,new,structure: parent of a different compound class (-1.1 anions/cation)
+Ca8Mg1.5Ti4.5Fe2As2O9.5-MP-mp-1221997.cif,Ca8Mg1.5Ti4.5Fe2As2O9.5,40.0,new,structure: parent of a different compound class (-1.1 anions/cation)
+Ni2As2Sr4V2O6-MP-mp-1218545.cif,Ni2As2Sr4V2O6,0.0,new,structure: parent of a different compound class (-1.2 anions/cation)
+Pr0.65Sr0.35Fe1As0.9P0.1O1-MP-mp-1203060.cif,Pr0.65Sr0.35Fe1As0.9P0.1O1,0.0,new,structure: parent of a different compound class (-1.7 anions/cation)
+Pr0.65Sr0.35Fe1As0.95P0.05O1-MP-mp-1203060.cif,Pr0.65Sr0.35Fe1As0.95P0.05O1,15.4,new,structure: parent of a different compound class (-1.7 anions/cation)
+Sm1Fe1As1F0.6O0.6-MP-mp-4794.cif,Sm1Fe1As1F0.6O0.6,55.0,new,structure: parent lacks the redox centre; structure: parent of a different compound class (-1.1 anions/cation)
+La1Fe0.887Zn0.113As1F0.28O0.68-MP-mp-549589.cif,La1Fe0.887Zn0.113As1F0.28O0.68,0.0,new,structure: parent lacks the redox centre
+La1Fe0.905Zn0.095As1F0.28O0.68-MP-mp-549589.cif,La1Fe0.905Zn0.095As1F0.28O0.68,3.5,new,structure: parent lacks the redox centre
+La1Fe0.918Zn0.082As1F0.28O0.68-MP-mp-549589.cif,La1Fe0.918Zn0.082As1F0.28O0.68,8.2,new,structure: parent lacks the redox centre
+La1Fe0.973Zn0.027As1F0.28O0.68-MP-mp-549589.cif,La1Fe0.973Zn0.027As1F0.28O0.68,12.2,new,structure: parent lacks the redox centre
+La1Fe0.982Zn0.018As1F0.28O0.68-MP-mp-549589.cif,La1Fe0.982Zn0.018As1F0.28O0.68,19.6,new,structure: parent lacks the redox centre
+La1Fe0.951Zn0.049As1F0.28O0.68-MP-mp-549589.cif,La1Fe0.951Zn0.049As1F0.28O0.68,1.0,new,structure: parent lacks the redox centre
+Tb0.56Ca0.44Fe1As1O1-MP-mp-1325009.cif,Tb0.56Ca0.44Fe1As1O1,15.6,new,structure: parent of a different compound class (-1.3 anions/cation)
+Pr0.6Ca0.4Fe1As1O1-MP-mp-1325009.cif,Pr0.6Ca0.4Fe1As1O1,0.0,new,structure: parent of a different compound class (-1.3 anions/cation)
+Ca1Fe1As1F0.29H0.71-MP-mp-758814.cif,Ca1Fe1As1F0.29H0.71,0.0,new,structure: parent lacks the redox centre; structure: parent of a different compound class (-7.7 anions/cation)
+Dy1Fe1As1F0.1O0.9-MP-mp-1224755.cif,Dy1Fe1As1F0.1O0.9,45.0,new,structure: parent of a different compound class (-1.3 anions/cation)
+Ho1Fe1As1F0.1O0.9-MP-mp-1224755.cif,Ho1Fe1As1F0.1O0.9,36.0,new,structure: parent of a different compound class (-1.3 anions/cation)
+La1Fe0.2Zn0.8As1F0.15O0.85-MP-mp-549589.cif,La1Fe0.2Zn0.8As1F0.15O0.85,23.9,new,structure: parent lacks the redox centre
+La1Fe0.4Zn0.6As1F0.15O0.85-MP-mp-549589.cif,La1Fe0.4Zn0.6As1F0.15O0.85,24.6,new,structure: parent lacks the redox centre
+La1Fe0.8Zn0.2As1F0.15O0.85-MP-mp-549589.cif,La1Fe0.8Zn0.2As1F0.15O0.85,25.5,new,structure: parent lacks the redox centre
+Sm1Fe0.6Zn0.4As1F0.2O0.8-MP-mp-1047105.cif,Sm1Fe0.6Zn0.4As1F0.2O0.8,0.0,new,structure: parent of a different compound class (-1.3 anions/cation)
+La0.8Na0.2Fe1As1F0.2O0.8-MP-mp-1210021.cif,La0.8Na0.2Fe1As1F0.2O0.8,23.02,new,structure: parent of a different compound class (-1.3 anions/cation)
+Sm1Fe0.8Zn0.2As1F0.2O0.8-MP-mp-1047105.cif,Sm1Fe0.8Zn0.2As1F0.2O0.8,0.0,new,structure: parent of a different compound class (-1.3 anions/cation)
+Gd1Fe1As1H0.1O0.9-MP-mp-1078679.cif,Gd1Fe1As1H0.1O0.9,55.6,new,structure: composition mismatch
+Sm1Fe1As1H0.19O0.81-MP-mp-20349.cif,Sm1Fe1As1H0.19O0.81,55.3,new,structure: composition mismatch
+La1Ni1As1H0.17O0.83-MP-mp-1079362.cif,La1Ni1As1H0.17O0.83,3.68,new,structure: composition mismatch
+Dy1Fe1As1O0.85-MP-mp-21016.cif,Dy1Fe1As1O0.85,51.0,new,structure: parent of a different compound class (-1.7 anions/cation)
+Ho1Fe1As1O0.85-MP-mp-12944.cif,Ho1Fe1As1O0.85,49.1,new,structure: parent lacks the redox centre; structure: parent of a different compound class (-1.7 anions/cation)
+Y1Fe1As1O0.85-MP-mp-1379819.cif,Y1Fe1As1O0.85,45.2,new,structure: parent of a different compound class (-1.5 anions/cation)
+Sr1Fe1.2Ru0.8As2-MP-mp-4404.cif,Sr1Fe1.2Ru0.8As2,17.2,new,structure: parent lacks the redox centre
+Sr1Fe1.3Ru0.7As2-MP-mp-4404.cif,Sr1Fe1.3Ru0.7As2,16.8,new,structure: parent lacks the redox centre
+Sr1Fe1.4Ru0.6As2-MP-mp-4404.cif,Sr1Fe1.4Ru0.6As2,19.8,new,structure: parent lacks the redox centre
+Sr1Fe1Ru1As2-MP-mp-4404.cif,Sr1Fe1Ru1As2,0.0,new,structure: parent lacks the redox centre
+Sr1Fe1.6Ru0.4As2-MP-mp-4404.cif,Sr1Fe1.6Ru0.4As2,0.0,new,structure: parent lacks the redox centre
+Sr1Fe1.5Ru0.5As2-MP-mp-4404.cif,Sr1Fe1.5Ru0.5As2,10.25,new,structure: parent lacks the redox centre
+Ca0.8La0.2Fe0.978Co0.022As2-MP-mp-1900.cif,Ca0.8La0.2Fe0.978Co0.022As2,37.8,new,structure: parent lacks the redox centre
+Ca0.8La0.2Fe0.9671Co0.0329As2-MP-mp-1900.cif,Ca0.8La0.2Fe0.9671Co0.0329As2,36.5,new,structure: parent lacks the redox centre
+Ca0.8La0.2Fe0.9558Co0.0442As2-MP-mp-1900.cif,Ca0.8La0.2Fe0.9558Co0.0442As2,35.1,new,structure: parent lacks the redox centre
+Au0.05Sb0.9Te0.05-MP-mp-1201.cif,Au0.05Sb0.9Te0.05,0.0,new,structure: parent of a different compound class (-1.4 anions/cation)
+Au0.075Sb0.85Te0.075-MP-mp-1201.cif,Au0.075Sb0.85Te0.075,4.5,new,structure: parent of a different compound class (-1.4 anions/cation)
+Au0.125Sb0.75Te0.125-MP-mp-1201.cif,Au0.125Sb0.75Te0.125,6.7,new,structure: parent of a different compound class (-1.4 anions/cation)
+Au0.14Te0.86-MP-mp-1662.cif,Au0.14Te0.86,1.7,new,structure: parent of a different compound class (+4.1 anions/cation)
+Au0.15Te0.85-MP-mp-1662.cif,Au0.15Te0.85,1.64,new,structure: parent of a different compound class (+3.7 anions/cation)
+Au0.16Te0.84-MP-mp-1662.cif,Au0.16Te0.84,1.71,new,structure: parent of a different compound class (+3.2 anions/cation)
+Au0.18Te0.82-MP-mp-1662.cif,Au0.18Te0.82,1.56,new,structure: parent of a different compound class (+2.6 anions/cation)
+Au0.1Sb0.8Te0.1-MP-mp-1201.cif,Au0.1Sb0.8Te0.1,6.0,new,structure: parent of a different compound class (-1.4 anions/cation)
+Au0.22Te0.78-MP-mp-1662.cif,Au0.22Te0.78,1.54,new,structure: parent of a different compound class (+1.6 anions/cation)
+Au0.24Te0.76-MP-mp-1662.cif,Au0.24Te0.76,1.72,new,structure: parent of a different compound class (+1.2 anions/cation)
+Au0.2Sb0.6Te0.2-MP-mp-1201.cif,Au0.2Sb0.6Te0.2,6.6,new,structure: parent of a different compound class (-1.2 anions/cation)
+Au0.2Te0.8-MP-mp-1662.cif,Au0.2Te0.8,1.48,new,structure: parent of a different compound class (+2.0 anions/cation)
+B0.6C0.4Sr0.5Ba1.5Ca2Cu3O9-MP-mp-1019542.cif,B0.6C0.4Sr0.5Ba1.5Ca2Cu3O9,119.0,new,structure: parent lacks the redox centre
+Eu1Ba1Cu1B1O5-MP-mp-1212596.cif,Eu1Ba1Cu1B1O5,0.0,new,structure: parent lacks the redox centre
+Nb1B2O2-MP-mp-8615.cif,Nb1B2O2,0.0,new,structure: parent of a different compound class (-1.3 anions/cation)
+Th1Ca3Ba1Cu3O9-MP-mp-1189614.cif,Th1Ca3Ba1Cu3O9,124.5,new,structure: parent lacks the redox centre
+Fe0.5Ba1Sr1Nd1Cu2.5O7.499-MP-mp-1218798.cif,Fe0.5Ba1Sr1Nd1Cu2.5O7.499,0.0,new,structure: parent lacks the redox centre
+Fe0.5Ba1Sr1Er1Cu2.5O7.439-MP-mp-1227774.cif,Fe0.5Ba1Sr1Er1Cu2.5O7.439,47.8,new,structure: parent lacks the redox centre
+Fe0.5Ba1Sr1Ho1Cu2.5O7.462-MP-mp-1227739.cif,Fe0.5Ba1Sr1Ho1Cu2.5O7.462,45.2,new,structure: parent lacks the redox centre
+Fe0.5Ba1Sr1Yb1Cu2.5O7.432-MP-mp-1227739.cif,Fe0.5Ba1Sr1Yb1Cu2.5O7.432,29.7,new,structure: parent lacks the redox centre
+Ho1Ba1Sr1Cu3O6.94-MP-mp-1227777.cif,Ho1Ba1Sr1Cu3O6.94,79.0,new,structure: parent lacks the redox centre
+Tm1Ba1Sr1Cu3O6.94-MP-mp-1227530.cif,Tm1Ba1Sr1Cu3O6.94,70.0,new,structure: parent lacks the redox centre
+Ti2Ba2Ca1Gd2.25Ce0.75Cu2O14-MP-mp-1521898.cif,Ti2Ba2Ca1Gd2.25Ce0.75Cu2O14,0.0,new,structure: parent lacks the redox centre
+Nd2Ba2Ca1Ce1Ti1.9Cu2.1O14-MP-mp-1521898.cif,Nd2Ba2Ca1Ce1Ti1.9Cu2.1O14,0.0,new,structure: parent lacks the redox centre
+La2.5Y0.5Ca1Ba3Cu7Fe7O16.574-MP-mp-505589.cif,La2.5Y0.5Ca1Ba3Cu7Fe7O16.574,80.0,new,typo: Cu oxidation -0.69
+Nd2Ba2Ce1Ti2Cu2O13-MP-mp-6285.cif,Nd2Ba2Ce1Ti2Cu2O13,0.0,new,structure: parent lacks the redox centre
+Y1Ba2Cu3O6050-MP-mp-643409.cif,Y1Ba2Cu3O6050,22.0,new,typo: Cu oxidation 4031.00; structure: parent of a different compound class (+1007.2 anions/cation); typo: absurd coefficient
+La1.5Nd0.5Ba2Ca1Cu5O7.123-MP-mp-1228590.cif,La1.5Nd0.5Ba2Ca1Cu5O7.123,78.0,new,typo: Cu oxidation 0.45
+La1.7Nd0.3Ba2Ca0.6Cu4.6O7.135-MP-mp-1228590.cif,La1.7Nd0.3Ba2Ca0.6Cu4.6O7.135,77.0,new,typo: Cu oxidation 0.67
+Tl0.25Li0.25Ba2Ca2Cu2.25Si1.25O7.719-MP-mp-1204270.cif,Tl0.25Li0.25Ba2Ca2Cu2.25Si1.25O7.719,99.0,new,typo: Cu oxidation 0.64
+Tl2Ba2Ca1Cu1.98Fe0.02F0.2O7.9-MP-mp-581641.cif,Tl2Ba2Ca1Cu1.98Fe0.02F0.2O7.9,109.0,new,structure: parent of a different compound class (-1.2 anions/cation)
+Tl2Ba2Ca1Cu1.98Fe0.02F0.3O7.85-MP-mp-581641.cif,Tl2Ba2Ca1Cu1.98Fe0.02F0.3O7.85,101.0,new,structure: parent of a different compound class (-1.2 anions/cation)
+Tl2Ba2Ca0.9Ce0.1Cu1.98Fe0.02F0.2O7.9-MP-mp-581641.cif,Tl2Ba2Ca0.9Ce0.1Cu1.98Fe0.02F0.2O7.9,103.0,new,structure: parent of a different compound class (-1.2 anions/cation)
+Tl2Ba2Ca1Cu1.98Fe0.02F0.1O7.95-MP-mp-581641.cif,Tl2Ba2Ca1Cu1.98Fe0.02F0.1O7.95,110.0,new,structure: parent of a different compound class (-1.2 anions/cation)
+Fe0.5Ba2Dy1Cu2.5O7.52-MP-mp-1522063.cif,Fe0.5Ba2Dy1Cu2.5O7.52,75.0,new,structure: parent lacks the redox centre
+Fe0.5Ba2Eu1Cu2.5O7.51-MP-mp-1228898.cif,Fe0.5Ba2Eu1Cu2.5O7.51,60.0,new,structure: parent lacks the redox centre
+Fe0.5Ba2Ho1Cu2.5O7.49-MP-mp-1192651.cif,Fe0.5Ba2Ho1Cu2.5O7.49,76.0,new,structure: parent lacks the redox centre
+Fe0.5Ba2Nd1Cu2.5O7.54-MP-mp-704634.cif,Fe0.5Ba2Nd1Cu2.5O7.54,0.0,new,structure: parent lacks the redox centre
+Fe0.5Ba2Sm1Cu2.5O7.54-MP-mp-704632.cif,Fe0.5Ba2Sm1Cu2.5O7.54,8.0,new,structure: parent lacks the redox centre
+Fe0.5Ba2Er1Cu2.5O7.46-MP-mp-1192651.cif,Fe0.5Ba2Er1Cu2.5O7.46,72.0,new,structure: parent lacks the redox centre
+Fe0.5Ba2Yb1Cu2.5O7.45-MP-mp-1192651.cif,Fe0.5Ba2Yb1Cu2.5O7.45,72.0,new,structure: parent lacks the redox centre
+Eu1Ba2Cu2.3Co0.7O7.12-MP-mp-18965.cif,Eu1Ba2Cu2.3Co0.7O7.12,0.0,new,structure: parent lacks the redox centre
+Gd0.55Ca0.35Hf0.15Ba2Cu3O7.06-MP-mp-1518468.cif,Gd0.55Ca0.35Hf0.15Ba2Cu3O7.06,76.0,new,structure: parent lacks the redox centre
+Gd0.45Ca0.4Hf0.15Ba2Cu3O7.08-MP-mp-1518468.cif,Gd0.45Ca0.4Hf0.15Ba2Cu3O7.08,71.9,new,structure: parent lacks the redox centre
+Eu1Ba2Cu2.5Co0.5O7.05-MP-mp-18965.cif,Eu1Ba2Cu2.5Co0.5O7.05,0.0,new,structure: parent lacks the redox centre
+Pr1Ba2Cu2.4Co0.6O7.08-MP-mp-1228571.cif,Pr1Ba2Cu2.4Co0.6O7.08,0.0,new,structure: parent lacks the redox centre
+Eu1Ba2Cu2.6Co0.4O7.02-MP-mp-18965.cif,Eu1Ba2Cu2.6Co0.4O7.02,0.0,new,structure: parent lacks the redox centre
+Pr1Ba2Cu2.6Co0.4O7.02-MP-mp-1228571.cif,Pr1Ba2Cu2.6Co0.4O7.02,0.0,new,structure: parent lacks the redox centre
+Ho1Ba2Cu2.94O6.94-MP-mp-17363.cif,Ho1Ba2Cu2.94O6.94,77.0,new,structure: parent lacks the redox centre
+Nd1Ba1.5La0.5O6.64-MP-mp-1182576.cif,Nd1Ba1.5La0.5O6.64,0.0,new,structure: parent of a different compound class (-7.8 anions/cation)
+Er0.94Ca0.04Ba2Cu2.82Co0.18O6.76-MP-mp-18746.cif,Er0.94Ca0.04Ba2Cu2.82Co0.18O6.76,64.0,new,structure: parent lacks the redox centre
+Ba0.6K0.4O3-MP-mp-973447.cif,Ba0.6K0.4O3,30.7,new,structure: parent of a different compound class (+1.5 anions/cation)
+Er0.88Ca0.12Ba2Cu2.28Co0.18O6.93-MP-mp-1229276.cif,Er0.88Ca0.12Ba2Cu2.28Co0.18O6.93,77.5,new,structure: parent lacks the redox centre
+Er1Ba2Cu2.28Co0.18O6.74-MP-mp-18746.cif,Er1Ba2Cu2.28Co0.18O6.74,34.0,new,structure: parent lacks the redox centre
+Hg1Ba2Ca3Cu4O2-MP-mp-22601.cif,Hg1Ba2Ca3Cu4O2,115.0,new,typo: Cu oxidation -2.00
+Er1Ba2Cu2.64Zn0.03O6.82-MP-mp-6416.cif,Er1Ba2Cu2.64Zn0.03O6.82,0.0,new,structure: parent lacks the redox centre
+Nd1Ba1.7La0.3O6.77-MP-mp-1182576.cif,Nd1Ba1.7La0.3O6.77,57.5,new,structure: parent of a different compound class (-7.7 anions/cation)
+Hg1Ba2Ca3Cu4O1-MP-mp-22601.cif,Hg1Ba2Ca3Cu4O1,115.0,new,typo: Cu oxidation -2.50
+Ba2Ca3Cu5O-MP-mp-1214453.cif,Ba2Ca3Cu5O,106.0,new,typo: Cu oxidation -1.60
+Hg1Ba2Cu1O6.932-MP-mp-6562.cif,Hg1Ba2Cu1O6.932,50.0,new,typo: Cu oxidation 7.86
+Ba0.4K0.6O3-MP-mp-973447.cif,Ba0.4K0.6O3,7.0,new,structure: parent of a different compound class (+1.5 anions/cation)
+Hg1Ba2Ca2Cu3O1-MP-mp-22601.cif,Hg1Ba2Ca2Cu3O1,0.0,new,typo: Cu oxidation -2.67
+Y1Ba2Cu3F0.825O-MP-mp-1214572.cif,Y1Ba2Cu3F0.825O,90.5,new,typo: Cu oxidation -1.39
+Lu0.9Pr0.1Ba2Cu3O2-MP-mp-1228451.cif,Lu0.9Pr0.1Ba2Cu3O2,85.0,new,typo: Cu oxidation -1.00
+Y1.01Ba2.01Cu2.697Fe0.303O-MP-mp-505589.cif,Y1.01Ba2.01Cu2.697Fe0.303O,36.0,new,typo: Cu oxidation -2.21; structure: parent of a different compound class (-1.1 anions/cation)
+Ho1Ba2Cu3O1-MP-mp-1214501.cif,Ho1Ba2Cu3O1,0.0,new,typo: Cu oxidation -1.67
+Tm1Ba2Cu3O1-MP-mp-1228146.cif,Tm1Ba2Cu3O1,0.0,new,typo: Cu oxidation -1.67
+Y1Ba2Cu3O1-MP-mp-22215.cif,Y1Ba2Cu3O1,0.0,new,typo: Cu oxidation -1.67
+Yb1Ba2Cu3O1-MP-mp-772788.cif,Yb1Ba2Cu3O1,0.0,new,typo: Cu oxidation -1.67; structure: parent of a different compound class (-1.1 anions/cation)
+Ba2Gd1Ru0.9Cu0.1O6-MP-mp-2646935.cif,Ba2Gd1Ru0.9Cu0.1O6,0.0,new,typo: Cu oxidation 14.00; structure: parent lacks the redox centre
+Y1Ba2Cu3O4-MP-mp-22215.cif,Y1Ba2Cu3O4,92.0,new,typo: Cu oxidation 0.33
+Bi0.16Pb0.3V0.1Sr2Ca2Cu3O10.12-MP-mp-532540.cif,Bi0.16Pb0.3V0.1Sr2Ca2Cu3O10.12,102.5,new,structure: parent lacks the redox centre
+Bi0.16Pb0.35V0.05Sr2Ca2Cu3O10.12-MP-mp-532540.cif,Bi0.16Pb0.35V0.05Sr2Ca2Cu3O10.12,103.7,new,structure: parent lacks the redox centre
+Bi1.4Pb0.6Sr2Ca2Cu3O7-MP-mp-1209015.cif,Bi1.4Pb0.6Sr2Ca2Cu3O7,108.5,new,typo: Cu oxidation 0.20
+Bi1.4Pb0.6Sr2Ca1.6Ga0.4Cu3O7-MP-mp-1218959.cif,Bi1.4Pb0.6Sr2Ca1.6Ga0.4Cu3O7,69.4,new,typo: Cu oxidation 0.07
+Bi2Sr2Cu1O6O6-MP-mp-555827.cif,Bi2Sr2Cu1O6O6,0.0,new,typo: Cu oxidation 14.00; structure: parent of a different compound class (+1.2 anions/cation)
+Bi2Sr2Dy1.64Ce0.36Cu2O10.26-MP-mp-1208858.cif,Bi2Sr2Dy1.64Ce0.36Cu2O10.26,27.0,new,structure: parent lacks the redox centre
+Bi2Sr2Er1.64Ce0.36Cu2O10.21-MP-mp-1208875.cif,Bi2Sr2Er1.64Ce0.36Cu2O10.21,0.0,new,structure: parent lacks the redox centre
+Bi2Sr2Ho1.64Ce0.36Cu2O10.22-MP-mp-1208845.cif,Bi2Sr2Ho1.64Ce0.36Cu2O10.22,24.0,new,structure: parent lacks the redox centre
+Bi2Sr2Tm1.64Ce0.36Cu2O10.2-MP-mp-1208751.cif,Bi2Sr2Tm1.64Ce0.36Cu2O10.2,0.0,new,structure: parent lacks the redox centre
+Bi1.8V0.2Sr2Ca2Cu3O2-MP-mp-1191679.cif,Bi1.8V0.2Sr2Ca2Cu3O2,112.0,new,typo: Cu oxidation -3.47
+Bi1.6Pb0.4Sr1.6La0.4Cu1O4-MP-mp-686833.cif,Bi1.6Pb0.4Sr1.6La0.4Cu1O4,36.0,new,typo: Cu oxidation -2.00
+Bi1.7Pb0.3Sr2Ca1Cu2O0.27-MP-mp-1218930.cif,Bi1.7Pb0.3Sr2Ca1Cu2O0.27,67.6,new,typo: Cu oxidation -5.58; structure: parent of a different compound class (-1.1 anions/cation)
+Bi1.7Pb0.3Sr2Ca1Cu2O0.23-MP-mp-1218930.cif,Bi1.7Pb0.3Sr2Ca1Cu2O0.23,75.75,new,typo: Cu oxidation -5.62; structure: parent of a different compound class (-1.1 anions/cation)
+Bi2Sr2Ca1Cu2O-MP-mp-1218930.cif,Bi2Sr2Ca1Cu2O,87.0,new,typo: Cu oxidation -5.00
+La1Ni1Bi1O1-MP-mp-753102.cif,La1Ni1Bi1O1,5.5,new,structure: parent of a different compound class (-1.2 anions/cation)
+Bi12S11O18-MP-mp-1195213.cif,Bi12S11O18,4.0,new,structure: parent of a different compound class (-5.1 anions/cation)
+Bi2Sr2Ca2Cu3O1-MP-mp-1209015.cif,Bi2Sr2Ca2Cu3O1,112.5,new,typo: Cu oxidation -4.00
+Bi6S5O8-MP-mp-1195213.cif,Bi6S5O8,2.4,new,structure: parent of a different compound class (-5.3 anions/cation)
+Bi3S3O3-MP-mp-1195213.cif,Bi3S3O3,5.1,new,structure: parent of a different compound class (-5.5 anions/cation)
+Bi3.875Co0.125S3O4-MP-mp-1195213.cif,Bi3.875Co0.125S3O4,4.255,new,structure: parent of a different compound class (-5.8 anions/cation)
+Bi3.9Co0.1S3O4-MP-mp-1195213.cif,Bi3.9Co0.1S3O4,5.215,new,structure: parent of a different compound class (-5.8 anions/cation)
+Bi3.9Cu0.1S3O4-MP-mp-1195213.cif,Bi3.9Cu0.1S3O4,2.995,new,typo: Cu oxidation 23.00; structure: parent lacks the redox centre; structure: parent of a different compound class (-5.8 anions/cation)
+Bi3.925Co0.075S3O4-MP-mp-1195213.cif,Bi3.925Co0.075S3O4,4.3775,new,structure: parent of a different compound class (-5.8 anions/cation)
+Bi3.95Cu0.05S3O4-MP-mp-1195213.cif,Bi3.95Cu0.05S3O4,2.595,new,typo: Cu oxidation 43.00; structure: parent lacks the redox centre; structure: parent of a different compound class (-5.8 anions/cation)
+Bi3.975Cu0.025S3O4-MP-mp-1195213.cif,Bi3.975Cu0.025S3O4,2.99,new,typo: Cu oxidation 83.00; structure: parent lacks the redox centre; structure: parent of a different compound class (-5.8 anions/cation)
+Bi3.99Cu0.01S3O4-MP-mp-1195213.cif,Bi3.99Cu0.01S3O4,3.935,new,typo: Cu oxidation 203.00; structure: parent lacks the redox centre; structure: parent of a different compound class (-5.8 anions/cation)
+Bi4S2.85Se0.15O4-MP-mp-1193554.cif,Bi4S2.85Se0.15O4,3.5,new,structure: parent of a different compound class (-4.8 anions/cation)
+Bi4S2.91Se0.09O4-MP-mp-1193554.cif,Bi4S2.91Se0.09O4,3.7,new,structure: parent of a different compound class (-4.8 anions/cation)
+Bi4S3O4-MP-mp-1195213.cif,Bi4S3O4,4.846,new,structure: parent of a different compound class (-5.8 anions/cation)
+Bi4S2.97Se0.03O4-MP-mp-1193554.cif,Bi4S2.97Se0.03O4,4.2,new,structure: parent of a different compound class (-4.8 anions/cation)
+Bi3S3O2-MP-mp-1195213.cif,Bi3S3O2,4.3,new,structure: parent of a different compound class (-5.8 anions/cation)
+Bi3Te1-MP-mp-34202.cif,Bi3Te1,0.875,new,structure: parent of a different compound class (-1.2 anions/cation)
+Fe1Se0.8Br0.2-MP-mp-607953.cif,Fe1Se0.8Br0.2,5.0,new,structure: parent of a different compound class (-7.0 anions/cation)
+Mo6Te5Br3-MP-mp-29190.cif,Mo6Te5Br3,0.0,new,structure: parent of a different compound class (-3.7 anions/cation)
+Pb0.7Hg0.3Sr4Cu2C1O10-MP-mp-20489.cif,Pb0.7Hg0.3Sr4Cu2C1O10,68.0,new,structure: parent lacks the redox centre
+C0.571N0.271Ta1-MP-mp-1246375.cif,C0.571N0.271Ta1,10.92,new,structure: parent of a different compound class (-1.0 anions/cation)
+C6Ir4O2-MP-mp-1097041.cif,C6Ir4O2,2.0,new,structure: parent of a different compound class (-2.8 anions/cation)
+Rb3C60C60-MP-mp-568643.cif,Rb3C60C60,29.0,new,typo: absurd coefficient
+C0.9S0.1-MP-mp-27814.cif,C0.9S0.1,36.5,new,structure: parent of a different compound class (-13.9 anions/cation)
+Hg0.65V0.35Sr2Ca0.55Nd0.45Cu2O6.8-MP-mp-1218581.cif,Hg0.65V0.35Sr2Ca0.55Nd0.45Cu2O6.8,67.0,new,structure: parent lacks the redox centre
+Y0.6Ca0.4Sr2Cu2Ga1O0.92-MP-mp-1218712.cif,Y0.6Ca0.4Sr2Cu2Ga1O0.92,0.0,new,typo: Cu oxidation -3.88; structure: parent of a different compound class (-1.0 anions/cation)
+Cu2.5Sr2Ca1Cr0.5O7.5-MP-mp-1218573.cif,Cu2.5Sr2Ca1Cr0.5O7.5,81.0,new,structure: parent lacks the redox centre
+V0.5Sr2.25Ca1.75Cu3.5O9.7-MP-mp-1218581.cif,V0.5Sr2.25Ca1.75Cu3.5O9.7,98.0,new,structure: parent lacks the redox centre
+V0.5Sr2.7Ca2.3Cu4.5O11.6-MP-mp-1218581.cif,V0.5Sr2.7Ca2.3Cu4.5O11.6,107.0,new,structure: parent lacks the redox centre
+Cu3.5Sr2Ca2Cr0.5O9.55-MP-mp-1218573.cif,Cu3.5Sr2Ca2Cr0.5O9.55,103.0,new,structure: parent lacks the redox centre
+V0.5Sr2.4Ca3.6Cu5.5O13.55-MP-mp-1218581.cif,V0.5Sr2.4Ca3.6Cu5.5O13.55,75.0,new,structure: parent lacks the redox centre
+Ca0.86Sr0.14Cu1O4-MP-mp-1218361.cif,Ca0.86Sr0.14Cu1O4,0.0,new,typo: Cu oxidation 6.00
+Cu4.5Sr2Ca3Cr0.5O11.45-MP-mp-1218573.cif,Cu4.5Sr2Ca3Cr0.5O11.45,71.0,new,structure: parent lacks the redox centre
+Cu5.5Sr2Ca4Cr0.5O13.35-MP-mp-1218573.cif,Cu5.5Sr2Ca4Cr0.5O13.35,65.0,new,structure: parent lacks the redox centre
+V0.5Sr2.3Ca4.7Cu6.5O15.5-MP-mp-1218581.cif,V0.5Sr2.3Ca4.7Cu6.5O15.5,75.0,new,structure: parent lacks the redox centre
+V0.5Sr2.6Ca5.4Cu7.5O17.3-MP-mp-1218581.cif,V0.5Sr2.6Ca5.4Cu7.5O17.3,73.0,new,structure: parent lacks the redox centre
+Cu6.5Sr2Ca5Cr0.5O15.17-MP-mp-1218573.cif,Cu6.5Sr2Ca5Cr0.5O15.17,32.0,new,structure: parent lacks the redox centre
+Cu7.5Sr2Ca6Cr0.5O17.1-MP-mp-1218573.cif,Cu7.5Sr2Ca6Cr0.5O17.1,10.0,new,structure: parent lacks the redox centre
+Cu8.5Sr2Ca7Cr0.5O19.05-MP-mp-1218573.cif,Cu8.5Sr2Ca7Cr0.5O19.05,0.0,new,structure: parent lacks the redox centre
+Cu9.5Sr2Ca8Cr0.5O21.05-MP-mp-1218573.cif,Cu9.5Sr2Ca8Cr0.5O21.05,0.0,new,structure: parent lacks the redox centre
+Cu0.5S0.5Sr2Ca2Cu3O12-MP-mp-1218361.cif,Cu0.5S0.5Sr2Ca2Cu3O12,100.0,new,typo: Cu oxidation 4.86
+Pr1Tl2Sr2Ca4Cu5O2-MP-mp-1208792.cif,Pr1Tl2Sr2Ca4Cu5O2,88.0,new,typo: Cu oxidation -3.40; structure: parent of a different compound class (-1.0 anions/cation)
+Ca1Fe0.95Co0.05F1-MP-mp-1398496.cif,Ca1Fe0.95Co0.05F1,0.0,new,structure: parent of a different compound class (-2.5 anions/cation)
+Ca1Fe0.93Co0.07F1-MP-mp-1398496.cif,Ca1Fe0.93Co0.07F1,9.1,new,structure: parent of a different compound class (-2.5 anions/cation)
+Ru1Sr2Ho1.5Ce0.5Cu2O10-MP-mp-6676.cif,Ru1Sr2Ho1.5Ce0.5Cu2O10,0.0,new,structure: parent lacks the redox centre
+Nd1.5Ce0.5Sr2Ta1Cu2O10-MP-mp-12286.cif,Nd1.5Ce0.5Sr2Ta1Cu2O10,12.5,new,structure: parent lacks the redox centre
+Eu1.5Ce0.5Sr2Cu1Ti1O10-MP-mp-1218863.cif,Eu1.5Ce0.5Sr2Cu1Ti1O10,22.0,new,typo: Cu oxidation 6.00; structure: parent lacks the redox centre
+Eu2.17Ce0.5Sr1.33Cu2.5Fe0.5O9.23-MP-mp-2898735.cif,Eu2.17Ce0.5Sr1.33Cu2.5Fe0.5O9.23,25.7,new,structure: parent lacks the redox centre
+Eu2.17Ce0.5Sr1.33Cu2.75Fe0.25O9.11-MP-mp-2898735.cif,Eu2.17Ce0.5Sr1.33Cu2.75Fe0.25O9.11,0.0,new,structure: parent lacks the redox centre
+Gd1.4Ce0.6Sr2Cu2Ti1O10-MP-mp-1218863.cif,Gd1.4Ce0.6Sr2Cu2Ti1O10,11.0,new,structure: parent lacks the redox centre
+Gd0.51Pr1.34Ce0.15Cu1O1-MP-mp-4181.cif,Gd0.51Pr1.34Ce0.15Cu1O1,12.1,new,typo: Cu oxidation -4.00
+Eu2.17Ce0.5Sr1.33Cu2Fe1O9.43-MP-mp-2898735.cif,Eu2.17Ce0.5Sr1.33Cu2Fe1O9.43,0.0,new,structure: parent lacks the redox centre
+Eu2.17Ce0.5Sr1.33Cu2.25Fe0.75O9.41-MP-mp-2898735.cif,Eu2.17Ce0.5Sr1.33Cu2.25Fe0.75O9.41,0.0,new,structure: parent lacks the redox centre
+Cu0.75V0.25Sr2Y1.3Ce0.7Cu2O8.77-MP-mp-1218593.cif,Cu0.75V0.25Sr2Y1.3Ce0.7Cu2O8.77,24.5,new,structure: parent lacks the redox centre
+Cu0.75Ti0.25Sr2Y1.3Ce0.7Cu2O8.71-MP-mp-1218863.cif,Cu0.75Ti0.25Sr2Y1.3Ce0.7Cu2O8.71,21.0,new,structure: parent lacks the redox centre
+Mo1Sr2Er1.5Ce1Cu2O10-MP-mp-18744.cif,Mo1Sr2Er1.5Ce1Cu2O10,0.0,new,structure: parent lacks the redox centre
+Mo1Sr2Ho1.5Ce1Cu2O10-MP-mp-16811.cif,Mo1Sr2Ho1.5Ce1Cu2O10,0.0,new,structure: parent lacks the redox centre
+Mo1Sr2Tm1.5Ce1Cu2O10-MP-mp-31123.cif,Mo1Sr2Tm1.5Ce1Cu2O10,0.0,new,structure: parent lacks the redox centre
+Mo1Sr2Y1.5Ce1Cu2O10-MP-mp-1047328.cif,Mo1Sr2Y1.5Ce1Cu2O10,0.0,new,structure: parent lacks the redox centre
+Mo6Se7.5Cl0.5-MP-mp-568726.cif,Mo6Se7.5Cl0.5,6.33,new,structure: parent of a different compound class (-12.7 anions/cation)
+Pb3Sr3Cu3Cl1O9.5-MP-mp-1194245.cif,Pb3Sr3Cu3Cl1O9.5,0.0,new,structure: parent lacks the redox centre; structure: parent of a different compound class (-2.5 anions/cation)
+Mo6Se7Cl1-MP-mp-568726.cif,Mo6Se7Cl1,6.52,new,structure: parent of a different compound class (-12.7 anions/cation)
+Fe1Se0.82Cl0.18-MP-mp-28189.cif,Fe1Se0.82Cl0.18,10.5,new,structure: parent of a different compound class (-7.0 anions/cation)
+Mo6Se6.5Cl1.5-MP-mp-568726.cif,Mo6Se6.5Cl1.5,6.49,new,structure: parent of a different compound class (-12.7 anions/cation)
+Mo6Se6Cl2-MP-mp-568726.cif,Mo6Se6Cl2,6.39,new,structure: parent of a different compound class (-12.7 anions/cation)
+Mo6Te6Cl2-MP-mp-2767093.cif,Mo6Te6Cl2,0.0,new,structure: parent of a different compound class (-17.7 anions/cation)
+Sr2Cu1Cl1.2O4.-MP-mp-1147538.cif,Sr2Cu1Cl1.2O4.,0.0,new,typo: Cu oxidation 5.20
+Mo6Se5Cl3-MP-mp-568726.cif,Mo6Se5Cl3,5.7,new,structure: parent of a different compound class (-12.7 anions/cation)
+Na1.38Zr1N1Cl1-MP-mp-531184.cif,Na1.38Zr1N1Cl1,11.0,new,structure: parent of a different compound class (-1.8 anions/cation)
+Na0.75Zr1N1Cl1-MP-mp-531184.cif,Na0.75Zr1N1Cl1,14.3,new,structure: parent of a different compound class (-1.5 anions/cation)
+Na0.66Zr1N1Cl1-MP-mp-531184.cif,Na0.66Zr1N1Cl1,14.5,new,structure: parent of a different compound class (-1.5 anions/cation)
+Na0.59Zr1N1Cl1-MP-mp-531184.cif,Na0.59Zr1N1Cl1,15.0,new,structure: parent of a different compound class (-1.4 anions/cation)
+Na0.5Zr1N1Cl1-MP-mp-531184.cif,Na0.5Zr1N1Cl1,15.0,new,structure: parent of a different compound class (-1.3 anions/cation)
+Zr0.12N1Cl1-MP-mp-542791.cif,Zr0.12N1Cl1,12.7,new,structure: parent of a different compound class (+14.7 anions/cation)
+Ru0.97Co0.03Sr2Gd1CuO8-MP-mp-1194240.cif,Ru0.97Co0.03Sr2Gd1CuO8,13.0,new,typo: Cu oxidation 5.03
+Ru0.95Co0.05Sr2Gd1CuO8-MP-mp-1194240.cif,Ru0.95Co0.05Sr2Gd1CuO8,5.5,new,typo: Cu oxidation 5.05
+La1.45Sr0.55Cu0.6Co0.4O4-MP-mp-1274114.cif,La1.45Sr0.55Cu0.6Co0.4O4,0.0,new,structure: parent lacks the redox centre
+La1.25Sr0.75Cu0.4Co0.6O4-MP-mp-1274114.cif,La1.25Sr0.75Cu0.4Co0.6O4,0.0,new,structure: parent lacks the redox centre
+Co2Mo6S6O2-MP-mp-19379.cif,Co2Mo6S6O2,0.0,new,structure: parent of a different compound class (-4.0 anions/cation)
+Cu1.5Sr2Cr0.5O5.3-MP-mp-510607.cif,Cu1.5Sr2Cr0.5O5.3,0.0,new,structure: parent lacks the redox centre
+LaCsCuO-MP-mp-1077929.cif,LaCsCuO,0.0,new,typo: Cu oxidation -2.00
+La1.4Sr1.6Mn1.95Cu0.05O7-MP-mp-698710.cif,La1.4Sr1.6Mn1.95Cu0.05O7,0.0,new,typo: Cu oxidation 15.00
+La1.4Sr1.6Mn1.9Cu0.1O7-MP-mp-698710.cif,La1.4Sr1.6Mn1.9Cu0.1O7,0.0,new,typo: Cu oxidation 9.00
+La1.4Sr1.6Mn1.6Cu0.4O7-MP-mp-698797.cif,La1.4Sr1.6Mn1.6Cu0.4O7,0.0,new,typo: Cu oxidation 4.50
+Tl1Sr1La1Cu1O8-MP-mp-1218170.cif,Tl1Sr1La1Cu1O8,32.0,new,typo: Cu oxidation 8.00
+La1.85Sr0.15Cu1FeO4-MP-mp-1173276.cif,La1.85Sr0.15Cu1FeO4,39.9,new,typo: Cu oxidation -0.85
+Cu2Mo6S6O2-MP-mp-20525.cif,Cu2Mo6S6O2,9.0,new,typo: Cu oxidation -10.00; structure: parent of a different compound class (-4.0 anions/cation)
+H0.55La1.8Sr0.2Cu0.995Fe0.005O4-MP-mp-1194283.cif,H0.55La1.8Sr0.2Cu0.995Fe0.005O4,26.0,new,structure: parent of a different compound class (-2.5 anions/cation)
+Nb1Sr2Eu2Cu2O8-MP-mp-16786.cif,Nb1Sr2Eu2Cu2O8,0.0,new,typo: Cu oxidation 0.50
+H0.4La1.89Sr0.11Cu0.995Fe0.005O4-MP-mp-1194283.cif,H0.4La1.89Sr0.11Cu0.995Fe0.005O4,13.5,new,structure: parent of a different compound class (-2.5 anions/cation)
+H0.2La1.8Sr0.2Cu1O4-MP-mp-1194283.cif,H0.2La1.8Sr0.2Cu1O4,32.0,new,structure: parent of a different compound class (-2.6 anions/cation)
+Ru1Sr2Dy1Cu2O8-MP-mp-22390.cif,Ru1Sr2Dy1Cu2O8,0.0,new,structure: parent lacks the redox centre
+Ru1Sr2Er1Cu2O8-MP-mp-6294.cif,Ru1Sr2Er1Cu2O8,0.0,new,structure: parent lacks the redox centre
+Ru0.6Sn0.4Sr2Eu1Cu2O8-MP-mp-22390.cif,Ru0.6Sn0.4Sr2Eu1Cu2O8,24.2,new,structure: parent lacks the redox centre
+Ru0.8Sn0.2Sr2Eu1Cu2O8-MP-mp-22390.cif,Ru0.8Sn0.2Sr2Eu1Cu2O8,30.3,new,structure: parent lacks the redox centre
+Ru1Sr2Tb1Cu2O8-MP-mp-22390.cif,Ru1Sr2Tb1Cu2O8,0.0,new,structure: parent lacks the redox centre
+Ru0.9Sr2Er1Cu2O7.8-MP-mp-6294.cif,Ru0.9Sr2Er1Cu2O7.8,23.0,new,structure: parent lacks the redox centre
+Ru0.9Sr2Ho1Cu2O7.8-MP-mp-6676.cif,Ru0.9Sr2Ho1Cu2O7.8,0.0,new,structure: parent lacks the redox centre
+Fe1Sr2Gd1Cu2O7.58-MP-mp-1218942.cif,Fe1Sr2Gd1Cu2O7.58,36.5,new,structure: parent lacks the redox centre
+Fe1Sr2Nd1Cu2O7.54-MP-mp-1218798.cif,Fe1Sr2Nd1Cu2O7.54,4.2,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr0.8La1.2Cu1O5.28-MP-mp-20489.cif,Pb0.6Cu0.4Sr0.8La1.2Cu1O5.28,26.65,new,structure: parent lacks the redox centre
+Ru0.9Sr2Y1Cu2.1O7.9-MP-mp-22390.cif,Ru0.9Sr2Y1Cu2.1O7.9,30.0,new,structure: parent lacks the redox centre
+H0.55La0.89Sr0.11Cu0.995Fe0.005O4-MP-mp-555369.cif,H0.55La0.89Sr0.11Cu0.995Fe0.005O4,13.2,new,typo: Cu oxidation 4.57; structure: parent of a different compound class (-3.2 anions/cation)
+Pb0.6Cu0.4Sr1.1La0.9Cu1O5.19-MP-mp-20489.cif,Pb0.6Cu0.4Sr1.1La0.9Cu1O5.19,25.0,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1La1Cu1O5.19-MP-mp-20489.cif,Pb0.6Cu0.4Sr1La1Cu1O5.19,25.1,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1La1Cu1O5.21-MP-mp-20489.cif,Pb0.6Cu0.4Sr1La1Cu1O5.21,25.1,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr0.9La1.1Cu1O5.24-MP-mp-20489.cif,Pb0.6Cu0.4Sr0.9La1.1Cu1O5.24,27.8,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1.1La0.9Cu1O5.18-MP-mp-20489.cif,Pb0.6Cu0.4Sr1.1La0.9Cu1O5.18,28.0,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1La1Cu1O5.15-MP-mp-20489.cif,Pb0.6Cu0.4Sr1La1Cu1O5.15,32.0,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr0.9La1.1Cu1O5.18-MP-mp-20489.cif,Pb0.6Cu0.4Sr0.9La1.1Cu1O5.18,31.6,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1.1La0.9Cu1O5.07-MP-mp-20489.cif,Pb0.6Cu0.4Sr1.1La0.9Cu1O5.07,33.9,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1.1La0.9Cu1O5.12-MP-mp-20489.cif,Pb0.6Cu0.4Sr1.1La0.9Cu1O5.12,31.0,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1La1Cu1O5.12-MP-mp-20489.cif,Pb0.6Cu0.4Sr1La1Cu1O5.12,35.9,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1La1Cu1O5.09-MP-mp-20489.cif,Pb0.6Cu0.4Sr1La1Cu1O5.09,36.7,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr0.8La1.2Cu1O5.11-MP-mp-20489.cif,Pb0.6Cu0.4Sr0.8La1.2Cu1O5.11,34.8,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr1La1Cu1O5.06-MP-mp-20489.cif,Pb0.6Cu0.4Sr1La1Cu1O5.06,37.7,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr0.9La1.1Cu1O5.06-MP-mp-20489.cif,Pb0.6Cu0.4Sr0.9La1.1Cu1O5.06,37.6,new,structure: parent lacks the redox centre
+Pb0.6Cu0.4Sr0.8La1.2Cu1O5.06-MP-mp-20489.cif,Pb0.6Cu0.4Sr0.8La1.2Cu1O5.06,28.7,new,structure: parent lacks the redox centre
+Ru0.8Sr2Y1Cu2.2O8.1-MP-mp-22390.cif,Ru0.8Sr2Y1Cu2.2O8.1,65.0,new,structure: parent lacks the redox centre
+Ru0.8Sr2Y1Cu2.2O7.8-MP-mp-22390.cif,Ru0.8Sr2Y1Cu2.2O7.8,43.0,new,structure: parent lacks the redox centre
+La0.8Sr0.2Cu0.9Fe0.1O4-MP-mp-1218202.cif,La0.8Sr0.2Cu0.9Fe0.1O4,0.0,new,typo: Cu oxidation 5.44
+La0.9Sr0.1Cu0.965Ni0.035O4-MP-mp-1218155.cif,La0.9Sr0.1Cu0.965Ni0.035O4,0.0,new,typo: Cu oxidation 5.21; structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr0.8La1.2Cu1O5.25-MP-mp-20489.cif,Pb0.5Cu0.5Sr0.8La1.2Cu1O5.25,25.2,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr1La1Cu1O5.19-MP-mp-20489.cif,Pb0.5Cu0.5Sr1La1Cu1O5.19,24.1,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr0.9La1.1Cu1O5.22-MP-mp-20489.cif,Pb0.5Cu0.5Sr0.9La1.1Cu1O5.22,24.9,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr1La1Cu1O5.15-MP-mp-20489.cif,Pb0.5Cu0.5Sr1La1Cu1O5.15,28.0,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr0.9La1.1Cu1O5.16-MP-mp-20489.cif,Pb0.5Cu0.5Sr0.9La1.1Cu1O5.16,28.1,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr0.8La1.2Cu1O5.16-MP-mp-20489.cif,Pb0.5Cu0.5Sr0.8La1.2Cu1O5.16,28.0,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr1La1Cu1O5.1-MP-mp-20489.cif,Pb0.5Cu0.5Sr1La1Cu1O5.1,31.9,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr0.9La1.1Cu1O5.08-MP-mp-20489.cif,Pb0.5Cu0.5Sr0.9La1.1Cu1O5.08,37.7,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr0.8La1.2Cu1O5.1-MP-mp-20489.cif,Pb0.5Cu0.5Sr0.8La1.2Cu1O5.1,34.9,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr1La1Cu1O5.03-MP-mp-20489.cif,Pb0.5Cu0.5Sr1La1Cu1O5.03,36.7,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr1La1Cu1O5.05-MP-mp-20489.cif,Pb0.5Cu0.5Sr1La1Cu1O5.05,36.7,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr0.9La1.1Cu1O5.02-MP-mp-20489.cif,Pb0.5Cu0.5Sr0.9La1.1Cu1O5.02,38.5,new,structure: parent lacks the redox centre
+Pb0.5Cu0.5Sr0.8La1.2Cu1O5.01-MP-mp-20489.cif,Pb0.5Cu0.5Sr0.8La1.2Cu1O5.01,38.7,new,structure: parent lacks the redox centre
+Sr2Sm2Cu2F1O5-MP-mp-1025280.cif,Sr2Sm2Cu2F1O5,0.0,new,typo: Cu oxidation 0.50
+La0.75Sr0.25Cu1O4-MP-mp-1218202.cif,La0.75Sr0.25Cu1O4,14.4,new,typo: Cu oxidation 5.25
+La1Cu1O4-MP-mp-1077929.cif,La1Cu1O4,23.0,new,typo: Cu oxidation 5.00
+La1.5Sr0.5Cu1.5Fe0.5O3.94-MP-mp-1173271.cif,La1.5Sr0.5Cu1.5Fe0.5O3.94,0.0,new,typo: Cu oxidation 0.59
+Sr2Cu2Mn1S2O2-MP-mp-551219.cif,Sr2Cu2Mn1S2O2,0.0,new,typo: Cu oxidation 0.50
+Sr2Tm1Cu3O7.65-MP-mp-3446.cif,Sr2Tm1Cu3O7.65,62.0,new,structure: parent lacks the redox centre
+La2Cu1O-MP-mp-1077929.cif,La2Cu1O,0.0,new,typo: Cu oxidation -4.00
+Cu0.287Ti0.573O0.14-MP-mp-22432.cif,Cu0.287Ti0.573O0.14,0.0,new,typo: Cu oxidation -7.01
+La2Cu1O0.001-MP-mp-1077929.cif,La2Cu1O0.001,0.0,new,typo: Cu oxidation -6.00; structure: parent of a different compound class (-1.3 anions/cation)
+Y1Sr2Cu2.75Ge0.25O-MP-mp-985569.cif,Y1Sr2Cu2.75Ge0.25O,0.0,new,typo: Cu oxidation -2.18
+Sr2Ho1Cu3O-MP-mp-17734.cif,Sr2Ho1Cu3O,62.0,new,typo: Cu oxidation -1.67; structure: parent of a different compound class (-1.1 anions/cation)
+Eu1Fe2Se2-MP-mp-21009.cif,Eu1Fe2Se2,40.0,new,structure: parent lacks the redox centre
+W1F0.41O2.59-MP-mp-752955.cif,W1F0.41O2.59,0.42,new,structure: parent of a different compound class (-2.0 anions/cation)
+W1F0.45O2.55-MP-mp-752955.cif,W1F0.45O2.55,0.38,new,structure: parent of a different compound class (-2.0 anions/cation)
+W1F0.44O2.56-MP-mp-752955.cif,W1F0.44O2.56,0.41,new,structure: parent of a different compound class (-2.0 anions/cation)
+Sn1Fe0.05Mo6S8-MP-mp-5336.cif,Sn1Fe0.05Mo6S8,7.05,new,structure: parent lacks the redox centre
+Li0.84H1Fe1.14Se1O1-MP-mp-1213486.cif,Li0.84H1Fe1.14Se1O1,42.0,new,structure: parent of a different compound class (-6.0 anions/cation)
+Li0.8Fe1.2Se0.92S0.08H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.92S0.08H1O1,0.0,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se0.84S0.16H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.84S0.16H1O1,38.6,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se0.78S0.22H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.78S0.22H1O1,35.6,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se0.72S0.28H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.72S0.28H1O1,35.0,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se0.59S0.41H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.59S0.41H1O1,32.0,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se0.47S0.53H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.47S0.53H1O1,24.2,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se0.34S0.66H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.34S0.66H1O1,18.4,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se0.23S0.77H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.23S0.77H1O1,11.0,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se0.1S0.9H1O1-MP-mp-943462.cif,Li0.8Fe1.2Se0.1S0.9H1O1,0.0,new,structure: parent of a different compound class (-2.0 anions/cation)
+Li0.8Fe1.2Se1H1O1-MP-mp-1213486.cif,Li0.8Fe1.2Se1H1O1,40.45,new,structure: parent of a different compound class (-6.0 anions/cation)
+Li0.8Fe1.2S0.41H1O1-MP-mp-943462.cif,Li0.8Fe1.2S0.41H1O1,0.0,new,structure: parent of a different compound class (-2.3 anions/cation)
+Nb0.7Fe1.55Se1.01S0.99-MP-mp-1220747.cif,Nb0.7Fe1.55Se1.01S0.99,23.5,new,structure: parent of a different compound class (-1.6 anions/cation)
+Nb0.76Fe1.61Se0.96S1.04-MP-mp-1220747.cif,Nb0.76Fe1.61Se0.96S1.04,18.0,new,structure: parent of a different compound class (-1.7 anions/cation)
+Li1Fe3Se2O2-MP-mp-558555.cif,Li1Fe3Se2O2,42.8,new,structure: parent of a different compound class (-3.0 anions/cation)
+Fe1.14Te0.1-MP-mp-19880.cif,Fe1.14Te0.1,0.0,new,structure: parent of a different compound class (-1.9 anions/cation)
+Ga1V3H0.37-MP-mp-24728.cif,Ga1V3H0.37,8.1,new,structure: parent of a different compound class (-1.9 anions/cation)
+Ge0.22H0.16Nb1-MP-mp-1181222.cif,Ge0.22H0.16Nb1,0.0,new,structure: parent of a different compound class (-3.9 anions/cation)
+Ge1V3H0.033-MP-mp-1181222.cif,Ge1V3H0.033,5.83,new,structure: parent of a different compound class (-4.0 anions/cation)
+Ge1H0.005V3-MP-mp-1181222.cif,Ge1H0.005V3,5.8,new,structure: parent of a different compound class (-4.0 anions/cation)
+La1Pt4Ge18-MP-mp-1077797.cif,La1Pt4Ge18,32.5,new,typo: impossible Tc for chemistry
+Hf1V2D0.25-MP-mp-976724.cif,Hf1V2D0.25,8.24,new,structure: parent of a different compound class (-1.2 anions/cation)
+Hf1V2H0.4-MP-mp-976724.cif,Hf1V2H0.4,8.42,new,structure: parent of a different compound class (-1.2 anions/cation)
+Hf1V2D0.5-MP-mp-976724.cif,Hf1V2D0.5,6.63,new,structure: parent of a different compound class (-1.2 anions/cation)
+Hf1V2D0.75-MP-mp-976724.cif,Hf1V2D0.75,4.29,new,structure: parent of a different compound class (-1.1 anions/cation)
+Mo6Te5I3-MP-mp-505260.cif,Mo6Te5I3,2.4,new,structure: parent of a different compound class (-5.3 anions/cation)
+Sn0.98In0.008Te1-MP-mp-1197742.cif,Sn0.98In0.008Te1,0.0,new,structure: parent of a different compound class (-1.5 anions/cation)
+Sn0.979In0.009Te1-MP-mp-1197742.cif,Sn0.979In0.009Te1,0.0,new,structure: parent of a different compound class (-1.5 anions/cation)
+Sn0.961In0.027Te1-MP-mp-1197742.cif,Sn0.961In0.027Te1,1.85,new,structure: parent of a different compound class (-1.5 anions/cation)
+In0.03Sn0.97Te1.01-MP-mp-1197742.cif,In0.03Sn0.97Te1.01,1.07,new,structure: parent of a different compound class (-1.5 anions/cation)
+Sn0.95In0.038Te1-MP-mp-1197742.cif,Sn0.95In0.038Te1,1.9,new,structure: parent of a different compound class (-1.5 anions/cation)
+In0.045Sn0.955Te1.01-MP-mp-1197742.cif,In0.045Sn0.955Te1.01,1.2,new,structure: parent of a different compound class (-1.5 anions/cation)
+In0.05Sn0.95Te1.01-MP-mp-1197742.cif,In0.05Sn0.95Te1.01,1.43,new,structure: parent of a different compound class (-1.5 anions/cation)
+In0.04Sn0.96Te1.01-MP-mp-1197742.cif,In0.04Sn0.96Te1.01,1.14,new,structure: parent of a different compound class (-1.5 anions/cation)
+Sn0.927In0.061Te1-MP-mp-1197742.cif,Sn0.927In0.061Te1,1.8,new,structure: parent of a different compound class (-1.5 anions/cation)
+Sn0.923In0.065Te1-MP-mp-1197742.cif,Sn0.923In0.065Te1,1.8,new,structure: parent of a different compound class (-1.5 anions/cation)
+Sn0.915In0.073Te1-MP-mp-1197742.cif,Sn0.915In0.073Te1,1.9,new,structure: parent of a different compound class (-1.5 anions/cation)
+In0.06Sn0.94Te1.01-MP-mp-1197742.cif,In0.06Sn0.94Te1.01,1.36,new,structure: parent of a different compound class (-1.5 anions/cation)
+Sn0.904In0.084Te1-MP-mp-1197742.cif,Sn0.904In0.084Te1,1.76,new,structure: parent of a different compound class (-1.5 anions/cation)
+In0.08Sn0.92Te1.01-MP-mp-1197742.cif,In0.08Sn0.92Te1.01,1.45,new,structure: parent of a different compound class (-1.5 anions/cation)
+In0.1Sn0.9Te1.01-MP-mp-1197742.cif,In0.1Sn0.9Te1.01,1.75,new,structure: parent of a different compound class (-1.5 anions/cation)
+In2Te1-MP-mp-1197742.cif,In2Te1,0.0,new,structure: parent of a different compound class (-2.0 anions/cation)
+Rh16Ir1S15-MP-mp-1101826.cif,Rh16Ir1S15,4.08,new,structure: parent of a different compound class (-1.8 anions/cation)
+Rh15Ir2S15-MP-mp-1101826.cif,Rh15Ir2S15,3.5,new,structure: parent of a different compound class (-1.8 anions/cation)
+Ir0.455Nb0.455O0.09-MP-mp-1097041.cif,Ir0.455Nb0.455O0.09,9.2,new,structure: parent of a different compound class (-2.9 anions/cation)
+Ir0.4Nb0.55O0.05-MP-mp-1097041.cif,Ir0.4Nb0.55O0.05,10.5,new,structure: parent of a different compound class (-3.0 anions/cation)
+Ir1S1-MP-mp-1101826.cif,Ir1S1,0.0,new,structure: parent of a different compound class (-1.7 anions/cation)
+La2.4Te4Y0.6-MP-mp-1078612.cif,La2.4Te4Y0.6,0.0,new,structure: parent of a different compound class (-1.7 anions/cation)
+Mo2Re4S2-MP-mp-1434.cif,Mo2Re4S2,0.0,new,structure: parent of a different compound class (-1.7 anions/cation)
+Ni2Mo6S6O2-MP-mp-18749.cif,Ni2Mo6S6O2,0.0,new,structure: parent of a different compound class (-4.0 anions/cation)
+Mo6S6O2-MP-mp-565836.cif,Mo6S6O2,0.0,new,structure: parent of a different compound class (-5.7 anions/cation)
+Pb1Mo6S6O2-MP-mp-1204592.cif,Pb1Mo6S6O2,11.7,new,structure: parent of a different compound class (-11.9 anions/cation)
+Nb0.87Si0.09N0.13O0.13-MP-mp-7596.cif,Nb0.87Si0.09N0.13O0.13,16.8,new,structure: parent of a different compound class (-1.7 anions/cation)
+N6Tb1-MP-mp-2117.cif,N6Tb1,0.0,new,structure: parent of a different compound class (+5.0 anions/cation)
+N12.8Nb1-MP-mp-1079585.cif,N12.8Nb1,16.1,new,structure: parent of a different compound class (+12.3 anions/cation)
+Nb0.84S0.16-MP-mp-10033.cif,Nb0.84S0.16,5.6,new,structure: parent of a different compound class (-1.8 anions/cation)
+Nb96.5O3.5-MP-mp-1470.cif,Nb96.5O3.5,6.13,new,structure: parent of a different compound class (-2.4 anions/cation)
+Nb98.68O1.32-MP-mp-1470.cif,Nb98.68O1.32,7.85,new,structure: parent of a different compound class (-2.4 anions/cation)
+Nb98O2-MP-mp-1470.cif,Nb98O2,7.33,new,structure: parent of a different compound class (-2.4 anions/cation)
+Nb99.078O0.922-MP-mp-1470.cif,Nb99.078O0.922,8.1,new,structure: parent of a different compound class (-2.4 anions/cation)
+Nb99.445O0.555-MP-mp-1470.cif,Nb99.445O0.555,8.5,new,structure: parent of a different compound class (-2.4 anions/cation)
+Nb99.861O0.139-MP-mp-1470.cif,Nb99.861O0.139,9.03,new,structure: parent of a different compound class (-2.4 anions/cation)
+Nb99.976O0.024-MP-mp-1470.cif,Nb99.976O0.024,9.23,new,structure: parent of a different compound class (-2.4 anions/cation)
+Nd1.72Ta3.28S2-MP-mp-10014.cif,Nd1.72Ta3.28S2,4.3,new,structure: parent of a different compound class (-1.6 anions/cation)
+O0.03V0.97-MP-mp-21579.cif,O0.03V0.97,2.4,new,structure: parent of a different compound class (-1.5 anions/cation)
+Ti1Re1O1-MP-mp-1016092.cif,Ti1Re1O1,5.74,new,structure: parent of a different compound class (-3.0 anions/cation)
+Sm2Ti2Sb2O3-MP-mp-13196.cif,Sm2Ti2Sb2O3,0.0,new,structure: parent of a different compound class (-1.5 anions/cation)
+Zr1P0.6Se1.4-MP-mp-2076.cif,Zr1P0.6Se1.4,4.11,new,structure: parent of a different compound class (-1.1 anions/cation)
+Zr1P1.1Se0.9-MP-mp-2076.cif,Zr1P1.1Se0.9,5.34,new,structure: parent of a different compound class (-1.6 anions/cation)
+Zr1P1.25S0.75-MP-mp-1186.cif,Zr1P1.25S0.75,4.85,new,structure: parent of a different compound class (-1.7 anions/cation)
+Zr1P1.25Se0.75-MP-mp-2076.cif,Zr1P1.25Se0.75,6.3,new,structure: parent of a different compound class (-1.7 anions/cation)
+Zr1P1.35Se0.65-MP-mp-2076.cif,Zr1P1.35Se0.65,6.24,new,structure: parent of a different compound class (-1.7 anions/cation)
+Zr1P1.4S0.6-MP-mp-1186.cif,Zr1P1.4S0.6,4.99,new,structure: parent of a different compound class (-1.8 anions/cation)
+Zr1P1.6S0.4-MP-mp-1186.cif,Zr1P1.6S0.4,4.36,new,structure: parent of a different compound class (-1.9 anions/cation)
+Zr1P1.5Se0.5-MP-mp-2076.cif,Zr1P1.5Se0.5,5.76,new,structure: parent of a different compound class (-1.8 anions/cation)
+Pb0.9Pt0.1Te2-MP-mp-1217437.cif,Pb0.9Pt0.1Te2,1.65,new,structure: parent of a different compound class (+1.5 anions/cation)
+Pd2.2S1-MP-mp-13682.cif,Pd2.2S1,1.63,new,structure: parent of a different compound class (-1.6 anions/cation)
+S1W2-MP-mp-224.cif,S1W2,0.0,new,structure: parent of a different compound class (-1.5 anions/cation)
+S3Sb1-MP-mp-1065860.cif,S3Sb1,0.0,new,structure: parent of a different compound class (+2.0 anions/cation)
+La2Ca2Ba2Cu3O13.712-MP-icsd-41494.cif,La2Ca2Ba2Cu3O13.712,76.0,new,typo: Cu oxidation 4.47
+Bi1.4Pb0.6Sr2Ca1Ga1Cu3O7-MP-icsd-173899.cif,Bi1.4Pb0.6Sr2Ca1Ga1Cu3O7,66.5,new,typo: Cu oxidation -0.13
+Co0.8Cu0.2Cr2O4-MP-mp-20758.cif,Co0.8Cu0.2Cr2O4,0.0,new,typo: Cu oxidation -2.00; structure: parent lacks the redox centre
+La0.7Ca0.3Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.7Ca0.3Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.00
+Cu0.6Co0.4Cr2O4-MP-mp-18788.cif,Cu0.6Co0.4Cr2O4,0.0,new,structure: parent lacks the redox centre
+Cu0.4Co0.6Cr2O4-MP-mp-18788.cif,Cu0.4Co0.6Cr2O4,0.0,new,typo: Cu oxidation 0.50; structure: parent lacks the redox centre
+Cu2MnBO5-MP-mp-28943.cif,Cu2MnBO5,0.0,new,structure: parent lacks the redox centre
+La0.7Sr0.3Mn0.95Cu0.05O3-MP-mp-691121.cif,La0.7Sr0.3Mn0.95Cu0.05O3,0.0,new,typo: Cu oxidation 9.00; structure: parent lacks the redox centre
+La0.7Sr0.3Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.7Sr0.3Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.00
+La0.7Ca0.3Mn0.94Cu0.06O3-MP-mp-1227500.cif,La0.7Ca0.3Mn0.94Cu0.06O3,0.0,new,typo: Cu oxidation 8.00; structure: parent lacks the redox centre
+Co2.88Cu0.12BO5-MP-mp-542153.cif,Co2.88Cu0.12BO5,0.0,new,typo: Cu oxidation -13.67; structure: parent lacks the redox centre
+Cu2Te2O5Br2-MP-mp-542807.cif,Cu2Te2O5Br2,0.0,new,typo: Cu oxidation 8.00
+Cu2Te2O5Cl2-MP-mp-581276.cif,Cu2Te2O5Cl2,0.0,new,typo: Cu oxidation 8.00
+Zn0.2Cu0.8FeCrO4-MP-mp-1215741.cif,Zn0.2Cu0.8FeCrO4,0.0,new,structure: parent lacks the redox centre
+Zn0.4Cu0.6FeCrO4-MP-mp-1215741.cif,Zn0.4Cu0.6FeCrO4,0.0,new,structure: parent lacks the redox centre
+Zn0.6Cu0.4FeCrO4-MP-mp-1215741.cif,Zn0.6Cu0.4FeCrO4,0.0,new,structure: parent lacks the redox centre
+Zn0.8Cu0.2FeCrO4-MP-mp-1215793.cif,Zn0.8Cu0.2FeCrO4,0.0,new,structure: parent lacks the redox centre
+Zn0.3Cu0.7Fe1.5Ga0.5O4-MP-mp-1215743.cif,Zn0.3Cu0.7Fe1.5Ga0.5O4,0.0,new,structure: parent lacks the redox centre
+CuSb2O6-MP-mp-1188790.cif,CuSb2O6,0.0,new,typo: Cu oxidation 6.00
+La0.6Bi0.1Sr0.3Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.6Bi0.1Sr0.3Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.00
+La0.6Bi0.1Sr0.25Ca0.05Mn0.9Cu0.1O3-MP-mp-39412.cif,La0.6Bi0.1Sr0.25Ca0.05Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.00; structure: parent lacks the redox centre
+YMn0.9Cu0.1O3-MP-mp-19385.cif,YMn0.9Cu0.1O3,0.0,new,structure: parent lacks the redox centre
+La0.8Sr0.2Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.8Sr0.2Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 5.00
+YMn0.95Cu0.05O3-MP-mp-19385.cif,YMn0.95Cu0.05O3,0.0,new,structure: parent lacks the redox centre
+YMn0.85Cu0.15O3-MP-mp-19385.cif,YMn0.85Cu0.15O3,0.0,new,structure: parent lacks the redox centre
+Cu0.3Zn0.7Fe2O4-MP-mp-19313.cif,Cu0.3Zn0.7Fe2O4,0.0,new,structure: parent lacks the redox centre
+Cu0.2Zn0.8Fe2O4-MP-mp-19313.cif,Cu0.2Zn0.8Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.20Cu0.20Zn0.60Fe2O4-MP-mp-757326.cif,Ni0.20Cu0.20Zn0.60Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.20Cu0.20Zn0.62Fe1.98O3.99-MP-mp-757326.cif,Ni0.20Cu0.20Zn0.62Fe1.98O3.99,0.0,new,structure: parent lacks the redox centre
+Ni0.20Cu0.20Zn0.66Fe1.94O3.97-MP-mp-757326.cif,Ni0.20Cu0.20Zn0.66Fe1.94O3.97,0.0,new,structure: parent lacks the redox centre
+Mg0.5Cu0.5Cr0.5Fe1.5O4-MP-mp-1222216.cif,Mg0.5Cu0.5Cr0.5Fe1.5O4,0.0,new,structure: parent lacks the redox centre
+La0.67Sr0.23Cu0.10MnO3-MP-icsd-41494.cif,La0.67Sr0.23Cu0.10MnO3,0.0,new,typo: Cu oxidation 5.30
+La0.67Sr0.18Cu0.15MnO3-MP-icsd-41494.cif,La0.67Sr0.18Cu0.15MnO3,0.0,new,typo: Cu oxidation 4.20
+La0.67Sr0.20Cu0.10MnO3-MP-icsd-41494.cif,La0.67Sr0.20Cu0.10MnO3,0.0,new,typo: Cu oxidation 5.90
+La0.67Sr0.15Cu0.15MnO3-MP-icsd-41494.cif,La0.67Sr0.15Cu0.15MnO3,0.0,new,typo: Cu oxidation 4.60
+La0.7Sr0.3Cu0.15Mn0.85O3-MP-mp-738741.cif,La0.7Sr0.3Cu0.15Mn0.85O3,0.0,new,typo: Cu oxidation 5.00
+SrFe11.9Cu0.1O19-MP-mp-3742.cif,SrFe11.9Cu0.1O19,0.0,new,structure: parent lacks the redox centre
+SrFe11.8Cu0.2O19-MP-mp-3742.cif,SrFe11.8Cu0.2O19,0.0,new,structure: parent lacks the redox centre
+SrFe11.7Cu0.3O19-MP-mp-3742.cif,SrFe11.7Cu0.3O19,0.0,new,structure: parent lacks the redox centre
+Sr0.9La0.1Fe11.9Cu0.1O19-MP-mp-3742.cif,Sr0.9La0.1Fe11.9Cu0.1O19,0.0,new,structure: parent lacks the redox centre
+Sr0.8La0.2Fe11.8Cu0.2O19-MP-mp-3742.cif,Sr0.8La0.2Fe11.8Cu0.2O19,0.0,new,structure: parent lacks the redox centre
+Sr0.7La0.3Fe11.7Cu0.3O19-MP-mp-3742.cif,Sr0.7La0.3Fe11.7Cu0.3O19,0.0,new,structure: parent lacks the redox centre
+LaSr2Mn1.95Cu0.05O7-MP-icsd-41494.cif,LaSr2Mn1.95Cu0.05O7,0.0,new,typo: Cu oxidation 23.00
+LaSr2Mn1.9Cu0.1O7-MP-icsd-41494.cif,LaSr2Mn1.9Cu0.1O7,0.0,new,typo: Cu oxidation 13.00
+LaSr2Mn1.85Cu0.15O7-MP-icsd-41494.cif,LaSr2Mn1.85Cu0.15O7,0.0,new,typo: Cu oxidation 9.67
+LaSr2Mn1.8Cu0.2O7-MP-icsd-41494.cif,LaSr2Mn1.8Cu0.2O7,0.0,new,typo: Cu oxidation 8.00
+Cu0.25Zn0.75Fe2O4-MP-mp-19313.cif,Cu0.25Zn0.75Fe2O4,0.0,new,structure: parent lacks the redox centre
+NiFe1.8Sn0.1Cu0.1O4-MP-mp-35596.cif,NiFe1.8Sn0.1Cu0.1O4,0.0,new,structure: parent lacks the redox centre
+La0.9Ca0.1Mn0.9Cu0.1O3-MP-mp-531717.cif,La0.9Ca0.1Mn0.9Cu0.1O3,0.0,new,structure: parent lacks the redox centre
+La0.8Ca0.2Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.8Ca0.2Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 5.00
+La0.6Ca0.4Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.6Ca0.4Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 7.00
+CaCu3Cr2Nb2O12-MP-mp-1214115.cif,CaCu3Cr2Nb2O12,0.0,new,structure: parent lacks the redox centre
+Cu2OSeO3-MP-mp-560561.cif,Cu2OSeO3,0.0,new,typo: Cu oxidation 5.00
+Cu2NiB2O6-MP-mp-1210020.cif,Cu2NiB2O6,0.0,new,structure: parent lacks the redox centre
+CuCr0.9V0.1O2-MP-mp-510625.cif,CuCr0.9V0.1O2,0.0,new,typo: Cu oxidation 0.80
+CuCr0.8V0.2O2-MP-mp-510625.cif,CuCr0.8V0.2O2,0.0,new,typo: Cu oxidation 0.60
+CuCr0.7V0.3O2-MP-mp-510625.cif,CuCr0.7V0.3O2,0.0,new,typo: Cu oxidation 0.40
+CuCr0.6V0.4O2-MP-mp-1216431.cif,CuCr0.6V0.4O2,0.0,new,typo: Cu oxidation 0.20
+CuCr0.5V0.5O2-MP-mp-1216431.cif,CuCr0.5V0.5O2,0.0,new,typo: Cu oxidation -0.00
+ErFeCuGe4O12-MP-mp-1213525.cif,ErFeCuGe4O12,0.0,new,structure: parent lacks the redox centre
+Ni0.52Zn0.4Cu0.1Fe1.98O4-MP-mp-1215616.cif,Ni0.52Zn0.4Cu0.1Fe1.98O4,0.0,new,structure: parent lacks the redox centre
+La0.65Ce0.05Sr0.3Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.65Ce0.05Sr0.3Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.00
+La0.7Ba0.25Nd0.05Mn0.97Cu0.03O3-MP-icsd-41494.cif,La0.7Ba0.25Nd0.05Mn0.97Cu0.03O3,0.0,new,typo: Cu oxidation 11.33
+La0.7Ba0.25Nd0.05Mn0.95Cu0.05O3-MP-icsd-41494.cif,La0.7Ba0.25Nd0.05Mn0.95Cu0.05O3,0.0,new,typo: Cu oxidation 8.00
+La0.7Ba0.25Nd0.05Mn0.93Cu0.07O3-MP-icsd-41494.cif,La0.7Ba0.25Nd0.05Mn0.93Cu0.07O3,0.0,new,typo: Cu oxidation 6.57
+CaCu3Fe2Re2O12-MP-mp-1043124.cif,CaCu3Fe2Re2O12,0.0,new,typo: Cu oxidation 0.67
+Na4CuTeO6-MP-mp-1199423.cif,Na4CuTeO6,0.0,new,typo: Cu oxidation 10.00; structure: parent of a different compound class (-4.8 anions/cation)
+Nd0.67Ba0.33Mn0.9Cu0.1O3-MP-mp-22571.cif,Nd0.67Ba0.33Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.30; structure: parent lacks the redox centre
+Ni0.37Cu0.14Zn0.52Fe2O4-MP-mp-1215616.cif,Ni0.37Cu0.14Zn0.52Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.5Cu0.2Zn0.3Fe2O4-MP-mp-1215616.cif,Ni0.5Cu0.2Zn0.3Fe2O4,0.0,new,structure: parent lacks the redox centre
+RuSr2YCu2O8-MP-mp-22390.cif,RuSr2YCu2O8,0.0,new,structure: parent lacks the redox centre
+Sr2CuIrO6-MP-mp-1193907.cif,Sr2CuIrO6,0.0,new,structure: parent lacks the redox centre
+Sr2MnO2Cu1.5Se2-MP-mp-1218497.cif,Sr2MnO2Cu1.5Se2,0.0,new,typo: Cu oxidation 0.67
+Tl6CuTe2O10-MP-mp-18191.cif,Tl6CuTe2O10,0.0,new,typo: Cu oxidation 6.00; structure: parent lacks the redox centre; structure: parent of a different compound class (-1.8 anions/cation)
+Y2Ir1.9Cu0.1O7-MP-mp-1191749.cif,Y2Ir1.9Cu0.1O7,0.0,new,typo: Cu oxidation 4.00; structure: parent lacks the redox centre
+Y2Ir1.8Cu0.2O7-MP-mp-1191749.cif,Y2Ir1.8Cu0.2O7,0.0,new,structure: parent lacks the redox centre
+Y2Ir1.7Cu0.3O7-MP-mp-1191749.cif,Y2Ir1.7Cu0.3O7,0.0,new,typo: Cu oxidation 4.00; structure: parent lacks the redox centre
+Y2Ir1.6Cu0.4O7-MP-mp-1191749.cif,Y2Ir1.6Cu0.4O7,0.0,new,structure: parent lacks the redox centre
+Zn0.90Cu0.05Li0.05O-MP-mp-2133.cif,Zn0.90Cu0.05Li0.05O,0.0,new,structure: parent lacks the redox centre
+Zn0.87Cu0.08Li0.05O-MP-mp-2133.cif,Zn0.87Cu0.08Li0.05O,0.0,new,structure: parent lacks the redox centre
+EuSr2RuCu2O8-MP-mp-22390.cif,EuSr2RuCu2O8,0.0,new,structure: parent lacks the redox centre
+Ti0.95Cu0.05O2-MP-mp-390.cif,Ti0.95Cu0.05O2,0.0,new,typo: Cu oxidation 4.00; structure: parent lacks the redox centre
+Zn0.97Cu0.03O-MP-mp-2133.cif,Zn0.97Cu0.03O,0.0,new,structure: parent lacks the redox centre
+Cu4Te5O12Cl4-MP-mp-558364.cif,Cu4Te5O12Cl4,0.0,new,typo: Cu oxidation 9.50
+Cu3TeO6-MP-mp-21861.cif,Cu3TeO6,0.0,new,typo: Cu oxidation 4.67
+HgBa2Ca4Cu5O8-MP-icsd-80718.cif,HgBa2Ca4Cu5O8,0.0,new,typo: Cu oxidation 0.40
+La0.5Ba0.5Co0.9Cu0.1O3-MP-mp-20477.cif,La0.5Ba0.5Co0.9Cu0.1O3,0.0,new,typo: Cu oxidation 8.00; structure: parent lacks the redox centre
+La0.65Ca0.30Pb0.05Mn0.90Cu0.10O3-MP-icsd-41494.cif,La0.65Ca0.30Pb0.05Mn0.90Cu0.10O3,0.0,new,typo: Cu oxidation 6.50
+La0.666Sr0.373Mn0.943Cu0.018O3-MP-icsd-41494.cif,La0.666Sr0.373Mn0.943Cu0.018O3,0.0,new,typo: Cu oxidation 23.72
+La0.67Ca0.33Mn0.85Cu0.15O3-MP-icsd-41494.cif,La0.67Ca0.33Mn0.85Cu0.15O3,0.0,new,typo: Cu oxidation 5.20
+La0.7Ca0.3Mn0.95Cu0.05O3-MP-mp-1227500.cif,La0.7Ca0.3Mn0.95Cu0.05O3,0.0,new,typo: Cu oxidation 9.00; structure: parent lacks the redox centre
+Nd0.5Sr0.5Mn0.9Cu0.1O3-MP-mp-1218102.cif,Nd0.5Sr0.5Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 8.00; structure: parent lacks the redox centre
+La0.7Ca0.3Mn0.85Cu0.15O3-MP-mp-39689.cif,La0.7Ca0.3Mn0.85Cu0.15O3,0.0,new,typo: Cu oxidation 5.00; structure: parent lacks the redox centre
+La0.7Sr0.3Mn0.95Cu0.10O3-MP-icsd-41494.cif,La0.7Sr0.3Mn0.95Cu0.10O3,0.0,new,typo: Cu oxidation 4.50
+SeCuO3-MP-mp-560049.cif,SeCuO3,0.0,new,typo: Cu oxidation 8.00
+Mg0.2Cu0.3Zn0.5Fe2O4-MP-mp-757326.cif,Mg0.2Cu0.3Zn0.5Fe2O4,0.0,new,structure: parent lacks the redox centre
+Nd0.5Sr0.5Mn0.98Cu0.02O3-MP-mp-1218102.cif,Nd0.5Sr0.5Mn0.98Cu0.02O3,0.0,new,typo: Cu oxidation 28.00; structure: parent lacks the redox centre
+Ni0.2Cu0.2Zn0.6Fe2O3-MP-mp-1215616.cif,Ni0.2Cu0.2Zn0.6Fe2O3,0.0,new,typo: Cu oxidation -8.00; structure: parent lacks the redox centre
+RuSr2SmCu2O8-MP-mp-22390.cif,RuSr2SmCu2O8,0.0,new,structure: parent lacks the redox centre
+Sr2Cu2CoO2S2-MP-mp-7112.cif,Sr2Cu2CoO2S2,0.0,new,typo: Cu oxidation 0.50
+Zn0.9Cu0.1O-MP-mp-2133.cif,Zn0.9Cu0.1O,0.0,new,structure: parent lacks the redox centre
+Ni0.75Zn0.2Cu0.05Fe2O4-MP-mp-1198303.cif,Ni0.75Zn0.2Cu0.05Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.65Zn0.2Cu0.15Fe2O4-MP-mp-1203466.cif,Ni0.65Zn0.2Cu0.15Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.55Zn0.2Cu0.25Fe2O4-MP-mp-1215616.cif,Ni0.55Zn0.2Cu0.25Fe2O4,0.0,new,structure: parent lacks the redox centre
+Cu0.2Zn0.2Ni0.6Fe2O4-MP-mp-1215616.cif,Cu0.2Zn0.2Ni0.6Fe2O4,0.0,new,structure: parent lacks the redox centre
+La0.6Bi0.1Sr0.2Ca0.1Mn0.9Cu0.1O3-MP-mp-698710.cif,La0.6Bi0.1Sr0.2Ca0.1Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.00
+La0.6Bi0.1Sr0.15Ca0.15Mn0.9Cu0.1O3-MP-mp-691121.cif,La0.6Bi0.1Sr0.15Ca0.15Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.00; structure: parent lacks the redox centre
+La0.77Sr0.23Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.77Sr0.23Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 5.30
+La0.77Sr0.23Mn0.8Cu0.2O3-MP-icsd-41494.cif,La0.77Sr0.23Mn0.8Cu0.2O3,0.0,new,typo: Cu oxidation 4.15
+La0.7Sr0.25Na0.05Mn0.95Cu0.05O3-MP-mp-1218257.cif,La0.7Sr0.25Na0.05Mn0.95Cu0.05O3,0.0,new,typo: Cu oxidation 10.00; structure: parent lacks the redox centre
+La0.7Sr0.25Na0.05Mn0.9Cu0.1O3-MP-icsd-41494.cif,La0.7Sr0.25Na0.05Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 6.50
+La0.7Sr0.25Na0.05Mn0.85Cu0.15O3-MP-mp-738741.cif,La0.7Sr0.25Na0.05Mn0.85Cu0.15O3,0.0,new,typo: Cu oxidation 5.33
+La0.7Sr0.25Na0.05Mn0.8Cu0.2O3-MP-mp-738741.cif,La0.7Sr0.25Na0.05Mn0.8Cu0.2O3,0.0,new,typo: Cu oxidation 4.75
+La3Ni1.75Cu0.25SbO9-MP-mp-1190427.cif,La3Ni1.75Cu0.25SbO9,0.0,new,typo: Cu oxidation 10.00; structure: parent lacks the redox centre
+Ni0.5Cu0.25Zn0.25Fe2O4-MP-mp-1215616.cif,Ni0.5Cu0.25Zn0.25Fe2O4,0.0,new,structure: parent lacks the redox centre
+Sr2Pd0.8Cu0.2O3-MP-mp-4359.cif,Sr2Pd0.8Cu0.2O3,0.0,new,structure: parent lacks the redox centre
+Zn0.7Ni0.2Cu0.1Fe2O4-MP-mp-19313.cif,Zn0.7Ni0.2Cu0.1Fe2O4,0.0,new,structure: parent lacks the redox centre
+Zn0.7Ni0.1Cu0.2Fe2O4-MP-mp-19313.cif,Zn0.7Ni0.1Cu0.2Fe2O4,0.0,new,structure: parent lacks the redox centre
+Zn0.68Ni0.12Cu0.2Fe2O4-MP-mp-757326.cif,Zn0.68Ni0.12Cu0.2Fe2O4,0.0,new,structure: parent lacks the redox centre
+Zn0.56Ni0.24Cu0.2Fe2O4-MP-mp-757326.cif,Zn0.56Ni0.24Cu0.2Fe2O4,0.0,new,structure: parent lacks the redox centre
+Zn0.52Ni0.28Cu0.2Fe2O4-MP-mp-757326.cif,Zn0.52Ni0.28Cu0.2Fe2O4,0.0,new,structure: parent lacks the redox centre
+CaMn0.9Cu0.1O3-MP-mp-19201.cif,CaMn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 13.00; structure: parent lacks the redox centre
+CaMn0.8Cu0.2O3-MP-mp-19201.cif,CaMn0.8Cu0.2O3,0.0,new,typo: Cu oxidation 8.00; structure: parent lacks the redox centre
+CuFe0.6Cr1.4O4-MP-mp-1104680.cif,CuFe0.6Cr1.4O4,0.0,new,structure: parent lacks the redox centre
+La0.845Sr0.155Mn0.9Cu0.1O3-MP-mp-738741.cif,La0.845Sr0.155Mn0.9Cu0.1O3,0.0,new,typo: Cu oxidation 4.55
+Nd0.5Sr0.5Mn0.96Cu0.04O3-MP-mp-1218102.cif,Nd0.5Sr0.5Mn0.96Cu0.04O3,0.0,new,typo: Cu oxidation 15.50; structure: parent lacks the redox centre
+Nd0.5Sr0.5Mn0.93Cu0.07O3-MP-mp-1218102.cif,Nd0.5Sr0.5Mn0.93Cu0.07O3,0.0,new,typo: Cu oxidation 10.14; structure: parent lacks the redox centre
+Nd0.5Sr0.5Mn0.99Cu0.01O3-MP-mp-1218102.cif,Nd0.5Sr0.5Mn0.99Cu0.01O3,0.0,new,typo: Cu oxidation 53.00; structure: parent lacks the redox centre
+Nd0.5Sr0.5Mn0.97Cu0.03O3-MP-mp-1218102.cif,Nd0.5Sr0.5Mn0.97Cu0.03O3,0.0,new,typo: Cu oxidation 19.67; structure: parent lacks the redox centre
+Nd0.5Sr0.5Mn0.95Cu0.05O3-MP-mp-1218102.cif,Nd0.5Sr0.5Mn0.95Cu0.05O3,0.0,new,typo: Cu oxidation 13.00; structure: parent lacks the redox centre
+Ni0.5Cu0.05Mg0.09Zn0.36Fe2O4-MP-mp-1215616.cif,Ni0.5Cu0.05Mg0.09Zn0.36Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.5Cu0.05Mg0.18Zn0.27Fe2O4-MP-mp-1215616.cif,Ni0.5Cu0.05Mg0.18Zn0.27Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.5Cu0.05Mg0.27Zn0.18Fe2O4-MP-mp-1221969.cif,Ni0.5Cu0.05Mg0.27Zn0.18Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.5Cu0.05Mg0.36Zn0.09Fe2O4-MP-mp-1221969.cif,Ni0.5Cu0.05Mg0.36Zn0.09Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.5Cu0.05Mg0.45Zn0Fe2O4-MP-mp-1221969.cif,Ni0.5Cu0.05Mg0.45Zn0Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.9Cu0.1Fe2O4-MP-mp-35596.cif,Ni0.9Cu0.1Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.7Cu0.3Fe2O4-MP-mp-35596.cif,Ni0.7Cu0.3Fe2O4,0.0,new,structure: parent lacks the redox centre
+SrRu0.9Cu0.1O3-MP-mp-22390.cif,SrRu0.9Cu0.1O3,0.0,new,structure: parent lacks the redox centre
+SrRu0.8Cu0.2O3-MP-mp-22390.cif,SrRu0.8Cu0.2O3,0.0,new,structure: parent lacks the redox centre
+SrRu0.7Cu0.3O3-MP-mp-22390.cif,SrRu0.7Cu0.3O3,0.0,new,typo: Cu oxidation 4.00; structure: parent lacks the redox centre
+[(NiO)0.29(CuO)0.08](ZnO)0.62(Fe2O3)1.01-MP-mp-1045634.cif,[(NiO)0.29(CuO)0.08](ZnO)0.62(Fe2O3)1.01,0.0,new,structure: parent lacks the redox centre
+(La2MnCoO6)0.8(CaCu3Ti4O12)0.2-MP-mp-744380.cif,(La2MnCoO6)0.8(CaCu3Ti4O12)0.2,0.0,new,structure: parent lacks the redox centre
+(La2MnCoO6)0.5(CaCu3Ti4O12)0.5-MP-mp-694916.cif,(La2MnCoO6)0.5(CaCu3Ti4O12)0.5,0.0,new,structure: parent lacks the redox centre
+(La2MnCoO6)0.2(CaCu3Ti4O12)0.8-MP-mp-40866.cif,(La2MnCoO6)0.2(CaCu3Ti4O12)0.8,0.0,new,structure: parent lacks the redox centre
+Cu3Nd(SeO3)2O2Cl-MP-mp-572807.cif,Cu3Nd(SeO3)2O2Cl,0.0,new,typo: Cu oxidation 6.00
+Cu3Bi(SeO3)2O2Cl-MP-mp-505104.cif,Cu3Bi(SeO3)2O2Cl,0.0,new,typo: Cu oxidation 6.00
+Cu3Bi(SeO3)2O2Br-MP-mp-628637.cif,Cu3Bi(SeO3)2O2Br,0.0,new,typo: Cu oxidation 6.00
+Cu2(OH)3Br-MP-mp-1193617.cif,Cu2(OH)3Br,0.0,new,structure: parent of a different compound class (-10.5 anions/cation)
+(Co0.2Cu0.2Mg0.2Ni0.2Zn0.2)O-MP-mp-1032645.cif,(Co0.2Cu0.2Mg0.2Ni0.2Zn0.2)O,0.0,new,structure: parent lacks the redox centre
+Cu3Bi(TeO3)2O2Cl-MP-mp-572778.cif,Cu3Bi(TeO3)2O2Cl,0.0,new,typo: Cu oxidation 6.00
+Cu0.73Ni0.27(HSeO3)2-MP-mp-24164.cif,Cu0.73Ni0.27(HSeO3)2,0.0,new,typo: Cu oxidation 18.44
+Co1.7Cu0.3(OH)AsO4-MP-mp-1226214.cif,Co1.7Cu0.3(OH)AsO4,0.0,new,typo: Cu oxidation -3.67
+Cu3(NaFeSb)O6-MP-mp-2741573.cif,Cu3(NaFeSb)O6,0.0,new,structure: parent lacks the redox centre; structure: parent of a different compound class (-1.2 anions/cation)
+La0.7Ca0.3Mn0.98Cu0.02O3-MP-mp-1227500.cif,La0.7Ca0.3Mn0.98Cu0.02O3,0.0,new,typo: Cu oxidation 18.00; structure: parent lacks the redox centre
+La0.7Ca0.3Mn0.96Cu0.04O3-MP-mp-1227500.cif,La0.7Ca0.3Mn0.96Cu0.04O3,0.0,new,typo: Cu oxidation 10.50; structure: parent lacks the redox centre
+Bi1.5Sb1.5Cu0.5Mn0.5O7-MP-mp-1221942.cif,Bi1.5Sb1.5Cu0.5Mn0.5O7,0.0,new,typo: Cu oxidation 7.00; structure: parent lacks the redox centre
+Co0.75Cu0.25Fe2O4-MP-mp-753222.cif,Co0.75Cu0.25Fe2O4,0.0,new,typo: Cu oxidation -1.00; structure: parent lacks the redox centre
+Sr3Sb2CuO9-MP-mp-1517843.cif,Sr3Sb2CuO9,0.0,new,typo: Cu oxidation 6.00
+Zn0.4Co0.45Cu0.15Ce0.1Fe1.9O4-MP-mp-1105352.cif,Zn0.4Co0.45Cu0.15Ce0.1Fe1.9O4,0.0,new,typo: Cu oxidation -1.00
+La1.64Sr0.36Cu0.6Ru0.4O3.78-MP-icsd-41494.cif,La1.64Sr0.36Cu0.6Ru0.4O3.78,0.0,new,typo: Cu oxidation 0.53
+In2Fe2CuO7-MP-mp-21094.cif,In2Fe2CuO7,0.0,new,structure: parent lacks the redox centre
+In2Fe1.75Ga0.25CuO7-MP-mp-8098.cif,In2Fe1.75Ga0.25CuO7,0.0,new,structure: parent lacks the redox centre
+In2Fe1.5Ga0.5CuO7-MP-mp-8098.cif,In2Fe1.5Ga0.5CuO7,0.0,new,structure: parent lacks the redox centre
+In2Fe1.25Ga0.75CuO7-MP-mp-8098.cif,In2Fe1.25Ga0.75CuO7,0.0,new,structure: parent lacks the redox centre
+In2Fe1Ga1CuO7-MP-mp-8098.cif,In2Fe1Ga1CuO7,0.0,new,structure: parent lacks the redox centre
+In2Fe0.75Ga1.25CuO7-MP-mp-8098.cif,In2Fe0.75Ga1.25CuO7,0.0,new,structure: parent lacks the redox centre
+In2Fe0.5Ga1.5CuO7-MP-mp-8098.cif,In2Fe0.5Ga1.5CuO7,0.0,new,structure: parent lacks the redox centre
+In2Fe0.25Ga1.75CuO7-MP-mp-8098.cif,In2Fe0.25Ga1.75CuO7,0.0,new,structure: parent lacks the redox centre
+In2Ga2CuO7-MP-mp-8098.cif,In2Ga2CuO7,0.0,new,structure: parent lacks the redox centre
+Cs2Cu2Fe(PO4)3-MP-mp-20113.cif,Cs2Cu2Fe(PO4)3,0.0,new,structure: parent lacks the redox centre
+CuFeBO4-MP-mp-19097.cif,CuFeBO4,0.0,new,structure: parent lacks the redox centre
+Zn0.88Co0.05Cu0.07O-MP-mp-2133.cif,Zn0.88Co0.05Cu0.07O,0.0,new,structure: parent lacks the redox centre
+Mg0.5Cd0.25Cu0.25Fe2O4-MP-mp-1222550.cif,Mg0.5Cd0.25Cu0.25Fe2O4,0.0,new,structure: parent lacks the redox centre
+Mg0.5Cd0.25Cu0.25Fe1.9875La0.0125O4-MP-mp-1222550.cif,Mg0.5Cd0.25Cu0.25Fe1.9875La0.0125O4,0.0,new,structure: parent lacks the redox centre
+Mg0.5Cd0.25Cu0.25Fe1.975La0.025O4-MP-mp-1222550.cif,Mg0.5Cd0.25Cu0.25Fe1.975La0.025O4,0.0,new,structure: parent lacks the redox centre
+Cu1.4Ge0.4Fe1.2O4-MP-mp-22421.cif,Cu1.4Ge0.4Fe1.2O4,0.0,new,structure: parent lacks the redox centre
+Cu1.4Ti0.4Fe1.2O4-MP-mp-1277107.cif,Cu1.4Ti0.4Fe1.2O4,0.0,new,structure: parent lacks the redox centre
+Cu0.3Ni0.7Cr0.1Fe1.9O4-MP-mp-35596.cif,Cu0.3Ni0.7Cr0.1Fe1.9O4,0.0,new,structure: parent lacks the redox centre
+Cu0.3Ni0.7Cr0.2Fe1.8O4-MP-mp-35596.cif,Cu0.3Ni0.7Cr0.2Fe1.8O4,0.0,new,structure: parent lacks the redox centre
+In1.9Cu0.1O3-MP-mp-22598.cif,In1.9Cu0.1O3,0.0,new,structure: parent lacks the redox centre
+Zn0.9995Cu0.0005O-MP-mp-2133.cif,Zn0.9995Cu0.0005O,0.0,new,structure: parent lacks the redox centre
+Zn0.9795Cu0.0005Al0.02O-MP-mp-2133.cif,Zn0.9795Cu0.0005Al0.02O,0.0,new,typo: Cu oxidation -38.00; structure: parent lacks the redox centre
+Zn0.98Cu0.02O-MP-mp-2133.cif,Zn0.98Cu0.02O,0.0,new,structure: parent lacks the redox centre
+Zn0.96Cu0.02Al0.02O-MP-mp-2133.cif,Zn0.96Cu0.02Al0.02O,0.0,new,structure: parent lacks the redox centre
+Zn0.95Cu0.05O-MP-mp-2133.cif,Zn0.95Cu0.05O,0.0,new,structure: parent lacks the redox centre
+CuSe2O5-MP-mp-3199.cif,CuSe2O5,0.0,new,typo: Cu oxidation 14.00
+Ni0.45Cu0.05Zn0.50Fe2O4-MP-mp-1215616.cif,Ni0.45Cu0.05Zn0.50Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.40Cu0.10Zn0.50Fe2O4-MP-mp-1215616.cif,Ni0.40Cu0.10Zn0.50Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.35Cu0.15Zn0.50Fe2O4-MP-mp-1215616.cif,Ni0.35Cu0.15Zn0.50Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.30Cu0.20Zn0.50Fe2O4-MP-mp-757326.cif,Ni0.30Cu0.20Zn0.50Fe2O4,0.0,new,structure: parent lacks the redox centre
+Ni0.25Cu0.25Zn0.50Fe2O4-MP-mp-757326.cif,Ni0.25Cu0.25Zn0.50Fe2O4,0.0,new,structure: parent lacks the redox centre
+CaCu2.5Mn0.5Ti3.5Al0.5O12-MP-mp-1227706.cif,CaCu2.5Mn0.5Ti3.5Al0.5O12,0.0,new,structure: parent lacks the redox centre
+CaCu2MnTi3AlO12-MP-mp-1227706.cif,CaCu2MnTi3AlO12,0.0,new,structure: parent lacks the redox centre
+LaCu3Fe2Re2O12-MP-mp-1105546.cif,LaCu3Fe2Re2O12,0.0,new,typo: Cu oxidation 0.33
+Cu2Mn0.96Ga0.04BO5-MP-mp-28943.cif,Cu2Mn0.96Ga0.04BO5,0.0,new,structure: parent lacks the redox centre
+Cu2Mn0.89Ga0.11BO5-MP-mp-28943.cif,Cu2Mn0.89Ga0.11BO5,0.0,new,structure: parent lacks the redox centre
+Cu2Mn0.83Ga0.17BO5-MP-mp-28943.cif,Cu2Mn0.83Ga0.17BO5,0.0,new,structure: parent lacks the redox centre
+Cu2Mn0.75Ga0.25BO5-MP-mp-12209.cif,Cu2Mn0.75Ga0.25BO5,0.0,new,structure: parent lacks the redox centre
+Cu3Mg2(OH)6Br2-MP-mp-24006.cif,Cu3Mg2(OH)6Br2,0.0,new,structure: parent lacks the redox centre; structure: parent of a different compound class (-23.2 anions/cation)
+Cu(AlCo)O2-MP-mp-1045723.cif,Cu(AlCo)O2,0.0,new,typo: Cu oxidation -2.00
+CaCu2.9Ti3.9Fe1.1O12-MP-mp-1200872.cif,CaCu2.9Ti3.9Fe1.1O12,0.0,new,structure: parent lacks the redox centre
+CaCu2.7Ti3.7Fe1.3O12-MP-mp-1200872.cif,CaCu2.7Ti3.7Fe1.3O12,0.0,new,structure: parent lacks the redox centre
+Cu0.125Sr0.875O-MP-mp-2472.cif,Cu0.125Sr0.875O,0.0,new,structure: parent lacks the redox centre
+Cu3Lu(SeO3)2O2Cl-MP-mp-23096.cif,Cu3Lu(SeO3)2O2Cl,0.0,new,typo: Cu oxidation 6.00; structure: parent lacks the redox centre; structure: parent of a different compound class (-2.2 anions/cation)
+Cu3Er(SeO3)2O2Cl-MP-mp-555517.cif,Cu3Er(SeO3)2O2Cl,0.0,new,typo: Cu oxidation 6.00
+Cu3Ho(SeO3)2O2Cl-MP-mp-23587.cif,Cu3Ho(SeO3)2O2Cl,0.0,new,typo: Cu oxidation 6.00; structure: parent lacks the redox centre; structure: parent of a different compound class (-2.2 anions/cation)
+Cu2CrBO5-MP-mp-19299.cif,Cu2CrBO5,0.0,new,structure: parent lacks the redox centre
+(MgCoNiCuZn)O-MP-mp-1032645.cif,(MgCoNiCuZn)O,0.0,new,typo: Cu oxidation -7.00; structure: parent lacks the redox centre
+(CuCl)LaNb2O-MP-mp-1198693.cif,(CuCl)LaNb2O,0.0,new,typo: Cu oxidation -10.00; structure: parent of a different compound class (-1.5 anions/cation)
+Zn0.94Fe0.05Cu0.01O-MP-mp-2133.cif,Zn0.94Fe0.05Cu0.01O,0.0,new,typo: Cu oxidation -3.00; structure: parent lacks the redox centre
+CaCu3Co2Re2O12-MP-mp-1043073.cif,CaCu3Co2Re2O12,0.0,new,typo: Cu oxidation 0.67
+(Ni0.23Mn0.02Cu0.25Zn0.5)O(Fe2O3)0.98-MP-mp-757326.cif,(Ni0.23Mn0.02Cu0.25Zn0.5)O(Fe2O3)0.98,0.0,new,structure: parent lacks the redox centre
+(Ni0.21Mn0.04Cu0.25Zn0.5)O(Fe2O3)0.98-MP-mp-757326.cif,(Ni0.21Mn0.04Cu0.25Zn0.5)O(Fe2O3)0.98,0.0,new,structure: parent lacks the redox centre
+(Ni0.19Mn0.06Cu0.25Zn0.5)O(Fe2O3)0.98-MP-mp-757326.cif,(Ni0.19Mn0.06Cu0.25Zn0.5)O(Fe2O3)0.98,0.0,new,structure: parent lacks the redox centre
+(Ni0.17Mn0.08Cu0.25Zn0.5)O(Fe2O3)0.98-MP-mp-757326.cif,(Ni0.17Mn0.08Cu0.25Zn0.5)O(Fe2O3)0.98,0.0,new,structure: parent lacks the redox centre
+(Ni0.15Mn0.10Cu0.25Zn0.5)O(Fe2O3)0.98-MP-mp-757326.cif,(Ni0.15Mn0.10Cu0.25Zn0.5)O(Fe2O3)0.98,0.0,new,structure: parent lacks the redox centre
+Ni0.94Co0.03Mn0.04Cu0.03Fe1.96O4-MP-mp-35596.cif,Ni0.94Co0.03Mn0.04Cu0.03Fe1.96O4,0.0,new,structure: parent lacks the redox centre
+Ni0.25Cu0.30Zn0.45Dy0.0Fe2.0O4-MP-mp-1215616.cif,Ni0.25Cu0.30Zn0.45Dy0.0Fe2.0O4,0.0,new,structure: parent lacks the redox centre
+Ni0.25Cu0.30Zn0.45Dy0.025Fe1.975O4-MP-mp-1215616.cif,Ni0.25Cu0.30Zn0.45Dy0.025Fe1.975O4,0.0,new,structure: parent lacks the redox centre
+Ni0.25Cu0.30Zn0.45Dy0.05Fe1.95O4-MP-mp-1215616.cif,Ni0.25Cu0.30Zn0.45Dy0.05Fe1.95O4,0.0,new,structure: parent lacks the redox centre
+Ni0.25Cu0.30Zn0.45Dy0.075Fe1.925O4-MP-mp-1215616.cif,Ni0.25Cu0.30Zn0.45Dy0.075Fe1.925O4,0.0,new,structure: parent lacks the redox centre
+Ni0.25Cu0.30Zn0.45Dy0.1Fe1.9O4-MP-mp-1215616.cif,Ni0.25Cu0.30Zn0.45Dy0.1Fe1.9O4,0.0,new,structure: parent lacks the redox centre
+Ni0.25Cu0.30Zn0.45Dy0.125Fe1.875O4-MP-mp-1215616.cif,Ni0.25Cu0.30Zn0.45Dy0.125Fe1.875O4,0.0,new,structure: parent lacks the redox centre
+KCu7(TeO4)(SO4)5Cl-MP-mp-653840.cif,KCu7(TeO4)(SO4)5Cl,0.0,new,typo: Cu oxidation 8.57
+Cu3Bi(SeO3)2O2I-MP-mp-669425.cif,Cu3Bi(SeO3)2O2I,0.0,new,typo: Cu oxidation 6.00
