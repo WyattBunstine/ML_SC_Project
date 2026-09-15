@@ -447,81 +447,91 @@ def _masked_mean(err, mask):
     return (err * m).sum() / m.sum().clamp_min(1.0)
 
 
-def _mt_loss(out, targets, masks, stats, weights, seg, spectrum_loss="l1"):
+def _mt_loss(out, targets, masks, stats, weights, seg, spectrum_loss="l1",
+             task_losses=None, logvar=None):
     """Masked multitask loss (std-normalized, weighted) + per-task PHYSICAL MAE.
     Per-atom tasks (forces/magmom) broadcast their per-structure mask over atoms via
     seg. A task is only scored when both the prediction and its target are present.
 
-    spectrum_loss ("l1"|"mse", config key of the same name) picks the PHONON
-    spectrum objective (eph_a2f / ph_dos; the electronic dos is untouched).
-    L1's per-bin optimum is the conditional MEDIAN — under uncertainty that
-    hedges every sharp peak toward a low flat curve (measured: rung-38 a2f
-    effective rank 16, lambda compressed 0.63 vs 1.7 on A15s). MSE (the
-    BETE-NET convention, Hennig group) targets the conditional mean and
-    punishes a missed peak quadratically, so peaks survive training. MSE terms
-    normalize by s^2 to stay dimensionless alongside the L1/s tasks; the
-    REPORTED per-task number stays the physical MAE either way."""
+    Per-task objective (2026-09-15): `task_losses` = {task: "l1"|"mse"|"huber"}.
+    Defaults: "l1" everywhere except the phonon spectra (eph_a2f / ph_dos /
+    phdos_site), which follow the legacy `spectrum_loss` key. All three are
+    computed on the std-normalized residual r/s so they stay dimensionless
+    alongside each other: l1 = |r|/s (per-bin optimum = conditional MEDIAN, which
+    hedges sharp peaks to a flat curve), mse = r^2/s^2 (conditional MEAN, the
+    BETE-NET convention, punishes a missed peak quadratically), huber = SmoothL1
+    on r/s with beta 1 (quadratic inside one std, linear outside: MSE's peak
+    fidelity without MSE's outlier amplification on heavy-tailed targets such as
+    MPtrj forces). The REPORTED per-task number stays the physical MAE.
+
+    `logvar`: the model's per-task learnable log-scales (loss_balance
+    "uncertainty", Kendall 2018): total = sum_k exp(-eta_k) w_k L_k + eta_k.
+    None -> the fixed `weights` alone, bit-identical to before."""
     losses, maes, counts = {}, {}, {}
+    task_losses = task_losses or {}
+    _SPECTRA = {"eph_a2f", "ph_dos", "phdos_site"}
 
-    def spectrum(key, diff):                       # (B, n_bins) residual
-        s, m = stats.get(key, 1.0), masks[key]
-        if spectrum_loss == "mse":
-            losses[key] = _masked_mean((diff ** 2).mean(1) / (s * s), m)
+    def kind_of(key):
+        return task_losses.get(key, spectrum_loss if key in _SPECTRA else "l1")
+
+    def norm_err(key, r, reduce):
+        """Per-item error of the chosen kind from a signed residual r whose LAST
+        dim is reduced by `reduce` ('sum' for vector targets, 'mean' for spectra)."""
+        s = stats.get(key, 1.0)
+        z = r / s
+        k = kind_of(key)
+        if k == "l1":
+            e = z.abs()
+        elif k == "mse":
+            e = z * z
+        elif k == "huber":
+            e = torch.nn.functional.smooth_l1_loss(z, torch.zeros_like(z), reduction="none", beta=1.0)
         else:
-            losses[key] = _masked_mean(diff.abs().mean(1) / s, m)
-        maes[key] = _masked_mean(diff.detach().abs().mean(1), m)
-        counts[key] = int(m.sum())
+            raise ValueError(f"task_losses[{key!r}] = {k!r}; use l1|mse|huber")
+        return e.sum(-1) if reduce == "sum" else e.mean(-1)
 
-    def scalar(key, err):                          # per-structure (B,) error
-        s, m = stats.get(key, 1.0), masks[key]
-        losses[key] = _masked_mean(err / s, m)
-        maes[key] = _masked_mean(err.detach(), m)
-        counts[key] = int(m.sum())
-
-    def per_atom(key, err):                        # per-atom (N,) error, per-structure mask
-        s, m = stats.get(key, 1.0), masks[key][seg]
-        losses[key] = _masked_mean(err / s, m)
-        maes[key] = _masked_mean(err.detach(), m)
+    def score(key, r, reduce, per_atom=False):
+        m = masks[key][seg] if per_atom else masks[key]
+        losses[key] = _masked_mean(norm_err(key, r, reduce), m)
+        phys = r.detach().abs()
+        maes[key] = _masked_mean(phys.sum(-1) if reduce == "sum" else phys.mean(-1), m)
         counts[key] = int(m.sum())
 
     if "energy" in out and "energy" in targets:
-        scalar("energy", (out["energy"] - targets["energy"]).abs())
+        score("energy", (out["energy"] - targets["energy"]).unsqueeze(-1), "sum")
     if "forces" in out and "forces" in targets:
-        per_atom("forces", (out["forces"] - targets["forces"]).abs().sum(-1))
+        score("forces", out["forces"] - targets["forces"], "sum", per_atom=True)
     if "stress" in out and "stress" in targets:
-        scalar("stress", (out["stress"] - targets["stress"]).abs().flatten(1).mean(1))
+        score("stress", (out["stress"] - targets["stress"]).flatten(1), "mean")
     if "magmom" in out and "magmom" in targets:
-        per_atom("magmom", (out["magmom"] - targets["magmom"]).abs().sum(-1))
+        score("magmom", out["magmom"] - targets["magmom"], "sum", per_atom=True)
     if "bandgap" in out and "bandgap" in targets:
-        scalar("bandgap", (out["bandgap"] - targets["bandgap"]).abs())
+        score("bandgap", (out["bandgap"] - targets["bandgap"]).unsqueeze(-1), "sum")
     if "eph_lambda" in out and "eph_lambda" in targets:
-        scalar("eph_lambda", (out["eph_lambda"] - targets["eph_lambda"]).abs())
+        score("eph_lambda", (out["eph_lambda"] - targets["eph_lambda"]).unsqueeze(-1), "sum")
     if "eph_wlog" in out and "eph_wlog" in targets:
-        scalar("eph_wlog", (out["eph_wlog"] - targets["eph_wlog"]).abs())
+        score("eph_wlog", (out["eph_wlog"] - targets["eph_wlog"]).unsqueeze(-1), "sum")
     if "dos" in out and "dos" in targets:
-        scalar("dos", (out["dos"] - targets["dos"]).abs().mean(1))
+        score("dos", out["dos"] - targets["dos"], "mean")
     if "eph_a2f" in out and "eph_a2f" in targets:
-        spectrum("eph_a2f", out["eph_a2f"] - targets["eph_a2f"])
+        score("eph_a2f", out["eph_a2f"] - targets["eph_a2f"], "mean")
     if "ph_dos" in out and "ph_dos" in targets:
-        spectrum("ph_dos", out["ph_dos"] - targets["ph_dos"])
+        score("ph_dos", out["ph_dos"] - targets["ph_dos"], "mean")
     if "phdos_site" in out and "phdos_site" in targets:
-        # per-ATOM spectrum: (N, bins) residual -> per-atom scalar error, masked
-        # by the structure flag broadcast over atoms (per_atom pattern); same
-        # spectrum_loss gate as the global spectra (MSE keeps peaks).
-        diff = out["phdos_site"] - targets["phdos_site"]
-        s, m = stats.get("phdos_site", 1.0), masks["phdos_site"][seg]
-        if spectrum_loss == "mse":
-            losses["phdos_site"] = _masked_mean((diff ** 2).mean(-1) / (s * s), m)
-        else:
-            losses["phdos_site"] = _masked_mean(diff.abs().mean(-1) / s, m)
-        maes["phdos_site"] = _masked_mean(diff.detach().abs().mean(-1), m)
-        counts["phdos_site"] = int(m.sum())
+        # per-ATOM spectrum: (N, bins) residual, masked by the structure flag
+        # broadcast over atoms
+        score("phdos_site", out["phdos_site"] - targets["phdos_site"], "mean", per_atom=True)
 
     if not losses:
         raise ValueError("multitask loss has no terms: the model's tasks and the batch's "
                          "target keys don't overlap (e.g. a 'dos' task with no dos target "
                          "in the collate). Align the config's tasks with the available targets.")
-    total = sum(weights.get(k, 1.0) * v for k, v in losses.items())
+    if logvar is not None:
+        total = sum(torch.exp(-logvar[k]) * weights.get(k, 1.0) * v + logvar[k]
+                    for k, v in losses.items() if k in logvar) \
+            + sum(weights.get(k, 1.0) * v for k, v in losses.items() if k not in logvar)
+    else:
+        total = sum(weights.get(k, 1.0) * v for k, v in losses.items())
     return total, maes, counts
 
 
@@ -547,7 +557,9 @@ def _train_mt(loader, model, optimizer, epoch, stats, weights, args,
         targets, masks = _move_target_dicts(targets, masks, args["cuda"])
         loss, batch_maes, batch_counts = _mt_loss(out, targets, masks, stats, weights,
                                                   input_var[6],
-                                                  spectrum_loss=args.get("spectrum_loss", "l1"))
+                                                  spectrum_loss=args.get("spectrum_loss", "l1"),
+                                                  task_losses=args.get("task_losses"),
+                                                  logvar=getattr(getattr(model, "module", model), "task_logvar", None))
         # Per-step guard: double-backward through 1/|d| reciprocals is more
         # explosion-prone than single-backward, and an NaN here would step + be
         # checkpointed before the per-epoch guard fires. Under data parallelism the
@@ -597,7 +609,9 @@ def _validate_mt(loader, model, stats, weights, args):
         targets, masks = _move_target_dicts(targets, masks, args["cuda"])
         loss, batch_maes, batch_counts = _mt_loss(out, targets, masks, stats, weights,
                                                   input_var[6],
-                                                  spectrum_loss=args.get("spectrum_loss", "l1"))
+                                                  spectrum_loss=args.get("spectrum_loss", "l1"),
+                                                  task_losses=args.get("task_losses"),
+                                                  logvar=getattr(getattr(model, "module", model), "task_logvar", None))
         loss_meter.update(float(loss.detach()), 1)
         for k, v in batch_maes.items():
             # count-weighted: the reported MAE is the true per-row mean. The old

@@ -300,7 +300,9 @@ class GPSCrystalNet(nn.Module):
                  classification=False, tasks=None, n_energy=256, dos_per_atom=True,
                  n_phonon=256,
                  n_phonon_site=64,
-                 differentiable_geometry=False):
+                 differentiable_geometry=False,
+                 branch_final_block=False, latent_partition=None, phonon_tasks=None,
+                 encode_branch="elec", loss_balance=None):
         super().__init__()
         if atom_pooling not in self._POOLINGS:
             raise ValueError(f"GPS atom_pooling must be one of {self._POOLINGS}")
@@ -343,12 +345,45 @@ class GPSCrystalNet(nn.Module):
         self.register_buffer("poly_mean", torch.zeros(poly_fea_len))
         self.register_buffer("poly_std", torch.ones(poly_fea_len))
 
-        self.blocks = nn.ModuleList([
-            GPSBlock(atom_fea_len, nbr_fea_len, poly_fea_len, n_heads, use_poly_edges,
-                     gps_global, gps_global_heads, gps_ffn_mult, dropout,
-                     local_transformer=local_transformer, use_bond_edges=use_bond_edges,
-                     shell_aggregation=shell_aggregation, use_angle_bias=use_angle_bias)
-            for _ in range(n_conv)])
+        def _mk_block():
+            return GPSBlock(atom_fea_len, nbr_fea_len, poly_fea_len, n_heads, use_poly_edges,
+                            gps_global, gps_global_heads, gps_ffn_mult, dropout,
+                            local_transformer=local_transformer, use_bond_edges=use_bond_edges,
+                            shell_aggregation=shell_aggregation, use_angle_bias=use_angle_bias)
+        # Task-specific final block (2026-09-15): blocks[:-1] are shared, then TWO
+        # parallel final blocks -- an electronic branch (energy/forces/stress/magmom/
+        # bandgap/dos) and a phonon branch (spectra + e-ph scalars). Phonon gradients
+        # never touch the final electronic encoding, which is what the T_c head reads
+        # by default (encode_branch). Off -> the trunk is bit-identical to before.
+        self.branch_final_block = bool(branch_final_block)
+        n_shared = n_conv - 1 if self.branch_final_block else n_conv
+        self.blocks = nn.ModuleList([_mk_block() for _ in range(n_shared)])
+        if self.branch_final_block:
+            if n_conv < 2:
+                raise ValueError("branch_final_block needs n_conv >= 2 (one shared + the branches)")
+            self.block_elec = _mk_block()
+            self.block_phon = _mk_block()
+        _PHONON = {"eph_a2f", "ph_dos", "phdos_site", "eph_lambda", "eph_wlog"}
+        self.phonon_tasks = set(phonon_tasks) if phonon_tasks is not None else _PHONON
+        if encode_branch not in ("elec", "phon", "concat", "shared"):
+            raise ValueError(f"encode_branch must be elec|phon|concat|shared, got {encode_branch!r}")
+        self.encode_branch = encode_branch
+        # Latent partition (2026-09-15): h = [shared | elec | phon]; electronic heads
+        # read [shared|elec], phonon heads read [shared|phon]. A readout-level
+        # partition (the trunk stays shared) -- cheaper than the branch, composable
+        # with it (then applied within each branch's h).
+        if latent_partition is not None:
+            lp = tuple(int(x) for x in latent_partition)
+            if len(lp) != 3 or sum(lp) != atom_fea_len or min(lp) < 0:
+                raise ValueError(f"latent_partition must be 3 non-negative ints summing to "
+                                 f"atom_fea_len={atom_fea_len}, got {lp}")
+            self.latent_partition = lp
+        else:
+            self.latent_partition = None
+        # Homoscedastic-uncertainty task weighting (Kendall 2018): one learnable
+        # log-scale per task, consumed by train._mt_loss when loss_balance == "uncertainty".
+        self.loss_balance = loss_balance
+        self.task_logvar = None
 
         # Per-atom energy decomposition (default): the head maps EACH atom's
         # embedding to a scalar, then those are mean-pooled to the crystal energy
@@ -396,31 +431,58 @@ class GPSCrystalNet(nn.Module):
             # intensive segment-mean; magmom -> per-atom; dos -> per-atom Softplus
             # spectral vector pooled to the structure DOS (mean/sum per dos_per_atom).
             self.heads = nn.ModuleDict()
+            _in = self._head_in_dim
             if "energy" in self.tasks:
-                self.heads["energy"] = self._build_head(1)
+                self.heads["energy"] = self._build_head(1, _in("energy"))
             if "magmom" in self.tasks:
-                self.heads["magmom"] = self._build_head(1)
+                self.heads["magmom"] = self._build_head(1, _in("magmom"))
             if "bandgap" in self.tasks:
-                self.heads["bandgap"] = self._build_head(1)
+                self.heads["bandgap"] = self._build_head(1, _in("bandgap"))
             # e-ph scalars: intensive per-structure quantities like bandgap
             # (lambda dimensionless, omega_log in K) -> segment-mean readout.
             if "eph_lambda" in self.tasks:
-                self.heads["eph_lambda"] = self._build_head(1)
+                self.heads["eph_lambda"] = self._build_head(1, _in("eph_lambda"))
             if "eph_wlog" in self.tasks:
-                self.heads["eph_wlog"] = self._build_head(1)
+                self.heads["eph_wlog"] = self._build_head(1, _in("eph_wlog"))
             if "dos" in self.tasks:
-                self.heads["dos"] = self._build_head(n_energy, softplus_out=True)
+                self.heads["dos"] = self._build_head(n_energy, _in("dos"), softplus_out=True)
             # Phonon spectra (shared fixed THz grid): alpha^2F intensive, phonon
             # DOS per-atom — both nonneg spectra -> softplus + segment-mean.
             if "eph_a2f" in self.tasks:
-                self.heads["eph_a2f"] = self._build_head(n_phonon, softplus_out=True)
+                self.heads["eph_a2f"] = self._build_head(n_phonon, _in("eph_a2f"), softplus_out=True)
             if "ph_dos" in self.tasks:
-                self.heads["ph_dos"] = self._build_head(n_phonon, softplus_out=True)
+                self.heads["ph_dos"] = self._build_head(n_phonon, _in("ph_dos"), softplus_out=True)
             # Site-projected phonon DOS: per-ATOM spectrum head, supervised
             # per-atom (no segment pooling) — the decomposition is constrained
             # directly, unlike the electronic DOS's mean-only supervision.
             if "phdos_site" in self.tasks:
-                self.heads["phdos_site"] = self._build_head(n_phonon_site, softplus_out=True)
+                self.heads["phdos_site"] = self._build_head(n_phonon_site, _in("phdos_site"), softplus_out=True)
+            if self.loss_balance == "uncertainty":
+                self.task_logvar = nn.ParameterDict({t: nn.Parameter(torch.zeros(())) for t in sorted(self.tasks)})
+
+    def _head_in_dim(self, task):
+        if self.latent_partition is None:
+            return self.atom_fea_len
+        s_, e_, p_ = self.latent_partition
+        return s_ + (p_ if task in self.phonon_tasks else e_)
+
+    def _head_input(self, hb, task):
+        """The per-atom vector a task's head reads: its branch's h (or the shared h),
+        sliced to its partition group when a latent_partition is set."""
+        h = hb[1] if (self.branch_final_block and task in self.phonon_tasks) else hb[0]
+        if self.latent_partition is None:
+            return h
+        s_, e_, p_ = self.latent_partition
+        if task in self.phonon_tasks:
+            return h[:, :s_] if p_ == 0 else torch.cat([h[:, :s_], h[:, s_ + e_:]], dim=-1)
+        return h[:, :s_ + e_]
+
+    @property
+    def encode_dim(self):
+        """Width of encode()'s output (what a downstream head sees)."""
+        if self.branch_final_block and self.encode_branch == "concat":
+            return 2 * self.atom_fea_len
+        return self.atom_fea_len
 
     def set_feature_stats(self, node, nbr, poly=None):
         self.node_mean.copy_(torch.as_tensor(node[0], dtype=self.node_mean.dtype))
@@ -431,10 +493,10 @@ class GPSCrystalNet(nn.Module):
             self.poly_mean.copy_(torch.as_tensor(poly[0], dtype=self.poly_mean.dtype))
             self.poly_std.copy_(torch.as_tensor(poly[1], dtype=self.poly_std.dtype))
 
-    def _build_head(self, out_dim, softplus_out=False):
+    def _build_head(self, out_dim, in_dim=None, softplus_out=False):
         # A per-atom MLP head matching the legacy head's depth/width (n_h Softplus
         # layers). softplus_out clamps the output >= 0 (DOS spectral density).
-        layers = [nn.Linear(self.atom_fea_len, self.h_fea_len), nn.Softplus()]
+        layers = [nn.Linear(in_dim or self.atom_fea_len, self.h_fea_len), nn.Softplus()]
         for _ in range(self.n_h - 1):
             layers += [nn.Linear(self.h_fea_len, self.h_fea_len), nn.Softplus()]
         layers.append(nn.Linear(self.h_fea_len, out_dim))
@@ -477,6 +539,8 @@ class GPSCrystalNet(nn.Module):
         return d
 
     def _multitask_readout(self, h, seg, B, cart, strain, lattice):
+        hb = h if isinstance(h, tuple) else (h, h, h)   # (elec, phon, shared)
+        hin = lambda t: self._head_input(hb, t)  # noqa: E731
         # Per-atom heads on the invariant h; conservative forces/stress via autograd of
         # the EXTENSIVE energy. Returns a dict of task -> prediction.
         out = {}
@@ -484,7 +548,7 @@ class GPSCrystalNet(nn.Module):
             # E_total is EXTENSIVE (sum of per-atom energies) -> its gradient gives the
             # forces. The energy OUTPUT is INTENSIVE (E_total/N), matching the per-atom
             # target convention (formation_energy_per_atom) and the legacy readout.
-            E_total = self._segment_sum(self.heads["energy"](h), seg, B).squeeze(-1)  # (B,)
+            E_total = self._segment_sum(self.heads["energy"](hin("energy")), seg, B).squeeze(-1)  # (B,)
             counts = torch.bincount(seg, minlength=B).clamp(min=1)
             out["energy"] = E_total / counts                          # (B,) per-atom
             want_f = "forces" in self.tasks
@@ -503,25 +567,25 @@ class GPSCrystalNet(nn.Module):
                     vol = torch.det(lattice).abs().view(B, 1, 1).clamp_min(1e-6)
                     out["stress"] = grads[gi] / vol                         # dE/dstrain / V
         if "magmom" in self.tasks:
-            out["magmom"] = self.heads["magmom"](h)                         # (N,1) per-atom
+            out["magmom"] = self.heads["magmom"](hin("magmom"))                         # (N,1) per-atom
         if "bandgap" in self.tasks:
-            out["bandgap"] = self._segment_mean(self.heads["bandgap"](h), seg, B).squeeze(-1)
+            out["bandgap"] = self._segment_mean(self.heads["bandgap"](hin("bandgap")), seg, B).squeeze(-1)
         if "eph_lambda" in self.tasks:
-            out["eph_lambda"] = self._segment_mean(self.heads["eph_lambda"](h), seg, B).squeeze(-1)
+            out["eph_lambda"] = self._segment_mean(self.heads["eph_lambda"](hin("eph_lambda")), seg, B).squeeze(-1)
         if "eph_wlog" in self.tasks:
-            out["eph_wlog"] = self._segment_mean(self.heads["eph_wlog"](h), seg, B).squeeze(-1)
+            out["eph_wlog"] = self._segment_mean(self.heads["eph_wlog"](hin("eph_wlog")), seg, B).squeeze(-1)
         if "dos" in self.tasks:
             # per-atom (intensive) DOS: mean over atoms, not sum — removes the system-size
             # confound (total DOS ~ #atoms). Paired with a per-atom DOS target (/ n_atoms).
             # dos_per_atom=False -> legacy extensive sum against the raw total-DOS target.
             _dos_pool = self._segment_mean if self.dos_per_atom else self._segment_sum
-            out["dos"] = _dos_pool(self.heads["dos"](h), seg, B)            # (B, n_energy)
+            out["dos"] = _dos_pool(self.heads["dos"](hin("dos")), seg, B)            # (B, n_energy)
         if "eph_a2f" in self.tasks:
-            out["eph_a2f"] = self._segment_mean(self.heads["eph_a2f"](h), seg, B)  # (B, n_phonon)
+            out["eph_a2f"] = self._segment_mean(self.heads["eph_a2f"](hin("eph_a2f")), seg, B)  # (B, n_phonon)
         if "ph_dos" in self.tasks:
-            out["ph_dos"] = self._segment_mean(self.heads["ph_dos"](h), seg, B)    # (B, n_phonon)
+            out["ph_dos"] = self._segment_mean(self.heads["ph_dos"](hin("ph_dos")), seg, B)    # (B, n_phonon)
         if "phdos_site" in self.tasks:
-            out["phdos_site"] = self.heads["phdos_site"](h)                 # (N, n_phonon_site) per-atom
+            out["phdos_site"] = self.heads["phdos_site"](hin("phdos_site"))                 # (N, n_phonon_site) per-atom
         return out
 
     def _recompute_angle(self, d, static_angle):
@@ -613,6 +677,11 @@ class GPSCrystalNet(nn.Module):
             n_phonon=args.get("n_phonon", 256),
             n_phonon_site=args.get("n_phonon_site", 64),
             dos_per_atom=args.get("dos_per_atom", True),
+            branch_final_block=args.get("branch_final_block", False),
+            latent_partition=args.get("latent_partition"),
+            phonon_tasks=args.get("phonon_tasks"),
+            encode_branch=args.get("encode_branch", "elec"),
+            loss_balance=args.get("loss_balance"),
         )
 
     def _encode(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
@@ -688,7 +757,11 @@ class GPSCrystalNet(nn.Module):
             h = block(h, nbr_norm, nbr_fea_idx, bond_pad, nbr_angle,
                       poly_norm, poly_fea_idx, poly_pad, crystal_seg, n_crystals,
                       plan, dist_bias)
-        return h
+        if not self.branch_final_block:
+            return h
+        args_ = (nbr_norm, nbr_fea_idx, bond_pad, nbr_angle, poly_norm, poly_fea_idx,
+                 poly_pad, crystal_seg, n_crystals, plan, dist_bias)
+        return (self.block_elec(h, *args_), self.block_phon(h, *args_), h)
 
     def forward(self, atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
                 nbr_angle, crystal_seg, n_crystals, frac_coords=None, lattice=None,
@@ -700,6 +773,8 @@ class GPSCrystalNet(nn.Module):
         if self.tasks is not None:
             return self._multitask_readout(h, crystal_seg, n_crystals, cart, strain, lattice)
 
+        if isinstance(h, tuple):
+            h = h[0]
         if self.per_atom_head:
             # E = mean_i head(h_i): per-atom energy, then averaged over the crystal's
             # atoms (intensive target) — keeps a high-contribution atom from being
@@ -717,6 +792,11 @@ class GPSCrystalNet(nn.Module):
         equal the differentiable recompute at the reference geometry on packed_v4), so no
         Cartesian leaf / autograd is needed; the loaded model's tasks/heads are irrelevant
         here — this returns h BEFORE any readout."""
-        return self._encode(atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
-                            nbr_angle, crystal_seg, n_crystals, frac_coords, lattice,
-                            nbr_jimage, cart=None, strain=None)
+        h = self._encode(atom_fea, nbr_fea, nbr_fea_idx, poly_fea, poly_fea_idx,
+                         nbr_angle, crystal_seg, n_crystals, frac_coords, lattice,
+                         nbr_jimage, cart=None, strain=None)
+        if not isinstance(h, tuple):
+            return h
+        h_elec, h_phon, h_shared = h
+        return {"elec": h_elec, "phon": h_phon, "shared": h_shared,
+                "concat": torch.cat([h_elec, h_phon], dim=-1)}[self.encode_branch]

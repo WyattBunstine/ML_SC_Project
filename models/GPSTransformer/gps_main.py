@@ -248,7 +248,9 @@ def main():
                 "use_bvs_features", "use_dihedrals", "mask_oxidation_feature",
                 "mask_geometry_features", "use_poly_node_summary",
                 "tasks", "differentiable_geometry", "n_energy", "dos_per_atom",
-                "atom_pooling", "use_poly_edges")},
+                "atom_pooling", "use_poly_edges",
+                "branch_final_block", "latent_partition", "phonon_tasks", "encode_branch",
+                "loss_balance", "task_losses", "spectrum_loss")},
             "training": {k: args.get(k) for k in (
                 "optim", "learning_rate", "weight_decay", "lr_milestones",
                 "warmup_epochs", "grad_clip", "epochs", "batch_size", "target_transform",
