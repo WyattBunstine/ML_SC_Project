@@ -94,7 +94,7 @@ def _save_seed_model(out_dir, seed, mode, model, base_state, head, cfg, ens_spac
                os.path.join(out_dir, f"model_seed{seed}.pt"))
 
 
-def _encoder(checkpoint_path, index_path, device, encoder_args=None):
+def _encoder(checkpoint_path, index_path, device, encoder_args=None, encode_branch=None):
     """Rebuild + load the pretrained encoder and the matching graph dataset. The
     feature-flag enumeration lives in ONE place (data.load_cif_dataset_from_args,
     shared with embed_index/embed_raw/smoke) so this dataset is always built in the
@@ -127,6 +127,12 @@ def _encoder(checkpoint_path, index_path, device, encoder_args=None):
         sa, sn, _, sp, _, _ = ds[0][0][:6]
         model = GPSCrystalNet.from_args(a, (sa.shape[-1], sn.shape[-1], sp.shape[-1]))
         model.load_state_dict(ckpt["state_dict"])
+        # branched encoders: which final block the T_c head reads (head config
+        # key encode_branch = elec|phon|concat|shared; default = the checkpoint's)
+        if encode_branch is not None:
+            if not getattr(model, "branch_final_block", False):
+                raise ValueError("encode_branch set but the checkpoint has no branched final block")
+            model.encode_branch = encode_branch
         return model.to(device), ds, collate_pool_geom
     a = dict(encoder_args)
     # 'type' is REQUIRED: a scratch config that dropped the key would silently
@@ -303,9 +309,10 @@ def run(cfg, out_dir, device):
 
     # ---- encoder + graph dataset; align dataset order to the static tables by cif id ----
     model, ds, collate = _encoder(cfg.get("checkpoint"), cfg["index_path"], device,
-                                  encoder_args=cfg.get("encoder_args"))
+                                  encoder_args=cfg.get("encoder_args"),
+                                  encode_branch=cfg.get("encode_branch"))
     identity_enc = isinstance(model, _IdentityEncoder)
-    enc_dim = model.atom_fea_len
+    enc_dim = getattr(model, "encode_dim", model.atom_fea_len)   # concat branch = 2x
     # ---- predicted-physics features (the pf ablation ladder) ----
     # pred_features: {"per_atom": bool, "global": bool, "latents": bool, "cache": path}
     # per_atom -> the checkpoint's own predictions become extra per-atom channels
