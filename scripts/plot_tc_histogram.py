@@ -22,6 +22,7 @@ def main():
     ap.add_argument("--bin", type=float, default=2.5)
     ap.add_argument("--out", default=os.path.join(_ROOT, "docs", "figures", "tc_histogram_v11.png"))
     ap.add_argument("--log", action="store_true", help="log count axis (stacked segments then misrepresent proportions)")
+    ap.add_argument("--font-scale", type=float, default=1.0, help="multiply every font size (figure grows with it)")
     a = ap.parse_args()
     v = pd.read_pickle(a.index); meta = load_family_metadata(a.meta)
     v = v.merge(meta, left_on="id", right_index=True, how="left")
@@ -30,15 +31,15 @@ def main():
     edges = np.arange(0, np.ceil(sc.tc.max() / a.bin) * a.bin + a.bin, a.bin)
     counts = {g: np.histogram(sc[sc.group == g].tc, bins=edges)[0] for g in ORDER}
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(14, 6)); fig.patch.set_facecolor(SURF); ax.set_facecolor(SURF)
+    fs = a.font_scale
+    fig, ax = plt.subplots(figsize=(14 * max(1, fs / 2.2), 6 * max(1, fs / 2.2))); fig.patch.set_facecolor(SURF); ax.set_facecolor(SURF)
     bottom = np.zeros(len(edges) - 1); w = a.bin * 0.92
     for g in ORDER:
         ax.bar(edges[:-1] + a.bin / 2, counts[g], width=w, bottom=bottom, color=COLOR[g], edgecolor=SURF, linewidth=0.4,
                label=f"{g} ({int(counts[g].sum()):,})", zorder=3)
         bottom += counts[g]
-    ax.set_xlabel(f"$T_c$ (K), {a.bin:g} K bins", color=INK2); ax.set_ylabel("superconductors", color=INK2)
-    ax.set_title(f"Superconductors by $T_c$ and family — {os.path.basename(a.index).replace('.pickle', '')}: "
-                 f"{len(sc):,} rows with $T_c$ > 0", loc="left", fontsize=11, color=INK)
+    ax.set_xlabel(f"$T_c$ (K), {a.bin:g} K bins", color=INK2, fontsize=11 * fs); ax.set_ylabel("superconductors", color=INK2, fontsize=11 * fs)
+    ax.set_title(f"Superconductors by $T_c$ and family ({len(sc):,} with $T_c$ > 0)", loc="left", fontsize=11 * fs, color=INK)
     ax.set_xlim(0, edges[-1])
     if a.log:
         ax.set_yscale("log"); ax.set_ylim(0.8, bottom.max() * 1.6)
@@ -47,11 +48,11 @@ def main():
     ax.grid(color=GRID, lw=0.6, which="major", axis="y"); ax.set_axisbelow(True)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
-    ax.tick_params(colors=INK2)
-    ax.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper right", title="family (count)", title_fontsize=9)
+    ax.tick_params(colors=INK2, labelsize=10 * fs, length=4 * fs, width=max(0.8, 0.8 * fs / 2))
+    ax.legend(frameon=False, fontsize=9 * fs, labelcolor=INK2, loc="upper right", title="family (count)", title_fontsize=9 * fs)
     fig.text(0.008, 0.012, ("log count axis: stacked segments are not proportional. " if a.log else "")
-             + f"First bin is (0, {a.bin:g}] K — T_c = 0 rows excluded.", fontsize=8, color=INK2)
-    fig.tight_layout(rect=(0, 0.03, 1, 1)); fig.savefig(a.out, dpi=150, facecolor=SURF)
+             + f"First bin is (0, {a.bin:g}] K — T_c = 0 rows excluded.", fontsize=8 * fs, color=INK2)
+    fig.tight_layout(rect=(0, 0.03 * min(fs, 2), 1, 1)); fig.savefig(a.out, dpi=int(150 / max(1, fs / 2.2)), facecolor=SURF)
     print("wrote", a.out)
     tot = sum(counts[g] for g in ORDER)
     print("bins with the most rows:", ", ".join(f"{edges[i]:.1f}-{edges[i+1]:.1f} K: {int(tot[i])}" for i in np.argsort(-tot)[:6]))
