@@ -38,38 +38,49 @@ def stats(t, p):
     t, p = np.asarray(t, float), np.asarray(p, float)
     pos = t > 0
     r = np.corrcoef(t[pos], p[pos])[0, 1] if pos.sum() > 2 else float("nan")
-    return f"n={len(t)}  MAE {np.abs(t - p).mean():.1f} K  |  T$_c$>0: n={int(pos.sum())}, MAE {np.abs(t[pos] - p[pos]).mean():.1f} K, r {r:.2f}"
+    sep = "\n" if FS > 1.5 else "  |  "
+    return f"n={len(t)}  MAE {np.abs(t - p).mean():.1f} K{sep}T$_c$>0: n={int(pos.sum())}, MAE {np.abs(t[pos] - p[pos]).mean():.1f} K, r {r:.2f}"
+
+
+FS = 1.0          # font scale (--font-scale); the figure and marks grow with it
 
 
 def panel(ax, groups, lim, title, note, labels=None):
+    g = max(1.0, FS / 1.6)              # geometric growth factor of the canvas
     ax.set_facecolor(SURFACE)
-    ax.plot([0, lim], [0, lim], color="#8d8c87", lw=1, ls="--", zorder=1)
+    ax.plot([0, lim], [0, lim], color="#8d8c87", lw=1 * g, ls="--", zorder=1)
     for name, t, p, color, z in groups:
-        ax.scatter(t, p, s=26, c=color, edgecolors=SURFACE, linewidths=0.8, alpha=0.9, zorder=z, label=f"{name} ({len(t)})")
-    for txt, x, y in (labels or []):
-        ax.annotate(txt, (x, y), xytext=(6, 4), textcoords="offset points", fontsize=7.5, color=INK2,
-                    arrowprops=dict(arrowstyle="-", color="#8d8c87", lw=0.6))
+        ax.scatter(t, p, s=26 * g * g, c=color, edgecolors=SURFACE, linewidths=0.8 * g, alpha=0.9, zorder=z, label=f"{name} ({len(t)})")
+    for k, (txt, x, y) in enumerate(labels or []):
+        dy = (4 + 11 * FS * (k % 3)) * g if FS > 1.5 else 4 * g       # fan stacked labels apart
+        ax.annotate(txt, (x, y), xytext=(8 * g, dy), textcoords="offset points", fontsize=7.5 * FS, color=INK2,
+                    arrowprops=dict(arrowstyle="-", color="#8d8c87", lw=0.6 * g))
     ax.set_xlim(-2, lim); ax.set_ylim(-2, lim)
-    ax.set_xlabel("experimental $T_c$ (K)", color=INK2); ax.set_ylabel("predicted $T_c$ (K)", color=INK2)
-    ax.set_title(title, loc="left", fontsize=11, color=INK, pad=8)
-    ax.text(0.02, 0.97, note, transform=ax.transAxes, fontsize=8, color=INK2, va="top")
-    ax.grid(color=GRID, lw=0.6); ax.set_axisbelow(True)
+    ax.set_xlabel("experimental $T_c$ (K)", color=INK2, fontsize=10 * FS); ax.set_ylabel("predicted $T_c$ (K)", color=INK2, fontsize=10 * FS)
+    ax.set_title(title, loc="left", fontsize=11 * FS, color=INK, pad=8 * g)
+    ax.text(0.02, 0.98, note, transform=ax.transAxes, fontsize=8 * FS, color=INK2, va="top", linespacing=1.25)
+    ax.grid(color=GRID, lw=0.6 * g); ax.set_axisbelow(True)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
     for s in ("left", "bottom"):
         ax.spines[s].set_color("#c9c8c2")
-    ax.tick_params(colors=INK2, labelsize=8.5)
+    ax.tick_params(colors=INK2, labelsize=8.5 * FS, length=3.5 * g, width=0.8 * g)
     if len(groups) > 1:   # upper-left, under the stats line: the one region every panel leaves empty
-        ax.legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(0.0, 0.93), labelcolor=INK2, markerscale=1.2)
+        ax.legend(frameon=False, fontsize=8 * FS, loc="upper left", bbox_to_anchor=(0.0, 0.86 if FS > 1.5 else 0.93), labelcolor=INK2, markerscale=1.2)
 
 
 def main():
-    probe, dome, fam, nick, out = sys.argv[1:6]
-    title = sys.argv[6] if len(sys.argv) > 6 else probe
+    global FS
+    argv = list(sys.argv[1:])
+    if "--font-scale" in argv:
+        i = argv.index("--font-scale"); FS = float(argv[i + 1]); del argv[i:i + 2]
+    probe, dome, fam, nick, out = argv[:5]
+    title = argv[5] if len(argv) > 5 else probe
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    fig, axes = plt.subplots(2, 2, figsize=(12.5, 11.5))
+    g = max(1.0, FS / 1.6)
+    fig, axes = plt.subplots(2, 2, figsize=(12.5 * g, 11.5 * g))
     fig.patch.set_facecolor(SURFACE)
     # (a) broad probe by family, fixed hue order; Other neutral and underneath
     p = pd.read_csv(latest(f"probe_{probe}") + "/predictions.csv")
@@ -78,14 +89,14 @@ def main():
     groups += [(f.replace("_", " "), p[p.family == f].tc_true_K, p[p.family == f].tc_head_K, SERIES[i], 3)
                for i, f in enumerate(fams) if (p.family == f).any()]
     lim = max(p.tc_true_K.max(), p.tc_head_K.max()) * 1.05
-    panel(axes[0, 0], groups, lim, "(a) broad probe test set (chemsys split)", stats(p.tc_true_K, p.tc_head_K))
+    panel(axes[0, 0], groups, lim, ("(a) broad probe (chemsys split)" if FS > 1.5 else "(a) broad probe test set (chemsys split)"), stats(p.tc_true_K, p.tc_head_K))
     # (b) La-series dome holdout vs the rest of that run's test set
     R = latest(f"la_series_{dome}"); cfg = json.load(open(R + "/config.json"))
     hold = set(pd.read_csv(cfg["holdout_ids_csv"])["id"].astype(str))
     d = pd.read_csv(R + "/predictions.csv"); h = d[d.id.isin(hold)]; rest = d[~d.id.isin(hold)]
     panel(axes[0, 1], [("other test rows", rest.tc_true_K, rest.tc_head_K, OTHER, 2),
                        ("La$_{2-x}$(Sr,Ba,Ce)$_x$CuO$_4$ holdout", h.tc_true_K, h.tc_head_K, SERIES[0], 3)],
-          lim, "(b) La-series doping holdout (parent_comp split)", stats(h.tc_true_K, h.tc_head_K))
+          lim, ("(b) La-series dome holdout" if FS > 1.5 else "(b) La-series doping holdout (parent_comp split)"), stats(h.tc_true_K, h.tc_head_K))
     # (c) unseen families, structure holdout
     groups, labels = [], []
     for i, (f, nm) in enumerate((("bi", "Bi"), ("hg", "Hg"), ("yba", "YBa-123"), ("tprime", "T$'$ (electron-doped)"))):
@@ -93,7 +104,7 @@ def main():
         hold = set(pd.read_csv(cfg["holdout_ids_csv"])["id"].astype(str)); d = pd.read_csv(R + "/predictions.csv"); d = d[d.id.isin(hold)]
         groups.append((nm, d.tc_true_K, d.tc_head_K, SERIES[i], 3))
     allt = np.concatenate([g[1] for g in groups]); allp = np.concatenate([g[2] for g in groups])
-    panel(axes[1, 0], groups, max(allt.max(), allp.max()) * 1.05, "(c) unseen cuprate families (structure holdout)", stats(allt, allp))
+    panel(axes[1, 0], groups, max(allt.max(), allp.max()) * 1.05, ("(c) unseen cuprate families" if FS > 1.5 else "(c) unseen cuprate families (structure holdout)"), stats(allt, allp))
     # (d) nickelates by subset
     R = latest(f"nickelate_{nick}"); cfg = json.load(open(R + "/config.json"))
     hold = set(pd.read_csv(cfg["holdout_ids_csv"])["id"].astype(str)); d = pd.read_csv(R + "/predictions.csv"); d = d[d.id.isin(hold)].copy()
@@ -105,9 +116,9 @@ def main():
         if len(m):
             labels.append((f_.rstrip("-"), float(m.tc_true_K.iloc[0]), float(m.tc_head_K.iloc[0])))
     panel(axes[1, 1], groups, max(d.tc_true_K.max(), d.tc_head_K.max()) * 1.08, "(d) nickelate zero-shot holdout", stats(d.tc_true_K, d.tc_head_K), labels)
-    fig.suptitle(f"predicted vs experimental $T_c$ — {title}", fontsize=13, color=INK, x=0.02, ha="left")
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(out, dpi=160, facecolor=SURFACE)
+    fig.suptitle(f"predicted vs experimental $T_c$ — {title}", fontsize=13 * FS, color=INK, x=0.02, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.97 if FS <= 1.5 else 0.95), h_pad=2.5 * g, w_pad=2.0 * g)
+    fig.savefig(out, dpi=int(160 / g), facecolor=SURFACE)
     print("wrote", out)
 
 
