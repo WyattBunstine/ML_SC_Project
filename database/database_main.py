@@ -181,7 +181,21 @@ def _compact_v4_graph(graph: dict) -> dict:
             ie = el.ionization_energy
         if ea is None:
             ea = el.electron_affinity
-        hist = node.get("sharing_mode_hist") or {"corner": 0, "edge": 0, "face": 0, "other": 0}
+        # The builder renamed this field on its 2026-05-28 branch (merged locally
+        # 2026-08-24): `sharing_mode_hist` -> `sharing_mode_hist_all` (+ a new
+        # `_core` variant). The old loop is byte-identical to `_all`. Reading only
+        # the old name silently ZEROED the block in every graph built after the
+        # merge (phonon/e-ph packs, the SuperCon expansion, WBM) -> a flat
+        # +0.24 eV/atom offset on WBM. Fail loudly if neither name is present but
+        # the builder emitted some sharing histogram under yet another name.
+        hist = node.get("sharing_mode_hist") or node.get("sharing_mode_hist_all")
+        if hist is None:
+            _sh = [k for k in node if k.startswith("sharing_mode_hist")]
+            if _sh:
+                raise KeyError(f"node carries {_sh} but neither 'sharing_mode_hist' nor "
+                               "'sharing_mode_hist_all' — builder schema changed again; "
+                               "update the compact-node reader before building graphs")
+            hist = {"corner": 0, "edge": 0, "face": 0, "other": 0}
         compact_nodes.append({
             "Z": z,
             "oxidation_state": float(node.get("oxidation_state") or 0.0),
