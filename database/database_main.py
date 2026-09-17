@@ -278,7 +278,9 @@ def _compact_v4_graph(graph: dict) -> dict:
     for pe in graph.get("polyhedral_edges", []):
         compact_poly_edges.append({
             "id": pe["id"],
-            "shared_count": int(pe.get("shared_count") or 0),
+            # renamed by the builder alongside sharing_mode_hist (see the node reader)
+            "shared_count": int(pe.get("shared_count") if pe.get("shared_count") is not None
+                                else (pe.get("shared_count_all") or 0)),
             "mean_angle_deg": float(pe.get("mean_angle_deg") or 0.0),
             "std_angle_deg": float(pe.get("std_angle_deg") or 0.0),
             "mean_path_length": float(pe.get("mean_path_length") or 0.0),
