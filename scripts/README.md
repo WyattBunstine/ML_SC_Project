@@ -1,82 +1,21 @@
-# `scripts/` — cluster deployment
+# `scripts/` — local tools
 
-`deploy.sh` pushes this project to a SLURM cluster (configured for JHU
-**cluster**) and runs MPNN training jobs on a GPU node. It is a thin wrapper
-around `ssh`, `rsync`, and `sbatch` — no extra dependencies on either side.
+Everything here runs on a workstation against `database/datafiles/` and `model_data/`.
+Cluster deployment (the ssh/rsync/sbatch wrapper and the run autopilots that drive it)
+lives in `scripts/remote/`, which is git-ignored because it carries our site's host,
+account and storage paths — see the README's *Running on a SLURM cluster* section for
+the three conventions any replacement wrapper must follow.
 
-## Why it's split into subcommands
-
-The `crystal_graph_v4` graph database is **~14 GB across ~89k small JSON files**.
-Copying that on every run would be dominated by per-file SSH overhead, so the
-bulk transfer is a **one-time** `sync-data`. Likewise the conda environment is
-built once with `setup-env`. Each training run then ships only the kilobyte-sized
-code + config and submits a job. Nothing destructive ever runs on the remote:
-code/config syncs use no `--delete`, so remote `model_data/` and results are
-never touched.
-
-## Subcommands
-
-| Command | Frequency | What it does |
-|---|---|---|
-| `setup-env` | once | rsyncs `requirements.txt`, creates conda env `ml_sc` (Python 3.11) on the cluster, `pip install -r requirements.txt`. Idempotent — safe to re-run after editing deps. |
-| `sync-data` | once | rsyncs `atom_init.json` + the MP / MP_Energy `graphs_v4/` dirs and index pickles. Resumable (`--partial`); re-running only sends the delta. MPtrj is deliberately NOT synced — it is cluster-built (see below). |
-| `run <config>` | per run | validates the config locally, picks the trainer from the config (MPNN vs baseline CGCNN), rsyncs code + configs, generates an `sbatch` script under remote `jobs/`, and submits it. |
-| `build-mptrj` | once (+ after a graph-format change) | CPU job (partition `parallel`, full node): streams the 12 GB MPtrj JSON and builds ~1.6M cgv4 graphs onto **scratch**. Resumable; also ensures `ijson`/`tess` in the env and ships the builder + source JSON first. |
-| `pack-mptrj [out_dir]` | after build-mptrj (+ after any graph rebuild) | CPU job: packs the MPtrj graphs into the columnar training format (`models/MPNN/MPNNPack.py`) on scratch. Training configs point `index_path` at the pack directory. Default writes `packed_v1`; pass `$SCRATCH_MPTRJ_PACK_V2/_V4` after the augment steps. |
-| `augment-positions` | once (for the distance bias / forces) | CPU job: backfills `frac_coords` + `lattice` onto the MPtrj graphs from the source structures (no Voronoi rebuild), then re-pack → `packed_v2`. |
-| `augment-physics` | once (for multitask) | CPU job: attaches per-frame `force`/`magmom`/`stress` (+ bandgap) onto the rebuilt MPtrj graphs, then re-pack → `packed_v4`. Pairs with a `build-mptrj` REBUILD that restores exact per-edge `to_jimage`. |
-| `sync-dos-pack` | once (for rung 04) | rsyncs the **locally-built** DOS pack (`database/datafiles/MP/dos_pack`) to scratch `MP/dos_pack` — the relaxed-MP DOS union member for the multitask rung 04. Guards on `has_dos=true`; build it first with `main.py fetch-dos` + `pack-dataset`. |
-| `sync-code` | (auto) | pushes just code + configs. Called automatically by `run`; rarely needed directly. |
-| `status` | as needed | `squeue` for your jobs. |
-| `logs <jobid>` | as needed | `tail -f` the live SLURM stdout (`logs/<jobname>-<jobid>.out`). |
-| `fetch` | after a run | rsyncs remote `model_data/` + `logs/` back, refreshes `model_data/index.csv` (the per-run comparison table), and moves each SLURM log into its run's directory. Skips `.archive/`. |
-| `reorg [--dry-run]` | once / as needed | migrates old flat run dirs into `model_data/<date>/<run_tag>/` on BOTH remote and local (new runs are born nested). |
-| `archive <rel_path>…` | as needed | retires runs into `model_data/.archive/` on both sides; `fetch` stops pulling them back. Use the `rel_path` column from `index.csv`. |
-
-## Storage layout: /data vs /scratch
-
-`REMOTE_PATH` on `/data` (group allocation, NOT purged) holds code, configs, logs,
-index pickles, and the MPtrj source JSON. Bulk **regenerable** data lives under
-`SCRATCH_PATH` on `/scratch` (large, but **purged periodically**): the ~1.6M MPtrj
-graph JSONs and the packed training store. If a purge removes them, re-run
-`build-mptrj` (resumable) and `pack-mptrj`. The split exists because /data's group
-quota cannot hold ~1.6M files / ~400 GB.
-
-## First-time configuration
-
-Edit the `EDIT THIS BLOCK` section at the top of `deploy.sh`:
-
-| Variable | Meaning |
+| Group | Scripts |
 |---|---|
-| `REMOTE_HOST` / `REMOTE_USER` | cluster login host and your username (ssh keys assumed set up for passwordless login). |
-| `REMOTE_PATH` | remote project root (use group/scratch storage, e.g. `/data/<pi>/<user>/ML_SC_Proj`). |
-| `SLURM_PARTITION` | GPU partition (cluster: `a100`). |
-| `SLURM_ACCOUNT` | billing account. **Verify the exact name** with `sacctmgr show assoc user=<user> format=account,partition`. A wrong account fails fast at `sbatch` time. |
-| `SLURM_TIME` / `SLURM_GPUS` / `SLURM_CPUS` / `SLURM_MEM` | walltime, GPU count, CPUs (≥ config `num_workers` + 1), and RAM (the graph LRU `graph_cache_size` lives in memory). |
-| `SLURM_MAIL_USER` | email for `BEGIN,END,FAIL` notifications. Leave `""` to disable email. |
-| `CONDA_ENV` / `PYTHON_VERSION` | conda env name and Python version built by `setup-env`. |
-| `TORCH_CUDA_CHANNEL` | PyTorch CUDA build to install (see [PyTorch / CUDA on cluster](#pytorch--cuda-on-cluster)). |
-| `ENV_SETUP` | commands run at the top of each job to make `python`/torch/pymatgen importable (loads the anaconda module and activates `CONDA_ENV`). |
-
-### Per-config resource overrides
-
-The variables above are the **defaults**. Any config can override them for its
-own run by carrying a top-level `"slurm"` object — handy when different
-experiments need different resources (more workers → more cores, a bigger model
-→ more time/RAM). `run` reads it at submit time and prints the resolved request:
-
-```jsonc
-// configs/mpnn_basic_cluster.json
-{
-    "num_workers": 12,
-    "slurm": { "cpus": 24 }     // this run requests 24 cores; everything else
-                                // (partition, gpus, mem, time, account) keeps the default
-}
-```
-
-Recognized keys: `partition`, `account`, `time`, `gpus`, `cpus`, `mem`,
-`mail_user`. `MPNNMain.py` ignores the `slurm` key, so one file configures both
-training and the SLURM request. Full reference: [config README](../configs/README.md#cluster-resources-slurm--used-only-by-scriptsdeploysh).
+| T_c head training / inference | `run_head.py` (train a head from a config), `predict_tc.py`, `probe_encoders.py` (frozen-encoder probes across rungs), `head_hpo_sweep.py`, `a2f_head_retrain.py`, `ensemble.py`, `eval_test.py` |
+| Holdout analyses | `family_dome.py`, `family_stats.py`, `dome_stats.py`, `plot_lsco_dome.py` (cuprate doping domes), `matthias_dome.py`, `plot_matthias_combined.py` (valence-electron domes), `nickelate_holdout.py`, `structure_holdout.py` (structure-type holdout lists), `fe_parity.py`, `plot_parity.py`, `plot_v8v9_parity.py`, `compare_runs.py` |
+| Discovery screens / benchmarks | `screen_mp.py`, `screen_eph.py`, `screen_report.py`, `wbm_predict.py` (Matbench Discovery) |
+| Figures | `plot_tc_histogram.py`, `plot_fe_training_curves.py`, `plot_phonon_dispersion.py` |
+| Data QA | `audit_doping_labels.py`, `audit_ferrite_labels.py`, `calibrate_cf_magmom.py`, `oxidation_doping_prototype.py`, `cf_schema2_verify_pack.py`, `cf_v44_verify_pack.py`, `cf_v45_verify_pack.py`, `smoke_dataset.py` |
+| Checks | `validate_config.py` (run before launching), `verify_smoke.py`, `verify_autograd_forces.py`, `verify_tf32_forces.py`, `verify_ddp_multitask.py`, `verify_multitask_train.py`, `verify_union_masking.py`, `verify_dos_fetch.py` |
+| Run bookkeeping | `reorg_runs.py` (nest flat `model_data/` runs by date) |
+| Local sweeps (bash, no cluster) | `dome_autopilot.sh`, `loss_sweep_dome.sh`, `nopre_ladder.sh`, `target_probe_sweep.sh`, `v6_ablation_pair.sh`, `v6_v45_dome.sh` |
 
 ## `eval_test.py` — score a saved model on a test set
 
@@ -137,74 +76,3 @@ uncertainty: members disagree most where they're least confident.
 > Tip: to evaluate the SWA-averaged weights from a run, use
 > `eval_test.py --checkpoint swa`.
 
-## PyTorch / CUDA on cluster
-
-**Use `TORCH_CUDA_CHANNEL="cu128"`** — confirmed working as of 2026-06-04
-(torch `2.11.0+cu128`, `torch.cuda.is_available()` → `True` on an `a100` node).
-
-The gotcha: a plain `pip install torch` pulls the **CUDA 13** wheel from PyPI,
-but cluster's GPU driver only supports up to **CUDA 12.9** (`nvidia-smi`,
-top-right). The CUDA-13 wheel can't initialize CUDA on that driver, so torch
-prints a "driver too old" `UserWarning` and **silently falls back to CPU** —
-training still runs, just ~10–50× slower. So `setup-env` installs torch from
-PyTorch's `cu128` channel *before* the rest of `requirements.txt`, and `torch`
-is left unpinned in `requirements.txt` so the requirements step can't drag the
-CUDA-13 wheel back in.
-
-If the driver ever changes (check `nvidia-smi` on a GPU node), set
-`TORCH_CUDA_CHANNEL` to a build at or below its CUDA version (e.g. `cu124`,
-`cu121`). A channel with no matching wheel makes `setup-env` **fail loudly**
-rather than fall back to CPU. Note `setup-env` runs the install on the **login
-node**, where the verification line correctly prints `cuda? False` (no GPU
-there) — only the value inside a GPU job matters.
-
-## Typical workflow
-
-```bash
-# --- one time ---
-./scripts/deploy.sh setup-env
-./scripts/deploy.sh sync-data
-
-# --- each experiment ---
-./scripts/deploy.sh run configs/mpnn_basic.json
-./scripts/deploy.sh status
-./scripts/deploy.sh logs 1234567        # job id from `status`
-./scripts/deploy.sh fetch
-
-# --- analyze locally ---
-python main.py plot --results model_data/<run_dir>/<base>.csv
-```
-
-Each `run` writes a timestamped job script to remote `jobs/`, names the job
-`mpnn_<config>_<timestamp>`, and streams output to `logs/<jobname>-<jobid>.out`.
-Training artifacts land in the remote `model_data/<run_dir>/` (config, metadata,
-checkpoints, epoch log, predictions) — see the [config README](../configs/README.md#outputs)
-for the per-run file layout — and `fetch` mirrors them back.
-
-## What gets transferred
-
-| Step | Local → Remote | Remote → Local |
-|---|---|---|
-| `setup-env` | `requirements.txt` | — |
-| `sync-data` | `database/datafiles/MP/graphs_v4/`, `database/datafiles/MP/*.pickle` | — |
-| `run` / `sync-code` | `models/MPNN/*.py`, `configs/`, generated `jobs/*.slurm` | — |
-| `fetch` | — | `model_data/`, `logs/` |
-
-`run` does **not** re-send the graph database — it relies on `sync-data` having
-been run. If you regenerate or extend the graphs, re-run `sync-data` (it only
-sends the delta).
-
-## Troubleshooting
-
-- **`Invalid account or account/partition combination`** at submit — `SLURM_ACCOUNT`
-  or `SLURM_PARTITION` is wrong. Run `sacctmgr show assoc user=<user>` and fix the block.
-- **`conda: command not found` / activation fails in the job** — the `ENV_SETUP`
-  module name is wrong for the cluster, or the env wasn't created. Re-run `setup-env`;
-  adjust the `module load anaconda` line if your cluster names it differently.
-- **Job can't find graphs / pickles** — `sync-data` hasn't completed, or `REMOTE_PATH`
-  differs from where data was synced. The training entrypoint resolves graph paths
-  relative to the project root, so the job's cwd must be `REMOTE_PATH`.
-- **`CUDA available? False` in `setup-env` output** — expected: the login node has no
-  GPU. CUDA is available inside the GPU job. Confirm with `nvidia-smi` in the job log.
-- **Out of memory** — raise `SLURM_MEM`, or lower `graph_cache_size` / `num_workers`
-  in the config.

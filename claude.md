@@ -36,7 +36,7 @@ ML_SC_Project/
 │   ├── gps_mt_ablation_suite/        # multitask pretraining rungs (01..15; 15 = +crystal-field features)
 │   └── head/                         # T_c transfer-head configs (frozen probes, fine-tune, HPO, holdouts)
 ├── scripts/
-│   ├── deploy.sh                     # cluster SLURM: setup-env/sync-*/run/run-head/sweep-head/build-mptrj/
+│   ├── remote/ (git-ignored)         # deploy.sh = SLURM cluster wrapper: setup-env/sync-*/run/run-head/sweep-head/build-mptrj/
 │   │                                 #   pack-mptrj/augment-cf/status/fetch/... (header lists all)
 │   ├── augment_cf.py                 # backfill baked v4.3 valence+cf onto existing compact graphs (ordered sets)
 │   ├── calibrate_cf_magmom.py        # AOM crystal-field knob calibration vs MPtrj DFT magmoms (held-out)

@@ -34,6 +34,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from models.common.cfg_paths import expand_config_paths
 from models.head.HeadData import assemble, family_mae_report, make_splits
 from models.head.HeadModel import Standardizer, TcHead
 
@@ -202,7 +203,7 @@ def train_stage(model, params, batches, loss_fn, val_fn, epochs, patience, lr,
 
 def run(config_path):
     with open(config_path) as f:
-        cfg = {**DEFAULTS, **json.load(f)}
+        cfg = {**DEFAULTS, **expand_config_paths(json.load(f))}
     device = cfg["device"] if (cfg["device"] != "cuda" or torch.cuda.is_available()) else "cpu"
 
     run_name = cfg.get("name", "head")

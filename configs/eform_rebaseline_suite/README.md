@@ -23,7 +23,7 @@ MP_Energy / formation energy with the same backbone (64 atom dim, 64 edge hidden
 | `04_attention` | bond+poly agg → learned scalar attention | retests the June-8 "attention hurt" finding without its pooling/size confounds |
 | `05_gate` | `poly_fusion: "gate"` | does gated bond/poly fusion beat the plain sum? (+~49k params for the gates) |
 
-Launch each on cluster with:
+Launch each on the cluster with:
 
     ./scripts/deploy.sh run configs/eform_rebaseline_suite/<config>.json
 

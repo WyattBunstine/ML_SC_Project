@@ -23,6 +23,9 @@ import json
 import math
 import os
 import sys
+# configs write site-specific data roots as ${ML_SC_DATA} (models/common/cfg_paths.py)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from models.common.cfg_paths import expand_config_paths  # noqa: E402
 
 KNOWN_TARGETS = ("tc", "e_above_hull", "formation_energy_per_atom", "energy_per_atom")
 
@@ -221,14 +224,18 @@ def validate_mpnn(cfg, err, warn, cpus):
             err.append("index_path is a list (masked-union) but `tasks` is empty; "
                        "a multi-pack union requires a multitask `tasks` config")
         for ip in index_path:
-            _validate_one_index(ip, cfg, err, warn)
+            _validate_one_index(ip, cfg, err, warn, masked_union=bool(cfg.get("tasks")))
         _check_workers_vs_cpus(cfg, cpus, warn)
         return
     _validate_one_index(index_path, cfg, err, warn)
     _check_workers_vs_cpus(cfg, cpus, warn)
 
 
-def _validate_one_index(index_path, cfg, err, warn):
+def _validate_one_index(index_path, cfg, err, warn, masked_union=False):
+    """masked_union: this pack is one member of a multitask union. A member that
+    lacks the scalar `target_column` is legal there — the data layer masks its
+    rows for that target (`_select_target_key(required=not multitask)`) instead
+    of raising — so that case is a note, not an error."""
     if not os.path.exists(index_path):
         # Cluster-built datasets (e.g. MPtrj via `deploy.sh build-mptrj` /
         # `pack-mptrj`) exist ONLY on the cluster, so a locally-missing index is
@@ -258,8 +265,13 @@ def _validate_one_index(index_path, cfg, err, warn):
         return
 
     # mp_id is the material-grouping key for split_by="material", not a target.
-    target_col = _resolve_target(df, cfg, {"id", "value", "graph_path", "label", "mp_id"}, err)
-    _check_target_and_log1p(df, cfg, target_col, err, is_mpnn=True)
+    tcol = cfg.get("target_column")
+    if masked_union and tcol is not None and tcol not in df.columns:
+        warn.append(f"union member {index_path} has no '{tcol}' column; its rows are "
+                    "masked for that target (spectral/other tasks still train on it)")
+    else:
+        target_col = _resolve_target(df, cfg, {"id", "value", "graph_path", "label", "mp_id"}, err)
+        _check_target_and_log1p(df, cfg, target_col, err, is_mpnn=True)
 
     # Classification, or any finite SC:non-SC ratio, needs non-SC (label==0) rows.
     ratio = _parse_ratio(cfg.get("SC_to_non_SC_ratio"))
@@ -375,7 +387,7 @@ def main():
         return 1
     try:
         with open(a.config) as f:
-            cfg = json.load(f)
+            cfg = expand_config_paths(json.load(f))
     except json.JSONDecodeError as e:
         print(f"validate_config: invalid JSON in {a.config}: {e}", file=sys.stderr)
         return 1

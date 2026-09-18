@@ -32,6 +32,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 
 # Shared infra (models/common) on path, then GPS model from this dir.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+from cfg_paths import expand_config_paths  # noqa: E402
 from data import (load_cif_dataset, get_sc_nonsc_loaders,  # noqa: E402
                   compute_feature_stats, resolve_split_by, collate_pool_geom,
                   collate_pool_multitask, ConcatMTDataset)
@@ -60,7 +61,7 @@ def main():
         warnings.warn("Usage: gps_main.py <config.json>")
         return -1
     with open(sys.argv[1]) as f:
-        args = json.load(f)
+        args = expand_config_paths(json.load(f))
     if args.get("task", "regression") != "regression":
         sys.exit("GPSTransformer currently supports task='regression' only.")
 

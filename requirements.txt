@@ -6,7 +6,7 @@
 # --- Core: model training + featurization (needed on the cluster) ---
 # torch is intentionally NOT pinned to a +cuXXX wheel: the CUDA build is
 # machine-specific. The default PyPI wheel is the CUDA 13 build (fine on the
-# local box's driver, but cluster's driver is ~CUDA 12.9 — the CUDA-13 wheel
+# local box's driver, but the cluster's driver is ~CUDA 12.9 — the CUDA-13 wheel
 # falls back to CPU there). On the cluster, scripts/deploy.sh setup-env installs
 # the matching CUDA build first (TORCH_CUDA_CHANNEL), so this unpinned line is
 # already satisfied and won't drag in the wrong wheel. Local dev: 2.12.0+cu130.

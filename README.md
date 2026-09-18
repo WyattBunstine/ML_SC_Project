@@ -33,7 +33,7 @@ ML_SC_Project/
 ├── requirements.txt        # pinned Python dependencies (Python 3.11)
 │
 ├── scripts/
-│   └── deploy.sh           # push code/data to a SLURM cluster (cluster) and submit jobs
+│   └── remote/             # (git-ignored) ssh/rsync/sbatch wrapper for our SLURM cluster
 │
 ├── configs/
 │   ├── orig_basic.json          # baseline CGCNN, regression (T_c)
@@ -230,53 +230,32 @@ python main.py train configs/orig_basic.json    # train + evaluate
 python main.py plot                        # visualize results
 ```
 
-## Running on a SLURM cluster (cluster)
+## Running on a SLURM cluster
 
-The `crystal_graph_v4` MPNN trains best on a GPU. `scripts/deploy.sh` automates
-shipping the project to the JHU **cluster** cluster and submitting SLURM jobs.
-It separates the **one-time** setup (build a conda env, push the 14 GB graph
-database) from the **per-run** step (push the tiny code+config, submit a job), so
-each training run only transfers kilobytes.
+The `crystal_graph_v4` MPNN and the GPS pretraining rungs train best on a GPU. We run
+them on a university SLURM cluster through a thin `ssh`/`rsync`/`sbatch` wrapper
+(`scripts/remote/deploy.sh`). That directory is **git-ignored** because it carries our
+login host, account and storage paths; nothing in the published code depends on it.
+What the code does rely on are three conventions, so any wrapper works:
 
-```
-  LOCAL (your machine)                         CLUSTER (<cluster-login-host>)
-  ─────────────────────                        ──────────────────────────────────
-  build-db --kind cgv4  ──┐
-   → graphs_v4/ + index   │  deploy.sh sync-data (once)
-   pickles                ├───────────────────▶ /data/.../ML_SC_Proj/database/datafiles/MP/
-                          │  deploy.sh setup-env (once)
-  requirements.txt ───────┴───────────────────▶ conda env `ml_sc`
-                             deploy.sh run <cfg>
-  configs/*.json, models/MPNN/*.py ──────────────▶ sbatch job → python MPNNMain.py
-                                                   → model_data/<run>/ + logs/
-  model_data/, logs/  ◀───────────────────────  deploy.sh fetch
-   → main.py plot
-```
+- **Jobs run the same entrypoints as a local run**, from the project root:
+  `python models/GPSTransformer/gps_main.py <config>` (pretraining),
+  `python models/MPNN/MPNNMain.py <config>` (MPNN), `python scripts/run_head.py <config>`
+  (T_c heads). Results are identical to `main.py train-mpnn` etc. locally, just on a GPU.
+- **Configs reference bulk data through `${ML_SC_DATA}`**, e.g.
+  `"index_path": "${ML_SC_DATA}/MPtrj/packed_v45"`. Every config loader expands it
+  (`models/common/cfg_paths.py`). Unset, it resolves to `database/datafiles/`, so a local
+  run needs nothing; the cluster job exports it to the scratch mirror of that folder.
+  Set it yourself to train against data stored anywhere else.
+- **Per-config resource requests** live in an optional top-level `"slurm"` block
+  (partition, account, time, gpus, cpus, mem — see [`configs/README.md`](configs/README.md#cluster-resources-slurm))
+  that the trainers ignore.
 
-The SLURM job runs `python models/MPNN/MPNNMain.py <config>` from the project root —
-exactly what `main.py train-mpnn <config>` does locally — so results are
-identical to a local run, just on a GPU node.
-
-**One-time setup** (edit the `EDIT THIS BLOCK` at the top of `deploy.sh` first —
-host/user/path, SLURM partition + account, conda env name):
-
-```bash
-./scripts/deploy.sh setup-env     # create conda env `ml_sc` from requirements.txt
-./scripts/deploy.sh sync-data     # rsync graphs_v4/ (14 GB, ~89k files) + pickles
-```
-
-**Per training run:**
-
-```bash
-./scripts/deploy.sh run configs/mpnn_basic.json   # push code+config, submit job
-./scripts/deploy.sh status                        # squeue for your jobs
-./scripts/deploy.sh logs <jobid>                  # tail the live SLURM log
-./scripts/deploy.sh fetch                         # pull model_data/ + logs/ back
-python main.py plot --results model_data/<run>/<base>.csv   # visualize locally
-```
-
-See [`scripts/README.md`](scripts/README.md) for the full subcommand reference,
-the config block, what each step transfers, and troubleshooting.
+A minimal wrapper is four steps: build the conda env from `requirements.txt`, rsync
+`database/datafiles/` (graph dirs, index pickles, packs), rsync the code and configs,
+and submit an sbatch script that activates the env, exports `ML_SC_DATA`, and runs one
+of the entrypoints above. `model_data/<run>/` and the SLURM log come back with a plain
+rsync; `scripts/reorg_runs.py` and `main.py plot` work on them unchanged.
 
 ## References
 

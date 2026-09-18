@@ -22,3 +22,7 @@ docs/figures/latex/*.log
 
 # Local scratch with credentials — never commit
 /test.py
+
+# cluster deployment wrapper + run autopilots: site host/account/paths, never published
+/scripts/remote/
+/scripts/deploy.sh

@@ -6,6 +6,9 @@ import datetime
 import os
 import shutil
 import sys
+# configs write site-specific data roots as ${ML_SC_DATA} (models/common/cfg_paths.py)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from models.common.cfg_paths import expand_config_paths  # noqa: E402
 import time
 import json
 import warnings
@@ -83,7 +86,7 @@ def main():
     args = {}
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
         with open(sys.argv[1]) as f:
-            args = json.load(f)
+            args = expand_config_paths(json.load(f))
     else:
         warnings.warn("config file not specified")
         return -1

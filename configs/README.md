@@ -146,7 +146,7 @@ a false alarm.
 | `run_tag` | string | `"MPNN"` | Label prefixed to the run directory name (use `"Orig"` for baseline CGCNN). |
 | `out_file` | string | (required) | Now interpreted as a **basename**: its directory part is ignored and all artifacts are written inside the run directory using its basename as the file prefix. |
 
-### Cluster resources (`slurm`) — used only by `scripts/deploy.sh`
+### Cluster resources (`slurm`) — used only by the (unpublished) cluster wrapper
 
 A config may carry an optional top-level **`slurm`** object to request different
 cluster resources per experiment. It is read by `scripts/deploy.sh run` when
@@ -158,7 +158,7 @@ default.
 | Key | Maps to | Example |
 |-----|---------|---------|
 | `partition` | `--partition` | `"a100"` |
-| `account` | `--account` | `"<slurm-account>"` |
+| `account` | `--account` | `"<your-slurm-account>"` |
 | `time` | `--time` | `"24:00:00"` |
 | `gpus` | `--gpus` | `1` |
 | `cpus` | `--cpus-per-task` | `24` |
@@ -173,7 +173,7 @@ default.
 ```
 
 Keep `cpus` ≥ `num_workers` + 1, and size `mem` for the per-worker sample cache
-(see `graph_cache_size` above). See `configs/mpnn_basic_cluster.json` for a
+(see `graph_cache_size` above). See `configs/mpnn_basic_slurm.json` for a
 worked example and [`scripts/README.md`](../scripts/README.md) for the deploy
 workflow.
 
