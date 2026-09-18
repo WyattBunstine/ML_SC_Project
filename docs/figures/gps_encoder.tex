@@ -1,0 +1,23 @@
+% =====================================================================
+%  GPSCrystalNet — standalone WRAPPER for the encoder figure
+% ---------------------------------------------------------------------
+%  The actual drawing lives in gps_encoder_fig.tex (a preamble-free
+%  fragment). This wrapper exists only to compile a cropped preview PDF:
+%
+%     pdflatex gps_encoder.tex          (Overleaf: just hit Recompile)
+%
+%  The main paper should NOT include this file — it should \input the
+%  fragment (or \includestandalone this wrapper); see the usage note at
+%  the top of gps_encoder_fig.tex.
+%  Needs: tikz + the libraries below (texlive-pictures / texlive-latex-extra).
+%  No pgfplots required — the RBF inset is drawn with plain TikZ \plot.
+% =====================================================================
+\documentclass[border=10pt]{standalone}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc,fit,backgrounds,
+                shapes.geometric,decorations.pathreplacing}
+
+\begin{document}
+\input{gps_encoder_fig}
+\end{document}

@@ -1,0 +1,183 @@
+% =====================================================================
+%  Pretraining -> T_c transfer schematic (figure BODY, top-down flow)
+% ---------------------------------------------------------------------
+%  Preamble-free fragment (same pattern as gps_encoder_fig.tex): \input
+%  this from the paper inside a figure environment; compile
+%  pretraining_transfer.tex for a standalone preview PDF.
+%
+%     % main-doc preamble:
+%     \usepackage{tikz}
+%     \usetikzlibrary{positioning,arrows.meta,calc,fit,backgrounds,
+%                     shapes.geometric}
+%
+%  Content is faithful to models/GPSTransformer/model.py (multitask
+%  readout) and models/head/FineTune.py (transfer protocol); parameter
+%  counts are from the rung-20 champion checkpoint
+%  (gps_mt_20_cf_bvs_fixed_nd, 2026-08-12).  The four GPS blocks are
+%  identical (332,660 params each; verified shape-identical), so the
+%  block appears ONCE as the main flow element -- an exploded panel
+%  (deck shadows = x4) listing the shared internals: pre-LN 256;
+%  bond-shell attention (+angle bias) 100,084; poly-shell attention
+%  99,968; local FFN 66,176; block FFN 66,176.  This encoder runs
+%  WITHOUT global within-crystal attention (gps_global off in the
+%  checkpoint), so no global-attn row appears.  Embedding 4,224;
+%  energy/magmom/bandgap heads 33,153 each; DOS head 49,536; TcHead
+%  11,447 (deepsets pool + MLP trunk, rung-20 dims; "trained from
+%  scratch" = warmup on the frozen encoder, then joint fine-tune).
+%  Forces/stress are autograd of the extensive energy -- zero params.
+%  Sample counts n (masked union over MP targets, from the run's
+%  metadata.json + pack headers + Extract_MPtrj coverage stats): MPtrj
+%  stride-3 subset 580,112 frames (all carry energy; forces/stress
+%  ~100%; magmom ~14% -> ~81k; bandgap ~19% -> ~110k), DOS pack 62,464,
+%  T_c set SC_MP_V6 7,852 labeled (6,043 T_c>0 + 1,809 T_c=0).
+%  2026-09-08: electron-phonon targets added (Cerqueira DFPT corpus,
+%  8,253 metals; rungs 35+/49): alpha^2F(omega) 256-bin spectrum head
+%  (softplus, segment-mean, 66k at 128-dim) and SITE-PROJECTED phonon
+%  DOS (64-bin per-ATOM head, 41k -- supervised per atom, not pooled;
+%  rung 49).  Head params quoted at the figure's 128-dim era for
+%  consistency with the other heads.
+% =====================================================================
+
+% ---- palette (shared with gps_encoder_fig.tex) ----------------------
+\definecolor{Bcol}{HTML}{4C72B0}   % B-site / metal cation
+\definecolor{Ocol}{HTML}{C44E52}   % anion
+\definecolor{Acol}{HTML}{55A868}   % A-site cation
+\definecolor{panel}{HTML}{EEF1F6}  % light panel fill
+\definecolor{accent}{HTML}{8172B3} % emphasis / stage-2 colour
+\definecolor{ink}{HTML}{2B2B2B}
+
+% single type size across the whole figure
+\tikzset{
+  ptfrozen/.style={draw=ink!70, rounded corners=3pt, fill=ink!8, align=center,
+                   font=\huge\sffamily, minimum width=40mm,
+                   minimum height=17mm, inner sep=5pt},
+  pttuned/.style={draw=accent, line width=1.6pt, rounded corners=3pt,
+                  fill=accent!18, align=center, font=\huge\sffamily,
+                  minimum width=40mm, minimum height=17mm, inner sep=5pt},
+  ptcomp/.style={draw=ink!60, rounded corners=2.5pt, fill=white, align=center,
+                 font=\huge\sffamily, minimum width=110mm,
+                 minimum height=14mm, inner sep=4pt},
+  pttarget/.style={ellipse, draw=ink!70, line width=1.2pt, fill=Bcol!16,
+                   align=center, font=\huge\sffamily, text=ink, inner sep=4pt},
+  pttc/.style={circle, draw=ink, line width=1.2pt, fill=accent,
+               minimum size=23mm, align=center, inner sep=1pt,
+               font=\huge\bfseries\sffamily, text=white},
+  pth/.style={circle, draw=ink, line width=1.6pt, fill=white, minimum size=18mm,
+              inner sep=0pt, font=\huge\sffamily, text=ink},
+  ptflow/.style={-{Stealth[length=5.5mm,width=5.5mm]}, line width=3pt, gray!60},
+  pthead/.style={-{Stealth[length=4.5mm]}, line width=2.2pt, ink!45},
+  pttchead/.style={-{Stealth[length=5.5mm]}, line width=3pt, accent},
+  ptderiv/.style={-{Stealth[length=4.2mm]}, line width=1.8pt, ink!55, dashed},
+  ptlbl/.style={font=\huge\sffamily, text=ink!75},
+  ptpar/.style={font=\huge\sffamily, text=ink!60},
+  ptstage/.style={font=\huge\bfseries\sffamily, text=ink},
+  ptatomA/.style={circle, draw=ink, line width=1.2pt, fill=Acol, minimum size=9mm, inner sep=0pt},
+  ptatomB/.style={circle, draw=ink, line width=1.2pt, fill=Bcol, minimum size=8mm, inner sep=0pt},
+  ptatomO/.style={circle, draw=ink, line width=1.2pt, fill=Ocol, minimum size=6mm, inner sep=0pt},
+  ptbond/.style={line width=2.2pt, gray!60!black},
+}
+
+\begin{tikzpicture}[font=\sffamily]
+
+% ---------------------------------------------------------------------
+%  (1) input: crystal graph icon (top)
+% ---------------------------------------------------------------------
+\begin{scope}[shift={(-1.0,25.6)}]
+  \draw[ptbond] (0.99,0.99) -- (0.0,0.0) -- (1.98,0.18) -- (0.99,0.99)
+                (0.0,0.0) -- (0.45,-1.35) (1.98,0.18) -- (0.45,-1.35);
+  \node[ptatomO] at (0.99,0.99) {};
+  \node[ptatomO] at (0.45,-1.35) {};
+  \node[ptatomB] at (1.98,0.18) {};
+  \node[ptatomA] at (0.0,0.0) {};
+\end{scope}
+\node[ptlbl, anchor=west] at (1.7,25.6) {crystal graph};
+\draw[ptflow] (0,23.95) -- (0,23.45);
+
+% ---------------------------------------------------------------------
+%  (2) embedding
+% ---------------------------------------------------------------------
+\node[ptfrozen] (embed) at (0,22.55) {Embedding};
+\node[ptpar, anchor=west] at (2.6,22.55) {4.2k params};
+\draw[ptflow] (0,21.65) -- (0,20.70);
+
+% ---------------------------------------------------------------------
+%  (3) the GPS block itself (x4, all identical) as the main flow element:
+%      deck shadows = repetition; component rows with per-layer params.
+% ---------------------------------------------------------------------
+\begin{scope}[on background layer]
+  \draw[draw=ink!35, rounded corners=5pt, fill=ink!6]
+       (-7.34,12.56) rectangle (8.66,21.26);
+  \draw[draw=ink!45, rounded corners=5pt, fill=ink!6]
+       (-7.56,12.34) rectangle (8.44,21.04);
+  \draw[draw=ink!55, rounded corners=5pt, fill=ink!6]
+       (-7.78,12.12) rectangle (8.22,20.82);
+  \draw[draw=ink!70, rounded corners=5pt, fill=panel]
+       (-8.00,11.90) rectangle (8.00,20.60);
+\end{scope}
+\node[font=\huge\bfseries\sffamily, text=ink] at (0,19.90)
+  {GPS block $\times 4$ --- 333k params each};
+\node[ptcomp] (c1) at (-1.6,18.85) {pre-LN};
+\node[ptcomp] (c2) at (-1.6,17.35) {bond-shell attention (+ angle bias)};
+\node[ptcomp] (c3) at (-1.6,15.85) {poly-shell attention};
+\node[ptcomp] (c4) at (-1.6,14.35) {local FFN};
+\node[ptcomp] (c5) at (-1.6,12.85) {block FFN};
+\node[ptpar, anchor=west] at (4.55,18.85) {0.3k};
+\node[ptpar, anchor=west] at (4.55,17.35) {100.1k};
+\node[ptpar, anchor=west] at (4.55,15.85) {100.0k};
+\node[ptpar, anchor=west] at (4.55,14.35) {66.2k};
+\node[ptpar, anchor=west] at (4.55,12.85) {66.2k};
+% freeze split + encoder total, stacked right of the panel
+\node[ptlbl, anchor=west] at (8.90,19.60) {GPS encoder --- 1.33M params};
+\node[ptlbl, anchor=west] at (8.90,18.45) {blocks 1--3 frozen};
+\node[ptlbl, accent, anchor=west] at (8.90,17.30) {block 4 unfrozen (tiny LR)};
+
+% ---------------------------------------------------------------------
+%  (4) per-atom latents
+% ---------------------------------------------------------------------
+\node[pth] (h) at (0,10.60) {$h_i$};
+\draw[ptflow] (0,11.90) -- (0,11.55);
+\node[ptlbl, anchor=west] at (1.10,10.60) {per-atom latent space};
+
+% ---------------------------------------------------------------------
+%  (5) targets as a graph. Stage 1 (grey-blue): per-atom heads; forces &
+%      stress hang off the energy via autograd.  Stage 2 (accent): the
+%      T_c head, below the whole stage-1 fan.
+% ---------------------------------------------------------------------
+\node[pttarget] (E)   at (-7.2,9.20)  {energy\\[-2pt]$n\!=\!580$k};
+\node[pttarget] (F)   at (-9.3,6.35)  {forces\\[-2pt]$n\!\approx\!580$k};
+\node[pttarget] (sig) at (-5.0,6.35)  {stress\\[-2pt]$n\!\approx\!580$k};
+\node[pttarget] (m)   at (-2.1,4.10)  {magnetic\\[-2pt]moment\\[-2pt]$n\!\approx\!81$k};
+\node[pttarget] (Eg)  at (1.0,1.50)   {band gap\\[-2pt]$n\!\approx\!110$k};
+\node[pttarget] (dos) at (4.35,4.10)  {DOS\\[-2pt]$n\!=\!62.5$k};
+\node[pttarget] (a2f) at (8.55,6.75)
+  {$\alpha^2\!F(\omega)$\\[-2pt]$n\!=\!8.3$k};
+\node[pttarget] (psite) at (10.30,1.70)
+  {site phonon\\[-2pt]DOS (per atom)\\[-2pt]$n\!=\!8.3$k};
+\node[pttc]     (tc)  at (4.2,-1.90)  {$T_c$\\[-2pt]\mdseries $n\!=\!7.9$k};
+
+\draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.58] {33k} (E);
+\draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.58] {33k} (m);
+\draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.60] {33k} (Eg);
+\draw[pthead] (h) -- node[ptpar, right=2pt, pos=0.62] {50k} (dos);
+\draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.55] {66k} (a2f);
+\draw[pthead] (h) -- node[ptpar, above, sloped, pos=0.60] {41k} (psite);
+\draw[ptderiv] (E) -- node[ptlbl, anchor=east, pos=0.55] {$-\partial E/\partial r$} (F);
+\draw[ptderiv] (E) -- node[ptlbl, anchor=west, pos=0.55] {$\partial E/\partial\varepsilon$} (sig);
+\draw[pttchead] (h) -- node[ptlbl, accent, anchor=east, pos=0.95]
+  {pool + MLP\ \ 11k} (tc);
+
+% head labels, stacked to the right of the heads they describe
+\node[ptlbl, anchor=west] at (7.15,9.35) {pretraining head};
+\node[pttarget, minimum size=8mm, inner sep=2pt] at (6.40,9.35) {};
+\node[ptlbl, anchor=west, align=left] at (7.35,-1.90)
+  {$T_c$ head --- trained from\\scratch after pretraining};
+\node[pttc, minimum size=9mm] at (6.60,-1.90) {};
+
+% stage banners at the bottom, centered on the full figure width
+\node[ptstage, text=ink!70, anchor=north] (s1)
+  at ([yshift=-10mm]current bounding box.south)
+  {Stage 1 \, multi-task physics pretraining (Materials Project + Cerqueira e--ph)};
+\node[ptstage, accent, anchor=north] (s2) at ([yshift=-3mm]s1.south)
+  {Stage 2 \, $T_c$ transfer (3DSC + NEMAD)};
+
+\end{tikzpicture}
