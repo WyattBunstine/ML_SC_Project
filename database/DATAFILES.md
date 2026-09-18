@@ -151,9 +151,6 @@ A **holdout list** is a one-column `id` csv forced into the test fold by `holdou
 ## Matbench — matbench_mp_e_form
 `matbench_mp_e_form.json.gz` (132,752 relaxed MP structures with e_form) and `graphs_v45_eform/` (the first 6,781 built) — the from-scratch formation-energy benchmark track (`database/pipelines/benchmarks/matbench_ingest.py`).
 
-## .retired
-`.retired/2026-07-28/` — 119,815 files from the pre-v4.3 graph era set aside during the July DOS rebuild. Nothing reads it; safe to delete.
-
 ---
 
 ## Regeneration (script per artifact)
