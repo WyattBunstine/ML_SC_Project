@@ -25,5 +25,5 @@ for name, extra in (("descriptors_v8_supercon",{}),("descriptors_v9_cuneg",d9["t
     pd.to_pickle({"names":list(d45["names"]),"table":tab,"failed":[]}, f"{MP}/{name}.pickle"); print(f"{name}: {len(tab)} rows, {miss} missing")
 PY
 note "descriptors re-assembled: $(grep -E '^descriptors_v1?[0-9c]*' $L | tail -5 | tr '\n' ' ')"
-for d in graphs_v4_v7_supercon graphs_v4_v9_cuneg graphs_v4_v11_feox; do rsync -a --delete database/datafiles/MP/$d/ <user>@<cluster-login-host>:/data/<group>/<user>/ML_SC_Proj/database/datafiles/MP/$d/ >> $L 2>&1 || { note "HALT sync $d"; exit 1; }; done
+./scripts/deploy.sh sync-datafiles --delete database/datafiles/MP/graphs_v4_v7_supercon database/datafiles/MP/graphs_v4_v9_cuneg database/datafiles/MP/graphs_v4_v11_feox >> $L 2>&1 || { note "HALT sync"; exit 1; }
 note "HISTFIX SC CHAIN COMPLETE (graphs rebuilt, descriptors re-assembled, synced)"

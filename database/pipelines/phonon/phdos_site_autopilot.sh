@@ -2,7 +2,7 @@
 # Site-projected phonon DOS pack (Togo + MP-pheasy), user-directed 2026-09-09.
 # Runs as ONE systemd user unit (memory-capped) alongside a separate fetch-fc
 # unit: site-togo (CPU) runs while fetch-fc (network) pulls pheasy force
-# constants; then site-pheasy -> bake -> pack -> sync to cluster scratch.
+# constants; then site-pheasy -> bake -> pack -> ship to cluster scratch via deploy.sh sync-datafiles.
 # Every stage is checked by its own completion line (overnight-autonomy rule).
 #   systemd-run --user ... bash -c './database/pipelines/phonon/phdos_site_autopilot.sh >> model_data/cf_calib/phdos_site_autopilot.out 2>&1'
 cd "$(dirname "$0")/../../.." || exit 1
@@ -39,6 +39,5 @@ python main.py pack-dataset --index database/datafiles/MP_PhononDOS/PHDOS_index.
 grep -q '"has_phdos_site": *true' "$OUT/pack_header.json" || die "pack header has_phdos_site != true"
 note "PACK COMPLETE: $(du -sh $OUT | cut -f1) — $(python -c "import json;h=json.load(open('$OUT/pack_header.json'));print({k:h[k] for k in ('n_samples','has_ph_dos','has_phdos_site')})")"
 
-R=${ML_SC_DATA}/MP_PhononDOS/phdos_pack_v45_site
-ssh <user>@<cluster-login-host> "mkdir -p '$R'" && rsync -a --partial "$OUT/" "<user>@<cluster-login-host>:$R/" || die "sync failed"
-note "SYNCED to $R — PHDOS-SITE AUTOPILOT COMPLETE"
+./scripts/deploy.sh sync-datafiles "$OUT" || die "sync failed"
+note "SYNCED to cluster scratch (deploy.sh sync-datafiles) — PHDOS-SITE AUTOPILOT COMPLETE"

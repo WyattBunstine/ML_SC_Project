@@ -143,7 +143,7 @@ A **holdout list** is a one-column `id` csv forced into the test fold by `holdou
 | `DS-A.pk.bz2`, `DS-B.pk.bz2` | the Cerqueira/Sanna/Marques structures with λ, ω_log, T_c (A: 7,220 for training; B: 1,033 held out — `dsb_ids.csv`, `dsb_labels.csv`). |
 | `a2f_raw/` | per-material α²F(ω) (a2F.dos6), McMillan.dat and qe.dyn* dynamical matrices from Materials Cloud; `a2f_extract.log` its extraction log. |
 | `graphs_v45_eph/`, `EPH_index.*` | 8,253 graphs with `a2f`, `ph_dos`, `phdos_site` baked; index columns `eph_lambda`, `eph_wlog`. `EPH_index.partial.*` = a 1,600-row build checkpoint. |
-| `eph_pack_v45/`, `eph_pack_v45_site/` | the packs (identical contents since 2026-09-17; both carry all three spectra). Mirrored to `scratch4/.../EPH/`. |
+| `eph_pack_v45/`, `eph_pack_v45_site/` | the packs (identical contents since 2026-09-17; both carry all three spectra). Shipped to cluster scratch `EPH/` by `scripts/deploy.sh sync-datafiles`. |
 
 ## WBM — Matbench Discovery test set
 `wbm-cse.jsonl.gz` (256,963 relaxed ComputedStructureEntries), `wbm-summary.csv.gz` (formation energies, hull distances, prototype flags), `graphs_v45_wbm/` (256,946 graphs), `WBM_eform_index.*` / `wbm_test_index.pickle` (the index with the MP2020-corrected e_form as `value`), `wbm_pack_v45/`, `wbm_predictions.csv` (rung-50 predictions + benchmark columns).
@@ -176,6 +176,7 @@ A **holdout list** is a one-column `id` csv forced into the test fold by `holdou
 | MP energy / non-SC pools | `main.py download-energy`, `main.py download-nonsc` (`database/Download_MP_*.py`) |
 | MPtrj | `main.py build-mptrj` (`database/Extract_MPtrj.py`), `scripts/deploy.sh augment-cf` on the cluster |
 | any pack | `main.py pack-dataset --index <index.pickle> --out <dir>` |
+| ship anything to the cluster | `scripts/deploy.sh sync-datafiles [--delete] <path>...` (packs go to scratch, everything else to `/data`; the only place a hostname lives) |
 
 ## Known gaps
 - No in-repo fetch step for the 3DSC, SuperCon, NEMAD, MPtrj, Cerqueira DS-A/B, WBM and Matbench raw files (sources above); ICSD CIFs are licensed.

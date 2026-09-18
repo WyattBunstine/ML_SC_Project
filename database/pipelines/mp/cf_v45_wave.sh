@@ -26,16 +26,9 @@ python database/pipelines/mp/augment_cf.py --graph-dir database/datafiles/MP/dos
 echo "=== 4. verify fixes + pack (_v45 names) ===" && \
 CUDA_VISIBLE_DEVICES="" python scripts/cf_v45_verify_pack.py && \
 echo "=== 5. sync ===" && \
-rsync -a database/datafiles/MP/SC_MP_V4_doped_v45.pickle database/datafiles/MP/SC_MP_V4_doped_v45.csv \
-  <user>@<cluster-login-host>:/data/<group>/<user>/ML_SC_Proj/database/datafiles/MP/ && \
-rsync -a --delete database/datafiles/MP/graphs_v4_doped_v45/ \
-  <user>@<cluster-login-host>:/data/<group>/<user>/ML_SC_Proj/database/datafiles/MP/graphs_v4_doped_v45/ && \
-rsync -a database/datafiles/MP/SC_pack_doped_v45/ \
-  <user>@<cluster-login-host>:${ML_SC_DATA}/MP/SC_pack_doped_v45/ && \
-rsync -a database/datafiles/MP/disorder_pack_v45/ \
-  <user>@<cluster-login-host>:${ML_SC_DATA}/MP/disorder_pack_v45/ && \
-rsync -a database/datafiles/MP/dos_pack_ef1_v45/ \
-  <user>@<cluster-login-host>:${ML_SC_DATA}/MP/dos_pack_ef1_v45/ && \
+./scripts/deploy.sh sync-datafiles database/datafiles/MP/SC_MP_V4_doped_v45.pickle database/datafiles/MP/SC_MP_V4_doped_v45.csv && \
+./scripts/deploy.sh sync-datafiles --delete database/datafiles/MP/graphs_v4_doped_v45 && \
+./scripts/deploy.sh sync-datafiles database/datafiles/MP/SC_pack_doped_v45 database/datafiles/MP/disorder_pack_v45 database/datafiles/MP/dos_pack_ef1_v45 && \
 echo "=== V45 LOCAL WAVE OK ==="
 } > "$LOG" 2>&1
 tail -3 "$LOG"
