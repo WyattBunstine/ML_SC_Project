@@ -34,7 +34,7 @@ def load(tag):
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else "docs/figures/fe_training_curves.png"
+    out = sys.argv[1] if len(sys.argv) > 1 else "docs/figures/training/fe_training_curves.png"
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt

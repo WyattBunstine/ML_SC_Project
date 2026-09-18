@@ -78,7 +78,7 @@ note "dome: $(grep -oE '7-seed ensemble: .*' model_data/cf_calib/v6dome20.log | 
 RUN=$(ls -dt model_data/*/gps_tc_v6v45_lsco_20_2* 2>/dev/null | head -1)
 note "run dir $RUN"
 python scripts/plot_lsco_dome.py "$RUN/predictions.csv" \
-  "docs/figures/tc_vs_cu_oxidation_la_series_dome_20_v6.png" \
+  "docs/figures/domes/tc_vs_cu_oxidation_la_series_dome_20_v6.png" \
   'La$_2$CuO$_4$ family doping series — rung 20 on V6 (2x electron-doped support)' \
   >> model_data/cf_calib/v6dome20.log 2>&1 && note "figure written"
 python scripts/dome_stats.py "$RUN" >> "$STATUS" 2>/dev/null

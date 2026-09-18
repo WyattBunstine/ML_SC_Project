@@ -1,14 +1,14 @@
 """Predicted-vs-experimental T_c parity panels for one encoder's transfer runs.
 
     python scripts/plot_parity.py <probe_tag> <dome_tag> <fam_tag> <nick_tag> <out.png> [title]
-e.g. python scripts/plot_parity.py 51phdos 51phdos st_51p_l 51p docs/figures/parity_51.png "rung 51"
+e.g. python scripts/plot_parity.py 51phdos 51phdos st_51p_l 51p docs/figures/parity/parity_51.png "rung 51"
 
 Panels: (a) broad probe test set (msle protocol) by family, (b) La-series dome
 holdout, (c) unseen cuprate families (structure holdout: Bi / Hg / YBa-123 /
 T'), (d) nickelate zero-shot holdout by subset. Same axes per panel, 1:1 line,
 thin marks with a surface ring, legend for >=2 series, sparse direct labels.
 Categorical hues are the validated reference palette in fixed order; "Other"
-is neutral. Static PNG (paper figure convention of docs/figures/).
+is neutral. Static PNG (paper figure convention of docs/figures/parity/).
 """
 import glob
 import json

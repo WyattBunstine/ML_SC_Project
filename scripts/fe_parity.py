@@ -29,6 +29,7 @@ RUNGS = {
     "45_bonds":   "model_data/2026-09-03/gps_mt_45_fe_bonds/gps_mt_45_fe_bonds_2026-09-03_14-03-22/result_t45_model_best.pth.tar",
     "27_angles":  "model_data/2026-08-25/gps_mt_27_t_energy/gps_mt_27_t_energy_2026-08-25_10-14-08/result_t27_model_best.pth.tar",
     "46_poly":    "model_data/2026-09-03/gps_mt_46_fe_poly/gps_mt_46_fe_poly_2026-09-03_14-25-42/result_t46_model_best.pth.tar",
+    "50_full":    "model_data/2026-09-08/gps_mt_50_fe_full/gps_mt_50_fe_full_2026-09-08_11-36-24/result_t50_model_best.pth.tar",
 }
 
 
@@ -73,7 +74,12 @@ def build_val_loader(args):
 def main():
     dev = torch.device("cuda")
     os.makedirs("model_data/fe_parity", exist_ok=True)
+    only = set(sys.argv[1:])                      # optional: which rung tags to dump
     for tag, ckpt in RUNGS.items():
+        if only and tag not in only:
+            continue
+        if os.path.exists(f"model_data/fe_parity/{tag}.csv") and not only:
+            print(f"{tag}: exists, skipping", flush=True); continue
         ck = torch.load(ckpt, map_location=dev)
         args = ck["args"]
         dataset, val = build_val_loader(args)

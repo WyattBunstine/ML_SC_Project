@@ -24,7 +24,7 @@ def rows(tag, holdout_only):
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else "docs/figures/v8v9_parity.png"
+    out = sys.argv[1] if len(sys.argv) > 1 else "docs/figures/parity/v8v9_parity.png"
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     panels = [("probe", False, "(a) broad probe test set"),
               ("ladome", True, "(b) La-series dome holdout"),

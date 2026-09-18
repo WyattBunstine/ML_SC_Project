@@ -21,7 +21,7 @@ from pymatgen.core import Composition
 
 PRED = sys.argv[1] if len(sys.argv) > 1 else \
     "model_data/2026-07-09/gps_tc_3dsc_doped_ft_forces2_oxifix_2026-07-09_11-36-22/predictions.csv"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "docs/figures/tc_vs_cu_oxidation_mp1077929_dome.png"
+OUT = sys.argv[2] if len(sys.argv) > 2 else "docs/figures/domes/tc_vs_cu_oxidation_mp1077929_dome.png"
 TITLE = sys.argv[3] if len(sys.argv) > 3 else "La$_2$CuO$_4$ family doping series"
 
 OX = {"La": 3, "Sr": 2, "Ba": 2, "Ce": 4, "Nd": 3, "Eu": 3, "Gd": 3, "Sm": 3,

@@ -53,7 +53,7 @@ PYEOF
   if [ -z "$RUN" ] || [ ! -f "$RUN/predictions.csv" ]; then
     note "$3: dome finished but no predictions.csv found"; return 0
   fi
-  FIG="docs/figures/tc_vs_cu_oxidation_la_series_dome_${3}.png"
+  FIG="docs/figures/domes/tc_vs_cu_oxidation_la_series_dome_${3}.png"
   if python scripts/plot_lsco_dome.py "$RUN/predictions.csv" "$FIG" \
        >> "model_data/cf_calib/${3}_dome.log" 2>&1; then
     note "$3: DOME DONE -> $RUN ; figure $FIG"

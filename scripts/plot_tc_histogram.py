@@ -1,6 +1,6 @@
 """Stacked histogram of superconductors by T_c, colour = family (V11 by default).
 
-    python scripts/plot_tc_histogram.py [--index SC_MP_V11.pickle] [--bin 2.5] [--out docs/figures/tc_histogram_v11.png]
+    python scripts/plot_tc_histogram.py [--index SC_MP_V11.pickle] [--bin 2.5] [--out docs/figures/dataset/tc_histogram_v11.png]
 """
 import argparse, os, sys, warnings
 import numpy as np, pandas as pd
