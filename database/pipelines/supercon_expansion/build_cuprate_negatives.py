@@ -40,7 +40,7 @@ SOURCE = _os.path.join(MP, "SC_MP_V9_cuneg_source.csv")
 CIFS = _os.path.join(MP, "cifs_v9_cuneg")
 IDPROP = _os.path.join(SCDB, "id_prop_v9.csv")
 GRAPHS = _os.path.join(MP, "graphs_v4_v9_cuneg")
-INDEX_OUT = _os.path.join(MP, "SC_MP_V9_cuneg")
+INDEX_OUT = _os.path.join(MP, "SC_MP_V9_cuneg_only")   # negatives-only index; the MERGED V9 is SC_MP_V9_cuneg (was a name collision until 2026-09-18)
 
 
 def order_of(row):
